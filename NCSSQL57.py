@@ -4305,9 +4305,14 @@ class ScheduleVariant:
                 continue
 
             # Forward check: only check variables near the assigned date
-            # (spacing constraint has limited reach — typically 2-3 days)
+            # Radius must cover all constraint reaches: spacing, weekly limits,
+            # and pre/post weekend windows (the largest being POST_WEEKEND = 6).
             failed = False
-            fc_radius = int(self.config.min_days_between_assignments) + 1
+            fc_radius = max(
+                int(self.config.min_days_between_assignments) + 1,
+                DEFAULT_POST_WEEKEND_WINDOW,
+                DEFAULT_PRE_WEEKEND_WINDOW,
+            )
             for _, _, (dv, rv) in domains[1:]:
                 if abs((dv - d0).days) <= fc_radius and is_empty(self.state.schedule.at[dv, rv]) and not domain_fn(dv, rv):
                     failed = True

@@ -4386,6 +4386,7 @@ class ScheduleVariant:
         for pass_idx in range(1, max_passes + 1):
             tracker.begin_iteration(f"[WindowRefill] Pass {pass_idx}")
             schedule_changed = False
+            target_hit = False
             self._debug_print(
                 f"[ScheduleVariant] [WindowRefill] pass={pass_idx} start"
             )
@@ -4437,7 +4438,8 @@ class ScheduleVariant:
                         self._debug_print(
                             f"[ScheduleVariant] [WindowRefill] pass={pass_idx} target met"
                         )
-                        return True
+                        target_hit = True
+                        break
                 else:
                     self._restore_from_backup(days, backup)
                     self._debug_print(
@@ -4450,6 +4452,10 @@ class ScheduleVariant:
             )
             if comparison == Comparison.BETTER:
                 improved = True
+
+            if target_hit:
+                tracker.restore_global_best()
+                return True
 
             if comparison == Comparison.WORSE and not schedule_changed:
                 self._debug_print(

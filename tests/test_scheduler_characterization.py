@@ -266,6 +266,53 @@ def test_tracker_restore_global_best_survives_early_success_path():
     assert pd.isna(variant.state.schedule.at[day, "main"])
 
 
+def test_window_refill_target_hit_commits_before_early_return(monkeypatch):
+    variant = _build_variant()
+    tracker = BestStateTracker(variant)
+    tracker.initialize()
+
+    days = list(variant.state.schedule.index[:2])
+    evaluate_calls = {"count": 0}
+    spread_values = iter(
+        [
+            (5, 5, 0),  # initial good_enough() check
+            (5, 5, 0),  # base_tuple for first window
+            (1, 1, 0),  # new_tuple for first window
+            (1, 1, 0),  # good_enough() after accepted change
+        ]
+    )
+
+    monkeypatch.setattr(variant, "_collect_weekday_windows", lambda window_weeks: [days])
+    monkeypatch.setattr(variant, "backup_week_assignments", lambda d: {"days": list(d)})
+    monkeypatch.setattr(variant, "_clear_window_assignments", lambda d: None)
+    monkeypatch.setattr(variant, "_build_window_varlist", lambda d: [])
+    monkeypatch.setattr(variant, "_backtrack_window", lambda *args, **kwargs: True)
+    monkeypatch.setattr(variant, "_restore_from_backup", lambda d, backup: None)
+    monkeypatch.setattr(variant, "_spread_components", lambda: next(spread_values))
+
+    original_evaluate = tracker.evaluate_and_commit
+
+    def _counting_evaluate(*args, **kwargs):
+        evaluate_calls["count"] += 1
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(tracker, "evaluate_and_commit", _counting_evaluate)
+
+    result = variant.iterative_window_refill_rebalance(
+        window_weeks=1,
+        max_passes=1,
+        time_limit_ms=1,
+        node_limit=1,
+        target_spread=(1, 1),
+        tracker=tracker,
+    )
+
+    assert result is True
+    assert evaluate_calls["count"] == 1
+    assert tracker._global_best is not None
+    pd.testing.assert_frame_equal(variant.state.schedule, tracker._global_best.schedule)
+
+
 @pytest.fixture
 def scheduler_for_modes():
     nurses = ["Alice", "Bob"]

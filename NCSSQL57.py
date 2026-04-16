@@ -2248,7 +2248,15 @@ class ScheduleQuality:
         variant: "ScheduleVariant",
         scheduler: Optional["NurseScheduler"] = None,
     ) -> "ScheduleQuality":
-        """Calculate the quality metrics from a schedule variant."""
+        """Calculate the quality metrics from a schedule variant.
+
+        NOTE:
+        - ``compare_to`` uses these fields lexicographically for local-search
+          accept/revert decisions in ``BestStateTracker``.
+        - ``weighted_score`` is retained for reporting/debugging only; final
+          candidate ranking is done by ``NurseScheduler._score_and_rank_variants``
+          after metric normalization and weighting.
+        """
 
         total_gaps = variant.count_gaps()
         backup_spread, main_spread, total_spread = variant._spread_components()
@@ -2265,9 +2273,26 @@ class ScheduleQuality:
                 weekend_penalty = 0.0
 
         history_penalty = 0.0
-        if scheduler and hasattr(scheduler, "_long_term_score"):
+        if (
+            scheduler
+            and hasattr(scheduler, "_long_term_score")
+            and hasattr(scheduler, "_historic_overage")
+        ):
             try:
-                history_penalty = 0.0
+                nurse_counts: dict[str, dict[str, int]] = {}
+                for nurse in variant.state.main_assignment_counts.index:
+                    m = int(variant.state.main_assignment_counts.get(nurse, 0))
+                    b = int(variant.state.backup_assignment_counts.get(nurse, 0))
+                    nurse_counts[str(nurse)] = {
+                        "main": m,
+                        "backup": b,
+                        "total": m + b,
+                    }
+
+                overage = scheduler._historic_overage()
+                history_penalty = float(
+                    scheduler._long_term_score(nurse_counts, overage)
+                )
             except Exception:  # pragma: no cover - defensive guard
                 history_penalty = 0.0
 
@@ -2285,7 +2310,11 @@ class ScheduleQuality:
         )
 
     def compare_to(self, other: "ScheduleQuality", *, float_tol: float = 1e-6) -> Comparison:
-        """Lexicographic comparison with tolerance for float metrics."""
+        """Lexicographic comparison with tolerance for float metrics.
+
+        This order is the tracker acceptance policy (earlier keys dominate):
+        gaps -> spreads -> rotation -> weekend-gap penalty -> long-term history.
+        """
 
         def float_cmp(a: float, b: float) -> int:
             if abs(a - b) < float_tol:
@@ -2454,6 +2483,9 @@ class BestStateTracker:
 
         # Counts are maintained incrementally; skip full recalculation.
         current_quality = ScheduleQuality.from_variant(self.variant, self.scheduler)
+        # Local-search acceptance is *lexicographic* via ScheduleQuality.compare_to.
+        # This is intentionally deterministic and stricter than the final
+        # cross-variant weighted ranking used after search completes.
         comparison = current_quality.compare_to(self._iteration_quality)
 
         if comparison == Comparison.BETTER:
@@ -6811,7 +6843,15 @@ class NurseScheduler:
                 logger.error(f"Failed to export performance metrics: {exc}")
 
     def _score_and_rank_variants(self, candidate_schedules):
-        """Compute weighted scores and rank variants."""
+        """Compute weighted scores and rank variants.
+
+        Semantics alignment note:
+        - ``BestStateTracker`` uses lexicographic ``ScheduleQuality`` comparison
+          during intra-variant local search.
+        - This method performs *inter-variant* final ranking by normalizing and
+          weighting metrics. ``long_term`` uses the same ``_long_term_score``
+          objective as ``ScheduleQuality.history_penalty`` (lower is better).
+        """
         viol_counts = self.weekend_history.get_violation_counts()
         overage = self._historic_overage()
         weights = self.config.scoring_weights

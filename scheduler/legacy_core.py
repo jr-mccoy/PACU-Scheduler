@@ -54,6 +54,21 @@ except Exception:  # pragma: no cover - psutil may be unavailable in minimal env
 from collections import defaultdict
 from contextlib import contextmanager
 import random
+from .constraints import (
+    WeekdayConstraintConfig,
+    passes_basic_eligibility_checks,
+    validate_post_weekend_assignment,
+    validate_weekday_relative_to_weekend,
+    validate_weekday_relative_to_weekend_gap,
+)
+from .assignment import apply_assignment, revert_assignment, AssignmentMutation
+from .scoring import (
+    QualityMetrics,
+    QualityComparison,
+    compare_quality,
+    compute_quality_metrics,
+    weighted_scores_from_rows,
+)
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -2260,11 +2275,6 @@ class ScheduleQuality:
           after metric normalization and weighting.
         """
 
-        total_gaps = variant.count_gaps()
-        backup_spread, main_spread, total_spread = variant._spread_components()
-
-        rotation_penalty = int(getattr(variant.state, "rotation_repeats", 0))
-
         weekend_penalty = 0.0
         if scheduler and hasattr(scheduler, "_weekend_gap_penalty"):
             try:
@@ -2299,16 +2309,26 @@ class ScheduleQuality:
                 history_penalty = 0.0
 
         weighted_score = variant._rebalance_score(alpha=1.0, beta=1.0)
+        metrics = compute_quality_metrics(
+            schedule_df=variant.state.schedule,
+            main_counts=variant.state.main_assignment_counts,
+            backup_counts=variant.state.backup_assignment_counts,
+            rotation_repeats=int(getattr(variant.state, "rotation_repeats", 0)),
+            count_gaps_fn=lambda df: variant.count_gaps(),
+            weekend_penalty=weekend_penalty,
+            history_penalty=history_penalty,
+            weighted_score=weighted_score,
+        )
 
         return cls(
-            total_gaps=total_gaps,
-            backup_spread=backup_spread,
-            main_spread=main_spread,
-            total_spread=total_spread,
-            rotation_penalty=rotation_penalty,
-            weekend_penalty=round(weekend_penalty, 6),
-            history_penalty=round(history_penalty, 6),
-            weighted_score=weighted_score,
+            total_gaps=metrics.total_gaps,
+            backup_spread=metrics.backup_spread,
+            main_spread=metrics.main_spread,
+            total_spread=metrics.total_spread,
+            rotation_penalty=metrics.rotation_penalty,
+            weekend_penalty=metrics.weekend_penalty,
+            history_penalty=metrics.history_penalty,
+            weighted_score=metrics.weighted_score,
         )
 
     def compare_to(self, other: "ScheduleQuality", *, float_tol: float = 1e-6) -> Comparison:
@@ -2318,27 +2338,31 @@ class ScheduleQuality:
         gaps -> spreads -> rotation -> weekend-gap penalty -> long-term history.
         """
 
-        def float_cmp(a: float, b: float) -> int:
-            if abs(a - b) < float_tol:
-                return 0
-            return -1 if a < b else 1
-
-        comparisons = [
-            self.total_gaps - other.total_gaps,
-            self.backup_spread - other.backup_spread,
-            self.main_spread - other.main_spread,
-            self.total_spread - other.total_spread,
-            self.rotation_penalty - other.rotation_penalty,
-            float_cmp(self.weekend_penalty, other.weekend_penalty),
-            float_cmp(self.history_penalty, other.history_penalty),
-        ]
-
-        for cmp_val in comparisons:
-            if cmp_val < 0:
-                return Comparison.BETTER
-            if cmp_val > 0:
-                return Comparison.WORSE
-
+        mine = QualityMetrics(
+            total_gaps=self.total_gaps,
+            backup_spread=self.backup_spread,
+            main_spread=self.main_spread,
+            total_spread=self.total_spread,
+            rotation_penalty=self.rotation_penalty,
+            weekend_penalty=self.weekend_penalty,
+            history_penalty=self.history_penalty,
+            weighted_score=self.weighted_score,
+        )
+        theirs = QualityMetrics(
+            total_gaps=other.total_gaps,
+            backup_spread=other.backup_spread,
+            main_spread=other.main_spread,
+            total_spread=other.total_spread,
+            rotation_penalty=other.rotation_penalty,
+            weekend_penalty=other.weekend_penalty,
+            history_penalty=other.history_penalty,
+            weighted_score=other.weighted_score,
+        )
+        result = compare_quality(mine, theirs, float_tol=float_tol)
+        if result == QualityComparison.BETTER:
+            return Comparison.BETTER
+        if result == QualityComparison.WORSE:
+            return Comparison.WORSE
         return Comparison.EQUAL
 
     def is_better_than(self, other: "ScheduleQuality") -> bool:
@@ -3173,32 +3197,13 @@ class ScheduleVariant:
         * Treat **NaN / missing** cells in the availability matrix
           as **unavailable** (previously they slipped through).
         """
-        # must not clash with the nurse already assigned in the other role
-        if nurse == other_nurse:
-            if diagnostics is not None:
-                diagnostics.append("other_role_conflict")
-            return False
-
-        # availability -– blank/NaN → unavailable
-        try:
-            av_val = avail.get(nurse, False)
-            if pd.isna(av_val) or not bool(av_val):
-                if diagnostics is not None:
-                    diagnostics.append("unavailable")
-                return False
-        except Exception:
-            # missing column etc. → unavailable
-            if diagnostics is not None:
-                diagnostics.append("unavailable")
-            return False
-
-        # late-shift guard
-        if self._late_shift_conflict(nurse, date, role):
-            if diagnostics is not None:
-                diagnostics.append("late_shift_conflict")
-            return False
-
-        return True
+        return passes_basic_eligibility_checks(
+            nurse=nurse,
+            avail_row=avail,
+            other_nurse=other_nurse,
+            has_late_shift_conflict=self._late_shift_conflict(nurse, date, role),
+            diagnostics=diagnostics,
+        )
 
     def _passes_advanced_eligibility_checks(
         self,
@@ -3326,16 +3331,15 @@ class ScheduleVariant:
         if not ok:
             return False
     
-        # Make assignment
-        self.state.schedule.at[date, role] = nurse
-        if role == "main":
-            self.state.main_assignment_counts[nurse] += 1
-        else:
-            self.state.backup_assignment_counts[nurse] += 1
-
-        prev = self.state.last_assignment.get(nurse)
-        if prev is None or date > prev:
-            self.state.last_assignment[nurse] = date
+        apply_assignment(
+            schedule_df=self.state.schedule,
+            main_counts=self.state.main_assignment_counts,
+            backup_counts=self.state.backup_assignment_counts,
+            last_assignment=self.state.last_assignment,
+            date=date,
+            role=role,
+            nurse=nurse,
+        )
 
         self._invalidate_weekday_cache()
         return True
@@ -3350,24 +3354,18 @@ class ScheduleVariant:
         if self._is_pre_scheduled(date, role):
             return
     
-        self.state.schedule.at[date, role] = None
-    
-        if role == "main":
-            self.state.main_assignment_counts[nurse] = max(
-                0, self.state.main_assignment_counts[nurse] - 1
-            )
-        else:
-            self.state.backup_assignment_counts[nurse] = max(
-                0, self.state.backup_assignment_counts[nurse] - 1
-            )
-    
-        # refresh last-assignment pointer if we just erased their most recent day
-        if self.state.last_assignment.get(nurse) == date:
-            sched = self.state.schedule
-            remaining = sched.index[
-                (sched["main"] == nurse) | (sched["backup"] == nurse)
-            ]
-            self.state.last_assignment[nurse] = remaining.max() if len(remaining) else None
+        revert_assignment(
+            schedule_df=self.state.schedule,
+            main_counts=self.state.main_assignment_counts,
+            backup_counts=self.state.backup_assignment_counts,
+            last_assignment=self.state.last_assignment,
+            mutation=AssignmentMutation(
+                date=date,
+                role=role,
+                previous_nurse=None,
+                next_nurse=nurse,
+            ),
+        )
 
         self._invalidate_weekday_cache()
             
@@ -3499,16 +3497,20 @@ class ScheduleVariant:
         role: str
     ) -> bool:
         """Validate weekday assignments relative to weekend schedule."""
-        weekday = date.weekday()
-        cfg = self.config
-
-        if self._is_in_pre_weekend_window(nurse, date):
-            return weekday == MONDAY_WEEKDAY
-
-        if self._is_in_post_weekend_window(nurse, date):
-            return self._validate_post_weekend_assignment(weekday, role, cfg)
-
-        return True
+        cfg = WeekdayConstraintConfig(
+            allow_post_weekend_wednesday_main=self.config.allow_post_weekend_wednesday_main,
+            allow_post_weekend_wednesday_backup=self.config.allow_post_weekend_wednesday_backup,
+            allow_post_weekend_thursday_main=self.config.allow_post_weekend_thursday_main,
+            allow_post_weekend_thursday_backup=self.config.allow_post_weekend_thursday_backup,
+        )
+        return validate_weekday_relative_to_weekend(
+            nurse=nurse,
+            date=date,
+            role=role,
+            config=cfg,
+            is_in_pre_weekend_window=self._is_in_pre_weekend_window,
+            is_in_post_weekend_window=self._is_in_post_weekend_window,
+        )
 
     def _validate_post_weekend_assignment(
         self, 
@@ -3517,20 +3519,16 @@ class ScheduleVariant:
         cfg: 'SchedulerConfig'
     ) -> bool:
         """Validate post-weekend assignment based on day and role."""
-        if weekday == 2:  # Wednesday
-            if role == "main" and not cfg.allow_post_weekend_wednesday_main:
-                return False
-            if role == "backup" and not cfg.allow_post_weekend_wednesday_backup:
-                return False
-            return True
-        elif weekday == 3:  # Thursday
-            if role == "main" and not cfg.allow_post_weekend_thursday_main:
-                return False
-            if role == "backup" and not cfg.allow_post_weekend_thursday_backup:
-                return False
-            return True
-        else:
-            return False
+        return validate_post_weekend_assignment(
+            weekday=weekday,
+            role=role,
+            config=WeekdayConstraintConfig(
+                allow_post_weekend_wednesday_main=cfg.allow_post_weekend_wednesday_main,
+                allow_post_weekend_wednesday_backup=cfg.allow_post_weekend_wednesday_backup,
+                allow_post_weekend_thursday_main=cfg.allow_post_weekend_thursday_main,
+                allow_post_weekend_thursday_backup=cfg.allow_post_weekend_thursday_backup,
+            ),
+        )
 
     def _validate_weekday_relative_to_weekend_gap(
         self, 
@@ -3539,16 +3537,20 @@ class ScheduleVariant:
         role: str
     ) -> bool:
         """Gap-filling specific weekend validation with relaxed Monday/Tuesday rule."""
-        weekday = date.weekday()
-
-        if self._is_in_pre_weekend_window(nurse, date):
-            if weekday not in (0, 1):  # Allow Monday and Tuesday
-                return False
-
-        if self._is_in_post_weekend_window(nurse, date):
-            return self._validate_post_weekend_assignment(weekday, role, self.config)
-
-        return True
+        cfg = WeekdayConstraintConfig(
+            allow_post_weekend_wednesday_main=self.config.allow_post_weekend_wednesday_main,
+            allow_post_weekend_wednesday_backup=self.config.allow_post_weekend_wednesday_backup,
+            allow_post_weekend_thursday_main=self.config.allow_post_weekend_thursday_main,
+            allow_post_weekend_thursday_backup=self.config.allow_post_weekend_thursday_backup,
+        )
+        return validate_weekday_relative_to_weekend_gap(
+            nurse=nurse,
+            date=date,
+            role=role,
+            config=cfg,
+            is_in_pre_weekend_window=self._is_in_pre_weekend_window,
+            is_in_post_weekend_window=self._is_in_post_weekend_window,
+        )
 
     # ===== WEEKEND WINDOW DETECTION =====
     
@@ -6927,17 +6929,7 @@ class NurseScheduler:
                 "long_term": self._long_term_score(nurse_counts, overage),
             })
 
-        metric_df = pd.DataFrame(rows).set_index("idx")
-
-        # Normalize 0-1 per metric
-        for col in weights:
-            lo, hi = metric_df[col].min(), metric_df[col].max()
-            metric_df[col] = 0.0 if hi == lo else (metric_df[col] - lo) / (hi - lo)
-
-        # Compute composite score
-        for col, w in weights.items():
-            metric_df[col] *= w
-        metric_df["weighted_score"] = metric_df[list(weights)].sum(axis=1)
+        metric_df = weighted_scores_from_rows(rows, weights=weights)
 
         # Attach score back to stats dict
         for idx, stats, _, _ in candidate_schedules:

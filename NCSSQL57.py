@@ -251,6 +251,28 @@ class MetricsCollector:
         return PerformanceProfiler(phase_name, self)
 
 
+@dataclass(frozen=True)
+class WorkerTuningConfig:
+    """Immutable algorithm tuning shared by all worker evaluation paths."""
+
+    gap_fill_iterations: int = 300
+    rebalance_tolerance: int = 1
+    rebalance_iterations: int = 1500
+    rebalance_early_stop_spread: Optional[tuple[int, int]] = None
+    window_refill_weeks: int = 3
+    window_refill_max_passes: int = 650
+    window_refill_time_limit_ms: int = 800000
+    window_refill_node_limit: int = 750000
+    window_refill_target_spread: tuple[int, int] = (1, 1)
+    full_period_max_orders: int = 1000
+    full_period_per_attempt_time_ms: int = 800000
+    full_period_per_attempt_nodes: int = 1500000
+    full_period_target_spread: tuple[int, int] = (1, 1)
+
+
+WORKER_TUNING = WorkerTuningConfig()
+
+
 class PerformanceReport:
     """Aggregates and reports performance metrics across workers."""
 
@@ -358,6 +380,7 @@ class PerformanceReport:
 def _evaluate_variant_worker_profiled(args):
     """Profiling-enabled variant evaluation used when performance profiling is requested."""
     idx, variant = args
+    tuning = WORKER_TUNING
 
     collector = MetricsCollector(worker_id=idx, variant_idx=idx)
 
@@ -377,23 +400,26 @@ def _evaluate_variant_worker_profiled(args):
         early_gaps = _count_weekday_gaps(var.state.schedule)
 
         with collector.profile_phase("gap_fill"):
-            var.iterative_gap_fill_no_revert(max_iterations=300, tracker=tracker)
+            var.iterative_gap_fill_no_revert(
+                max_iterations=tuning.gap_fill_iterations,
+                tracker=tracker,
+            )
 
         with collector.profile_phase("rebalance"):
             var.iterative_rebalance_no_revert(
-                tolerance=1,
-                max_iterations=1500,
-                early_stop_spread=None,
+                tolerance=tuning.rebalance_tolerance,
+                max_iterations=tuning.rebalance_iterations,
+                early_stop_spread=tuning.rebalance_early_stop_spread,
                 tracker=tracker,
             )
 
         with collector.profile_phase("window_refill"):
             var.iterative_window_refill_rebalance(
-                window_weeks=2,
-                max_passes=600,
-                time_limit_ms=2500,
-                node_limit=150000,
-                target_spread=(1, 1),
+                window_weeks=tuning.window_refill_weeks,
+                max_passes=tuning.window_refill_max_passes,
+                time_limit_ms=tuning.window_refill_time_limit_ms,
+                node_limit=tuning.window_refill_node_limit,
+                target_spread=tuning.window_refill_target_spread,
                 tracker=tracker,
             )
 
@@ -401,10 +427,10 @@ def _evaluate_variant_worker_profiled(args):
         if s_b > 1 or s_m > 1:
             with collector.profile_phase("full_period_refill"):
                 var.iterative_full_period_refill(
-                    max_orders=100,
-                    per_attempt_time_ms=2500,
-                    per_attempt_nodes=150000,
-                    target_spread=(1, 1),
+                    max_orders=tuning.full_period_max_orders,
+                    per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
+                    per_attempt_nodes=tuning.full_period_per_attempt_nodes,
+                    target_spread=tuning.full_period_target_spread,
                     tracker=tracker,
                 )
 
@@ -478,6 +504,7 @@ def _evaluate_variant_worker(args):
     with extra timing keys if MEASURE_PHASE_TIMES is True.
     """
     idx, variant = args
+    tuning = WORKER_TUNING
 
     # timing
     tic = time.perf_counter
@@ -499,15 +526,18 @@ def _evaluate_variant_worker(args):
 
     # Gap fill (per week)
     t_gap_start = tic()
-    var.iterative_gap_fill_no_revert(max_iterations=300, tracker=tracker)
+    var.iterative_gap_fill_no_revert(
+        max_iterations=tuning.gap_fill_iterations,
+        tracker=tracker,
+    )
     t_gap = tic() - t_gap_start
 
     # Weekly rebalance (no early-stop; cheap; lexicographic acceptance inside)
     t_reb_start = tic()
     var.iterative_rebalance_no_revert(
-        tolerance=1,
-        max_iterations=1500,
-        early_stop_spread=None,
+        tolerance=tuning.rebalance_tolerance,
+        max_iterations=tuning.rebalance_iterations,
+        early_stop_spread=tuning.rebalance_early_stop_spread,
         tracker=tracker,
     )
     t_reb = tic() - t_reb_start
@@ -515,11 +545,11 @@ def _evaluate_variant_worker(args):
     # Two-week refill (bounded; lexicographic acceptance inside)
     t_lns2w_start = tic()
     var.iterative_window_refill_rebalance(
-        window_weeks=3,
-        max_passes=650,
-        time_limit_ms=800000,
-        node_limit=750000,
-        target_spread=(1, 1),
+        window_weeks=tuning.window_refill_weeks,
+        max_passes=tuning.window_refill_max_passes,
+        time_limit_ms=tuning.window_refill_time_limit_ms,
+        node_limit=tuning.window_refill_node_limit,
+        target_spread=tuning.window_refill_target_spread,
         tracker=tracker,
     )
     t_lns2w = tic() - t_lns2w_start
@@ -529,10 +559,10 @@ def _evaluate_variant_worker(args):
     s_b, s_m, _ = var._spread_components()
     if s_b > 1 or s_m > 1:
         var.iterative_full_period_refill(
-            max_orders=1000,
-            per_attempt_time_ms=800000,
-            per_attempt_nodes=1500000,
-            target_spread=(1, 1),
+            max_orders=tuning.full_period_max_orders,
+            per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
+            per_attempt_nodes=tuning.full_period_per_attempt_nodes,
+            target_spread=tuning.full_period_target_spread,
             tracker=tracker,
         )
     t_full = tic() - t_full_start

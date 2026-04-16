@@ -6187,8 +6187,46 @@ class NurseScheduler:
         # Build pairs respecting fixed assignments
         pairs = self._build_nurse_pairs(fsf_pre, sfs_pre, valid_fsf, valid_sfs)
 
+        # Reject pairs that conflict with any non-empty prefilled weekend cells.
+        pairs = [
+            (fsf, sfs)
+            for fsf, sfs in pairs
+            if self._pair_matches_prefilled_weekend_cells(schedule, weekend, fsf, sfs)
+        ]
+
         # Filter out invalid late-shift combinations
         return self._filter_late_shift_pairs(pairs, fsf_pre, sfs_pre)
+
+    def _pair_matches_prefilled_weekend_cells(
+        self,
+        schedule: pd.DataFrame,
+        weekend: pd.Timestamp,
+        fsf_nurse: str,
+        sfs_nurse: str,
+    ) -> bool:
+        """
+        Return True iff (fsf_nurse, sfs_nurse) is compatible with any existing
+        non-empty Friday/Saturday/Sunday main/backup cells.
+        """
+        implied_assignments = (
+            (weekend, "main", fsf_nurse),                      # Fri main  = FSF
+            (weekend, "backup", sfs_nurse),                    # Fri backup= SFS
+            (weekend + timedelta(days=1), "main", sfs_nurse),  # Sat main  = SFS
+            (weekend + timedelta(days=1), "backup", fsf_nurse),# Sat backup= FSF
+            (weekend + timedelta(days=2), "main", fsf_nurse),  # Sun main  = FSF
+            (weekend + timedelta(days=2), "backup", sfs_nurse),# Sun backup= SFS
+        )
+
+        for day, role, expected_nurse in implied_assignments:
+            if day not in schedule.index:
+                continue
+            prefilled_nurse = schedule.at[day, role]
+            if self.is_empty(prefilled_nurse):
+                continue
+            if prefilled_nurse != expected_nurse:
+                return False
+
+        return True
 
     def _get_valid_nurses_for_patterns(self, weekend, last_assignment, last_pattern,
                                      schedule, all_pre_scheduled_weekends,

@@ -6549,8 +6549,32 @@ class NurseScheduler:
     # MAIN SCHEDULE GENERATION METHOD
     # =====================================================================
 
+    class WeekendVariantMode(str, Enum):
+        """Controls how weekend variants are generated."""
+        STRICT_ONLY = "strict_only"
+        STRICT_THEN_RELAXED = "strict_then_relaxed"
+        RELAXED_ALLOWED = "relaxed_allowed"
+
+    @classmethod
+    def _normalize_weekend_variant_mode(
+        cls,
+        weekend_variant_mode: str | "NurseScheduler.WeekendVariantMode",
+    ) -> "NurseScheduler.WeekendVariantMode":
+        """Normalize weekend variant mode from enum or string input."""
+        if isinstance(weekend_variant_mode, cls.WeekendVariantMode):
+            return weekend_variant_mode
+        try:
+            return cls.WeekendVariantMode(weekend_variant_mode)
+        except ValueError as ex:
+            valid_modes = ", ".join(mode.value for mode in cls.WeekendVariantMode)
+            raise ValueError(
+                f"Invalid weekend_variant_mode={weekend_variant_mode!r}. "
+                f"Expected one of: {valid_modes}."
+            ) from ex
+
     def generate_schedule(self, top_n: int = 10, max_workers: int = 2, *,
                          confirm_rotation_callback: Optional[Callable[[], bool]] = None,
+                         weekend_variant_mode: str | "NurseScheduler.WeekendVariantMode" = WeekendVariantMode.STRICT_THEN_RELAXED,
                          profile_performance: Optional[bool] = None,
                          profile_output_path: Optional[str | os.PathLike[str]] = None) -> list:
         """Generate schedules and optionally capture detailed performance metrics."""
@@ -6575,7 +6599,7 @@ class NurseScheduler:
             confirm_rotation_callback = self._setup_rotation_callback(confirm_rotation_callback)
 
             # Generate weekend variants
-            variants = self._generate_weekend_variants(confirm_rotation_callback)
+            variants = self._generate_weekend_variants(confirm_rotation_callback, weekend_variant_mode)
             if not variants:
                 return []
 
@@ -6622,8 +6646,23 @@ class NurseScheduler:
             confirm_rotation_callback = _default_confirm
         return confirm_rotation_callback
 
-    def _generate_weekend_variants(self, confirm_rotation_callback):
-        """Generate weekend variants with fallback to relaxed rules."""
+    def _generate_weekend_variants(self, confirm_rotation_callback, weekend_variant_mode):
+        """Generate weekend variants based on the selected fallback mode."""
+        mode = self._normalize_weekend_variant_mode(weekend_variant_mode)
+
+        if mode == self.WeekendVariantMode.STRICT_ONLY:
+            variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
+            if not variants:
+                logger.info("No feasible variants with strict rotation mode.")
+            return variants
+
+        if mode == self.WeekendVariantMode.RELAXED_ALLOWED:
+            variants = self.generate_all_weekend_variants(allow_rotation_violations=True)
+            if not variants:
+                logger.error("No feasible variants with relaxed rotation mode.")
+            return variants
+
+        # STRICT_THEN_RELAXED
         variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
         if not variants:
             if not confirm_rotation_callback():
@@ -8219,10 +8258,17 @@ class NurseSchedulerUI:
     
     def _generate_schedule_with_violations(self, scheduler, nurses_allowed):
         """Generate schedule with violation settings."""
-        scheduler.set_allow_rotation_violations(bool(nurses_allowed))
+        allow_rotation_violations = bool(nurses_allowed)
+        mode = (
+            scheduler.WeekendVariantMode.RELAXED_ALLOWED
+            if allow_rotation_violations
+            else scheduler.WeekendVariantMode.STRICT_ONLY
+        )
+
+        scheduler.set_allow_rotation_violations(allow_rotation_violations)
         scheduler.set_nurses_allowed_rotation_violation(nurses_allowed)
         try:
-            return scheduler.generate_schedule(top_n=5)
+            return scheduler.generate_schedule(top_n=5, weekend_variant_mode=mode)
         finally:
             scheduler.set_allow_rotation_violations(False)
             scheduler.set_nurses_allowed_rotation_violation([])

@@ -445,3 +445,56 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
     ]
     scheduler._score_and_rank_variants(candidates)
     assert candidates[0][1]["weighted_score"] != candidates[1][1]["weighted_score"]
+
+
+def test_draw_week_rows_blank_cells_do_not_render_literal_none():
+    scheduler = NurseScheduler(
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+        nurses=["Alice", "Bob"],
+        prn_nurses=[],
+        nurse_manager=DummyNurseManager(),
+        weekend_history=StaticWeekendHistory(),
+        pre_scheduler=DummyPreScheduler(),
+        config=SchedulerConfig(),
+    )
+
+    class FakeCanvas:
+        def __init__(self):
+            self.centered_text = []
+
+        def rect(self, *args, **kwargs):
+            return None
+
+        def setFont(self, *args, **kwargs):
+            return None
+
+        def drawString(self, *args, **kwargs):
+            return None
+
+        def drawCentredString(self, _x, _y, text):
+            self.centered_text.append(text)
+
+    dt_blank = pd.Timestamp("2026-01-03")
+    dt_filled = pd.Timestamp("2026-01-04")
+    sched_df = pd.DataFrame(
+        index=[dt_blank, dt_filled],
+        data={"main": [None, "Alice"], "backup": [None, "Bob"]},
+    )
+
+    canvas = FakeCanvas()
+    scheduler._draw_week_rows(
+        canvas,
+        weeks=[[0, 0, 0, 0, 0, 0, 3], [4, 0, 0, 0, 0, 0, 0]],
+        year=2026,
+        month=1,
+        sched_df=sched_df,
+        y_top=100,
+        row_h=20,
+        col_w=20,
+    )
+
+    assert "None" not in canvas.centered_text
+    assert "" in canvas.centered_text
+    assert "Alice" in canvas.centered_text
+    assert "Bob" in canvas.centered_text

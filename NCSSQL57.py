@@ -6515,8 +6515,13 @@ class NurseScheduler:
 
                 if day:
                     dt = pd.Timestamp(year=year, month=month, day=day)
-                    main = str(sched_df.at[dt, "main"]) if dt in sched_df.index else ""
-                    backup = str(sched_df.at[dt, "backup"]) if dt in sched_df.index else ""
+                    main = ""
+                    backup = ""
+                    if dt in sched_df.index:
+                        main_raw = sched_df.at[dt, "main"]
+                        backup_raw = sched_df.at[dt, "backup"]
+                        main = "" if self.is_empty(main_raw) else str(main_raw)
+                        backup = "" if self.is_empty(backup_raw) else str(backup_raw)
 
                     # Day number – top-left
                     cvs.setFont("Helvetica-Bold", self.PDF_FONT_SIZES['dayno'])

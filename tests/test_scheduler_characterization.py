@@ -230,6 +230,19 @@ def _build_variant(nurses=("Alice", "Bob")) -> ScheduleVariant:
     )
 
 
+def _build_scheduler(start="2026-01-02", end="2026-01-04", nurses=("Alice", "Bob")) -> NurseScheduler:
+    return NurseScheduler(
+        start_date=pd.Timestamp(start),
+        end_date=pd.Timestamp(end),
+        nurses=list(nurses),
+        prn_nurses=[],
+        nurse_manager=DummyNurseManager(),
+        weekend_history=StaticWeekendHistory(),
+        pre_scheduler=DummyPreScheduler(),
+        config=SchedulerConfig(),
+    )
+
+
 # anchor: class BestStateTracker
 
 def test_tracker_begin_iteration_and_revert_restores_snapshot():
@@ -262,6 +275,29 @@ def test_tracker_global_best_updates_only_on_strict_improvement():
     neutral = tracker.evaluate_and_commit(phase_name="neutral", allow_neutral=True)
     assert neutral == Comparison.EQUAL
     assert tracker.get_global_best_quality() == baseline
+
+
+def test_get_valid_nurse_pairs_rejects_prefilled_weekend_conflict():
+    scheduler = _build_scheduler()
+    weekend = pd.Timestamp("2026-01-02")
+
+    # Partially prefilled weekend: only Saturday main is set.
+    # For pair (Alice, Bob), Sat main should be Bob -> this must be rejected.
+    scheduler.schedule.at[pd.Timestamp("2026-01-03"), "main"] = "Alice"
+
+    pairs = scheduler._get_valid_nurse_pairs(
+        weekend=weekend,
+        last_assignment=scheduler.last_assignment,
+        last_pattern=scheduler.last_pattern,
+        pre_scheduled={},
+        weekend_tracking=scheduler.weekend_tracking,
+        schedule=scheduler.schedule,
+        all_pre_scheduled_weekends={},
+        enforce_rotation=True,
+    )
+
+    assert ("Alice", "Bob") not in pairs
+    assert ("Bob", "Alice") in pairs
 
 
 def test_tracker_restore_global_best_survives_early_success_path():

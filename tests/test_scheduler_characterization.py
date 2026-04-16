@@ -420,30 +420,36 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
         config=SchedulerConfig(),
     )
 
-    nurse_counts_a = {"Alice": {"total": 2}}
-    nurse_counts_b = {"Bob": {"total": 2}}
+    idx = pd.date_range("2026-01-02", periods=28, freq="D")
+    sched_a = pd.DataFrame(index=idx, columns=["main", "backup"], data=None)
+    sched_b = pd.DataFrame(index=idx, columns=["main", "backup"], data=None)
 
-    rot_viol_a = scheduler._rotation_violation_score(nurse_counts_a, history.get_violation_counts())
-    rot_viol_b = scheduler._rotation_violation_score(nurse_counts_b, history.get_violation_counts())
+    # Candidate A uses Alice on Fri/Sat/Sun every weekend.
+    for d in idx:
+        if d.weekday() in (4, 5, 6):
+            sched_a.at[d, "main"] = "Alice"
+            sched_a.at[d, "backup"] = "Bob"
+
+    # Candidate B avoids Alice on weekend rows.
+    for d in idx:
+        if d.weekday() in (4, 5, 6):
+            sched_b.at[d, "main"] = "Bob"
+            sched_b.at[d, "backup"] = "Cara"
+
+    nurse_counts_a = {"Alice": {"total": 2}, "Bob": {"total": 2}}
+    nurse_counts_b = {"Bob": {"total": 2}, "Cara": {"total": 2}}
+    rot_viol_a = scheduler._rotation_violation_score(
+        nurse_counts_a, history.get_violation_counts(), sched_a
+    )
+    rot_viol_b = scheduler._rotation_violation_score(
+        nurse_counts_b, history.get_violation_counts(), sched_b
+    )
     assert rot_viol_a > rot_viol_b
 
     overage = {"Alice": 3, "Bob": 0, "Cara": 0}
     long_a = scheduler._long_term_score({"Alice": {"total": 4}, "Bob": {"total": 1}, "Cara": {"total": 1}}, overage)
     long_b = scheduler._long_term_score({"Alice": {"total": 1}, "Bob": {"total": 3}, "Cara": {"total": 1}}, overage)
     assert long_a > long_b
-
-    idx = pd.date_range("2026-01-02", periods=28, freq="D")
-    sched_a = pd.DataFrame(index=idx, columns=["main", "backup"], data=None)
-    sched_b = pd.DataFrame(index=idx, columns=["main", "backup"], data=None)
-    fridays = [d for d in idx if d.weekday() == 4]
-
-    for d in fridays:
-        sched_a.at[d, "main"] = "Alice"
-        sched_a.at[d, "backup"] = "Bob"
-
-    for d in fridays:
-        sched_b.at[d, "main"] = "Bob"
-        sched_b.at[d, "backup"] = "Cara"
 
     gap_a = scheduler._weekend_gap_penalty(sched_a)
     gap_b = scheduler._weekend_gap_penalty(sched_b)

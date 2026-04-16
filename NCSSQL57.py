@@ -5682,12 +5682,34 @@ class NurseScheduler:
         return dt - timedelta(days=(dt.weekday() - self.FRIDAY_WEEKDAY) % 7)
     
     def _rotation_violation_score(self, nurse_counts: dict[str, dict[str, int]],
-                                 historic_viol: dict[str, int]) -> int:
+                                 historic_viol: dict[str, int],
+                                 sched_df: pd.DataFrame) -> int:
         """
-        Simple additive penalty: the more historic repeats the nurses in
-        this variant have, the worse.
+        Candidate-sensitive additive penalty.
+
+        Historic repeat counts are weighted by how often a nurse appears in the
+        candidate's weekend rows (Fri/Sat/Sun). This differentiates variants
+        that use high-violation nurses more heavily on weekends.
         """
-        return sum(historic_viol.get(n, 0) for n in nurse_counts)
+        if sched_df is None or sched_df.empty:
+            return 0
+
+        weekend_rows = sched_df.loc[sched_df.index.weekday.isin([4, 5, 6]), ["main", "backup"]]
+        if weekend_rows.empty:
+            return 0
+
+        weekend_appearances: dict[str, int] = defaultdict(int)
+        for _, roles in weekend_rows.iterrows():
+            for nurse in roles.tolist():
+                if is_empty(nurse):
+                    continue
+                weekend_appearances[str(nurse)] += 1
+
+        # Keep scope to nurses represented in this candidate's counts.
+        return sum(
+            historic_viol.get(nurse, 0) * weekend_appearances.get(nurse, 0)
+            for nurse in nurse_counts
+        )
 
     # ────────────────────────────────────────────────────────────────────
     # NurseScheduler._weekend_gap_penalty
@@ -6800,7 +6822,7 @@ class NurseScheduler:
                 "idx": idx,
                 "rotation_rep": stats["rotation_rep"],
                 "gaps": stats["gaps"],
-                "rot_viol": self._rotation_violation_score(nurse_counts, viol_counts),
+                "rot_viol": self._rotation_violation_score(nurse_counts, viol_counts, sched_df),
                 "weekend_gap": self._weekend_gap_penalty(sched_df),
                 "balance": stats["balance_main"] + stats["balance_backup"],
                 "long_term": self._long_term_score(nurse_counts, overage),

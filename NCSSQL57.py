@@ -5421,6 +5421,7 @@ class AssignmentDebugLogger:
 
 
 ASSIGNMENT_DEBUG_LOGGER = AssignmentDebugLogger(enabled=_DEBUG)
+_LOG_FILE_CACHE: Dict[str, str] = {}
 
 
 def _ts():
@@ -5431,10 +5432,11 @@ def log(kind: str, payload: dict):
     """Write one JSON line to <kind>_dump_<timestamp>.log."""
     if not _DEBUG:
         return
-    fname = f"{kind}_dump_{_ts()}.log"
     line  = json.dumps(payload, default=str)
-    with _LOCK, open(fname, "a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    with _LOCK:
+        fname = _LOG_FILE_CACHE.setdefault(kind, f"{kind}_dump_{_ts()}.log")
+        with open(fname, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
             
 class NurseScheduler:
     """

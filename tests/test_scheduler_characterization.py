@@ -192,6 +192,15 @@ def test_weekend_history_integrity_operations(temp_weekend_db: Path):
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
     history.restore(backup)
+    assert history.get_assignments() == backup
+    assert history.get_last_pattern("Alice") == WeekendPattern.FSF
+    assert history.get_last_pattern("Bob") == WeekendPattern.SFS
+    assert history.get_last_pattern("Cara") is None
+    assert history.get_violation_counts() == {"Alice": 1, "Bob": 1, "Cara": 0}
+    assert history.get_violation_dates() == [
+        ("Alice", "2026-01-09", "FSF", "FSF"),
+        ("Bob", "2026-01-09", "SFS", "SFS"),
+    ]
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
 

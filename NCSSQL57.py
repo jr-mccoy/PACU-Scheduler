@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 #pylint:disable=W0718
 #pylint:disable=W0611
 #pylint:disable=W1203
@@ -2372,6 +2374,11 @@ class StateSnapshot:
     last_pattern: dict
     index_hash: int
 
+    @property
+    def schedule(self) -> pd.DataFrame:
+        """Backward-compatible alias for tests/debug code expecting ``snapshot.schedule``."""
+        return self.schedule_rows.copy()
+
     @classmethod
     def capture(
         cls,
@@ -4458,7 +4465,9 @@ class ScheduleVariant:
             tracker = BestStateTracker(self)
             initial_quality = tracker.initialize()
         else:
-            initial_quality = tracker.begin_iteration("[WindowRefill]")
+            initial_quality = tracker.get_global_best_quality()
+            if initial_quality is None:
+                initial_quality = tracker.initialize()
 
         improved = False
         windows = self._collect_weekday_windows(window_weeks=window_weeks)
@@ -4475,7 +4484,15 @@ class ScheduleVariant:
             return True
 
         for pass_idx in range(1, max_passes + 1):
-            tracker.begin_iteration(f"[WindowRefill] Pass {pass_idx}")
+            if created_tracker:
+                tracker.begin_iteration(f"[WindowRefill] Pass {pass_idx}")
+            else:
+                # Reuse caller-managed tracker without recomputing spread metrics.
+                tracker._iteration_snapshot = StateSnapshot.capture(
+                    self,
+                    tracker.get_global_best_quality() or tracker.initialize(),
+                )
+                tracker._iteration_quality = tracker._iteration_snapshot.quality
             schedule_changed = False
             target_hit = False
             self._debug_print(
@@ -4525,7 +4542,11 @@ class ScheduleVariant:
                     self._debug_print(
                         f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} accepted"
                     )
-                    if good_enough():
+                    if (
+                        target_spread is not None
+                        and new_tuple[0] <= target_spread[0]
+                        and new_tuple[1] <= target_spread[1]
+                    ):
                         self._debug_print(
                             f"[ScheduleVariant] [WindowRefill] pass={pass_idx} target met"
                         )

@@ -1719,14 +1719,20 @@ class WeekendHistory:
     def _recalculate_violation_counts(self) -> None:
         """Rebuild violation tables from canonical assignments."""
         self._assignments = self._load_assignments()
-        chronological_assignments = sorted(self._assignments.items())
+        chronological_assignments = sorted(
+            self._assignments.items(),
+            key=lambda assignment: assignment[0],
+        )
         with sqlite3.connect(self.db_name) as conn:
             self._rebuild_violation_tables(conn, chronological_assignments)
 
     def _rebuild_derived_weekend_state(self) -> None:
         """Rebuild all derived weekend state from canonical weekend assignments."""
         self._assignments = self._load_assignments()
-        chronological_assignments = sorted(self._assignments.items())
+        chronological_assignments = sorted(
+            self._assignments.items(),
+            key=lambda assignment: assignment[0],
+        )
 
         with sqlite3.connect(self.db_name) as conn:
             self._rebuild_rotation_history(conn, chronological_assignments)
@@ -1918,7 +1924,7 @@ class WeekendHistory:
                                 (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
                                 (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?))
                     ''', (date_str, fsf, sfs))
-                
+
                 conn.commit()
             except Exception as e:
                 conn.rollback()
@@ -1958,7 +1964,18 @@ class WeekendHistory:
 
     def modify_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Modify an existing weekend assignment."""
-        self.add_assignment(weekend_start, fsf_nurse, sfs_nurse)
+        weekend_start = self._normalize_date(weekend_start)
+        date_str = weekend_start.strftime('%Y-%m-%d')
+
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute(f"""
+                UPDATE {DBTables.WEEKEND_ASSIGNMENTS}
+                SET {DBColumns.FSF_NURSE_ID} = (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
+                    {DBColumns.SFS_NURSE_ID} = (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?)
+                WHERE {DBColumns.WEEKEND_START} = ?
+            """, (fsf_nurse, sfs_nurse, date_str))
+
+        self._rebuild_derived_weekend_state()
 
     def remove_assignment(self, weekend_start):
         """Remove a weekend assignment."""
@@ -1966,17 +1983,6 @@ class WeekendHistory:
         date_str = weekend_start.strftime('%Y-%m-%d')
 
         with sqlite3.connect(self.db_name) as conn:
-            # Get current assignment
-            row = conn.execute(f"""
-                SELECT {DBColumns.FSF_NURSE_ID}, {DBColumns.SFS_NURSE_ID}
-                FROM {DBTables.WEEKEND_ASSIGNMENTS}
-                WHERE {DBColumns.WEEKEND_START} = ?
-            """, (date_str,)).fetchone()
-            
-            if row is None:
-                return
-
-            # Remove assignment
             conn.execute(f"""
                 DELETE FROM {DBTables.WEEKEND_ASSIGNMENTS}
                 WHERE {DBColumns.WEEKEND_START} = ?

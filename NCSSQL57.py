@@ -7708,9 +7708,9 @@ class NurseSchedulerUI:
             "1": ("View Rotation Violation Counts", self._handle_view_violation_counts),
             "2": ("View Violation Dates", self._handle_view_violation_dates),
             "3": ("View Last Weekend Pattern", self._handle_view_last_patterns),
-            "4": ("Set Violation Count", self._handle_set_violation_count),
+            "4": ("Set Violation Count (Manual Override)", self._handle_set_violation_count),
             "5": ("Set Last Pattern", self._handle_set_last_pattern),
-            "6": ("Rebuild Violation History", self._handle_rebuild_violation_history),
+            "6": ("Rebuild Violation History (Recompute from Weekend History)", self._handle_rebuild_violation_history),
             "7": ("Return to Main Menu", None)
         }
         
@@ -7998,6 +7998,8 @@ class NurseSchedulerUI:
         def set_count():
             current_count = self.weekend_history.get_violation_counts().get(nurse, 0)
             print(f"Current violation count for {nurse}: {current_count}")
+            print("Manual edit mode: this value is a temporary override.")
+            print("It stays as entered until you explicitly run a recompute/rebuild action.")
             new_count_str = input(f"Enter new violation count for {nurse}: ").strip()
             if not new_count_str.isdigit():
                 print("Invalid input. Please enter a non-negative integer.")
@@ -8009,9 +8011,11 @@ class NurseSchedulerUI:
                 return None
             
             self.weekend_history.set_violation_count(nurse, new_count)
-            self.weekend_history._recalculate_violation_counts()
             logger.info(f"Set violation count for {nurse} to {new_count}")
-            return f"Violation count for {nurse} set to {new_count}."
+            return (
+                f"Violation count override for {nurse} set to {new_count}. "
+                "Run 'Rebuild Violation History' to recompute from canonical weekend history."
+            )
         
         self._safe_execute("set violation count", set_count)
         CLIHelper.pause()

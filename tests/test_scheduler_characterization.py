@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 import pytest
+import NCSSQL57 as scheduler_module
 
 from NCSSQL57 import (
     BestStateTracker,
@@ -507,3 +508,16 @@ def test_draw_week_rows_blank_cells_do_not_render_literal_none():
     assert "" in canvas.centered_text
     assert "Alice" in canvas.centered_text
     assert "Bob" in canvas.centered_text
+
+
+def test_module_log_reuses_cached_file_per_kind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scheduler_module, "_DEBUG", True)
+    scheduler_module._LOG_FILE_CACHE.clear()
+
+    scheduler_module.log("assignments", {"event": 1})
+    scheduler_module.log("assignments", {"event": 2})
+
+    log_files = list(tmp_path.glob("assignments_dump_*.log"))
+    assert len(log_files) == 1
+    assert scheduler_module._LOG_FILE_CACHE["assignments"] == log_files[0].name

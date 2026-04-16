@@ -1599,14 +1599,23 @@ class WeekendHistory:
 
     def _build_nurse_sequences(self) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
         """Build chronological sequences of assignments for each nurse."""
+        return self._build_nurse_sequences_from_assignments(
+            sorted(self._assignments.items())
+        )
+
+    def _build_nurse_sequences_from_assignments(
+        self,
+        chronological_assignments: list[tuple[pd.Timestamp, tuple[Optional[str], Optional[str]]]],
+    ) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
+        """Build chronological sequences of assignments for each nurse."""
         seq_per_nurse: dict[str, list[tuple[pd.Timestamp, WeekendPattern]]] = {}
-        
-        for wk_start, (fsf, sfs) in sorted(self._assignments.items()):
+
+        for wk_start, (fsf, sfs) in chronological_assignments:
             if fsf:
                 seq_per_nurse.setdefault(fsf, []).append((wk_start, WeekendPattern.FSF))
             if sfs:
                 seq_per_nurse.setdefault(sfs, []).append((wk_start, WeekendPattern.SFS))
-        
+
         return seq_per_nurse
 
     def _process_nurse_violations(self, nurse: str, sequence: list[tuple[pd.Timestamp, WeekendPattern]]) -> tuple[list, int, Optional[pd.Timestamp], int]:
@@ -1667,32 +1676,63 @@ class WeekendHistory:
                 {DBColumns.CONSEC_VIOLATIONS} = excluded.{DBColumns.CONSEC_VIOLATIONS}
         """, (nurse, violation_count, last_date_str, streak))
 
+    def _rebuild_rotation_history(
+        self,
+        conn,
+        chronological_assignments: list[tuple[pd.Timestamp, tuple[Optional[str], Optional[str]]]],
+    ) -> None:
+        """Rebuild weekend rotation history table from chronological assignments."""
+        conn.execute(f"DELETE FROM {DBTables.WEEKEND_ROTATION_HISTORY}")
+
+        for _, (fsf, sfs) in chronological_assignments:
+            if fsf:
+                self._write_pattern(conn, fsf, WeekendPattern.FSF)
+            if sfs:
+                self._write_pattern(conn, sfs, WeekendPattern.SFS)
+
+    def _rebuild_violation_tables(
+        self,
+        conn,
+        chronological_assignments: list[tuple[pd.Timestamp, tuple[Optional[str], Optional[str]]]],
+    ) -> None:
+        """Rebuild violation dates and stats from chronological assignments."""
+        conn.execute(f"DELETE FROM {DBTables.ROTATION_VIOLATION_DATES}")
+        conn.execute(f"DELETE FROM {DBTables.ROTATION_VIOLATION_STATS}")
+
+        seq_per_nurse = self._build_nurse_sequences_from_assignments(chronological_assignments)
+
+        for nurse, sequence in seq_per_nurse.items():
+            (
+                violation_dates,
+                violation_count,
+                last_violation_date,
+                streak,
+            ) = self._process_nurse_violations(nurse, sequence)
+
+            self._write_violation_dates_to_db(conn, nurse, violation_dates)
+            self._update_nurse_violation_stats(conn, nurse, violation_count, last_violation_date, streak)
+
+    def _rebuild_last_patterns(self) -> None:
+        """Reload in-memory last patterns from weekend rotation history table."""
+        self._last_patterns = self._load_last_patterns()
+
     def _recalculate_violation_counts(self) -> None:
-        """Re-scan all stored weekends and rebuild violation stats."""
+        """Rebuild violation tables from canonical assignments."""
+        self._assignments = self._load_assignments()
+        chronological_assignments = sorted(self._assignments.items())
         with sqlite3.connect(self.db_name) as conn:
-            # Clear existing violation data
-            conn.execute(f"""
-                UPDATE {DBTables.ROTATION_VIOLATION_STATS}
-                SET {DBColumns.VIOLATION_COUNT} = 0,
-                    {DBColumns.LAST_VIOLATION_DATE} = NULL,
-                    {DBColumns.CONSEC_VIOLATIONS} = 0
-            """)
-            self._clear_violation_dates(conn=conn)
+            self._rebuild_violation_tables(conn, chronological_assignments)
 
-            # Build sequences and process violations
-            seq_per_nurse = self._build_nurse_sequences()
+    def _rebuild_derived_weekend_state(self) -> None:
+        """Rebuild all derived weekend state from canonical weekend assignments."""
+        self._assignments = self._load_assignments()
+        chronological_assignments = sorted(self._assignments.items())
 
-            for nurse, sequence in seq_per_nurse.items():
-                (
-                    violation_dates,
-                    violation_count,
-                    last_violation_date,
-                    streak,
-                ) = self._process_nurse_violations(nurse, sequence)
+        with sqlite3.connect(self.db_name) as conn:
+            self._rebuild_rotation_history(conn, chronological_assignments)
+            self._rebuild_violation_tables(conn, chronological_assignments)
 
-                # Write results to database
-                self._write_violation_dates_to_db(conn, nurse, violation_dates)
-                self._update_nurse_violation_stats(conn, nurse, violation_count, last_violation_date, streak)
+        self._rebuild_last_patterns()
 
     # Pattern Management Methods
     def _write_pattern(self, conn, nurse: str, new_pat: WeekendPattern) -> None:
@@ -1884,8 +1924,8 @@ class WeekendHistory:
                 conn.rollback()
                 logger.error(f"Error during restore: {e}")
                 raise
-        
-        self._assignments = self._load_assignments()
+
+        self._rebuild_derived_weekend_state()
 
     def set_violation_count(self, nurse: str, count: int) -> None:
         """Set violation count for a nurse."""
@@ -1900,8 +1940,6 @@ class WeekendHistory:
     def add_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Add a new weekend assignment."""
         weekend_start = self._normalize_date(weekend_start)
-        fsf_prev_pattern = self._last_patterns.get(fsf_nurse)
-        sfs_prev_pattern = self._last_patterns.get(sfs_nurse)
         
         with sqlite3.connect(self.db_name) as conn:
             # Insert assignment
@@ -1916,23 +1954,7 @@ class WeekendHistory:
                 )
             """, (date_str, fsf_nurse, sfs_nurse))
 
-            # Update patterns
-            self._write_pattern(conn, fsf_nurse, WeekendPattern.FSF)
-            self._write_pattern(conn, sfs_nurse, WeekendPattern.SFS)
-
-            # Check for violations
-            if fsf_prev_pattern == WeekendPattern.FSF:
-                self._add_violation_date(fsf_nurse, weekend_start, 
-                                       WeekendPattern.FSF, fsf_prev_pattern, conn=conn)
-            if sfs_prev_pattern == WeekendPattern.SFS:
-                self._add_violation_date(sfs_nurse, weekend_start, 
-                                       WeekendPattern.SFS, sfs_prev_pattern, conn=conn)
-
-        # Update internal state
-        self._assignments[weekend_start] = (fsf_nurse, sfs_nurse)
-        self._recalculate_violation_counts()
-        self._last_patterns[fsf_nurse] = WeekendPattern.FSF
-        self._last_patterns[sfs_nurse] = WeekendPattern.SFS
+        self._rebuild_derived_weekend_state()
 
     def modify_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Modify an existing weekend assignment."""
@@ -1954,26 +1976,13 @@ class WeekendHistory:
             if row is None:
                 return
 
-            fsf_id, sfs_id = row
-            fsf_name = self._get_nurse_name(conn, fsf_id) if fsf_id else None
-            sfs_name = self._get_nurse_name(conn, sfs_id) if sfs_id else None
-
             # Remove assignment
             conn.execute(f"""
                 DELETE FROM {DBTables.WEEKEND_ASSIGNMENTS}
                 WHERE {DBColumns.WEEKEND_START} = ?
             """, (date_str,))
 
-            # Recompute patterns
-            if fsf_name:
-                self._recompute_last_pattern(conn, fsf_name, weekend_start)
-            if sfs_name and sfs_name != fsf_name:
-                self._recompute_last_pattern(conn, sfs_name, weekend_start)
-
-        # Update internal state
-        self._assignments.pop(weekend_start, None)
-        self._last_patterns = self._load_last_patterns()
-        self._recalculate_violation_counts()
+        self._rebuild_derived_weekend_state()
         
 class PreScheduler:
     def __init__(self, db_name='nurse_schedule.db'):

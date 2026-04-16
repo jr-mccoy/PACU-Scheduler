@@ -125,11 +125,7 @@ def _count_weekday_gaps(schedule_df) -> int:
     Return number of empty cells (main + backup) Mon–Thu only,
     treating None/NaN/blank as empty using is_empty().
     """
-    mask = ~schedule_df['is_weekend']  # Mon–Thu
-    sub = schedule_df.loc[mask, ['main', 'backup']]
-    mapper = getattr(sub, "map", None)
-    empties = mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
-    return int(empties.to_numpy().sum())
+    return _count_main_backup_empties(schedule_df, weekdays_only=True)
 
 def is_empty(value) -> bool:
     """
@@ -138,11 +134,32 @@ def is_empty(value) -> bool:
     """
     if value is None:
         return True
-    if isinstance(value, float) and pd.isna(value):
-        return True
     if isinstance(value, str) and value.strip() == "":
         return True
+    na_value = pd.isna(value)
+    if isinstance(na_value, (bool, np.bool_)):
+        return bool(na_value)
     return False
+
+
+def _main_backup_empty_mask(
+    schedule_df: pd.DataFrame, *, weekdays_only: bool = False
+) -> pd.DataFrame:
+    """Return a boolean empty-mask for ``main``/``backup`` cells."""
+    if weekdays_only:
+        day_mask = ~schedule_df["is_weekend"]  # Mon–Thu
+        sub = schedule_df.loc[day_mask, ["main", "backup"]]
+    else:
+        sub = schedule_df[["main", "backup"]]
+    mapper = getattr(sub, "map", None)  # pandas >= 2.1.0
+    return mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
+
+
+def _count_main_backup_empties(
+    schedule_df: pd.DataFrame, *, weekdays_only: bool = False
+) -> int:
+    """Count empty ``main``/``backup`` cells using ``is_empty`` semantics."""
+    return int(_main_backup_empty_mask(schedule_df, weekdays_only=weekdays_only).to_numpy().sum())
 
 @dataclass
 class PhaseMetrics:
@@ -420,7 +437,7 @@ def _evaluate_variant_worker_profiled(args):
                 balance_backup = final_quality.backup_spread
                 rotation_rep = final_quality.rotation_penalty
             else:
-                gaps_final = int(df[["main", "backup"]].isna().sum().sum())
+                gaps_final = _count_main_backup_empties(df)
                 main_counts = var.state.main_assignment_counts.values
                 back_counts = var.state.backup_assignment_counts.values
                 balance_main = int(main_counts.max() - main_counts.min()) if len(main_counts) else 0
@@ -551,7 +568,7 @@ def _evaluate_variant_worker(args):
         balance_backup = final_quality.backup_spread
         rotation_rep = final_quality.rotation_penalty
     else:
-        gaps_final  = int(df[['main', 'backup']].isna().sum().sum())
+        gaps_final = _count_main_backup_empties(df)
         main_counts = var.state.main_assignment_counts.values
         back_counts = var.state.backup_assignment_counts.values
         balance_main = int(main_counts.max()  - main_counts.min()) if len(main_counts) else 0
@@ -3577,10 +3594,7 @@ class ScheduleVariant:
     
     def count_gaps(self) -> int:
         """Count empty slots in schedule."""
-        sub = self.state.schedule[["main", "backup"]]
-        mapper = getattr(sub, "map", None)  # pandas >= 2.1.0
-        mask = mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
-        return int(mask.to_numpy().sum())
+        return _count_main_backup_empties(self.state.schedule)
 
     def get_weekdays(self) -> List[pd.Timestamp]:
         """Get all weekday dates from schedule (cached; index never changes)."""
@@ -6401,11 +6415,7 @@ class NurseScheduler:
         Returns:
             True if the value is None, NaN, empty string, or whitespace-only string; False otherwise.
         """
-        if pd.isna(value):
-            return True
-        if isinstance(value, str) and value.strip() == "":
-            return True
-        return False
+        return is_empty(value)
 
     def get_nurse_assignment_counts(self, variant: ScheduleVariant) -> dict:
         """Get assignment counts for all nurses in a variant."""

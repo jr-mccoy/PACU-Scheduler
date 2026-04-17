@@ -71,6 +71,7 @@ from .scoring import (
 )
 from .generation import CandidateDomainBuilder, OrderGenerator
 from .optimization import WindowRefillOptimizer
+from .history_services import WeekendHistoryService, ViolationHistoryService
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -1494,6 +1495,8 @@ class WeekendHistory:
         _ensure_violation_table(self.db_name)
         self._assignments = self._load_assignments()
         self._last_patterns = self._load_last_patterns()
+        self.weekend_service = WeekendHistoryService(self)
+        self.violation_service = ViolationHistoryService(self)
 
     # Utility Methods
     def _normalize_date(self, date_input) -> pd.Timestamp:
@@ -1784,27 +1787,11 @@ class WeekendHistory:
 
     def _recalculate_violation_counts(self) -> None:
         """Rebuild violation tables from canonical assignments."""
-        self._assignments = self._load_assignments()
-        chronological_assignments = sorted(
-            self._assignments.items(),
-            key=lambda assignment: assignment[0],
-        )
-        with sqlite3.connect(self.db_name) as conn:
-            self._rebuild_violation_tables(conn, chronological_assignments)
+        self.violation_service.rebuild()
 
     def _rebuild_derived_weekend_state(self) -> None:
         """Rebuild all derived weekend state from canonical weekend assignments."""
-        self._assignments = self._load_assignments()
-        chronological_assignments = sorted(
-            self._assignments.items(),
-            key=lambda assignment: assignment[0],
-        )
-
-        with sqlite3.connect(self.db_name) as conn:
-            self._rebuild_rotation_history(conn, chronological_assignments)
-            self._rebuild_violation_tables(conn, chronological_assignments)
-
-        self._rebuild_last_patterns()
+        self.weekend_service.rebuild()
 
     # Pattern Management Methods
     def _write_pattern(self, conn, nurse: str, new_pat: WeekendPattern) -> None:
@@ -1975,29 +1962,7 @@ class WeekendHistory:
 
     def restore(self, backup_assignments: list):
         """Restore assignments from backup."""
-        with sqlite3.connect(self.db_name) as conn:
-            try:
-                conn.execute('BEGIN')
-                conn.execute(f'DELETE FROM {DBTables.WEEKEND_ASSIGNMENTS}')
-                
-                for weekend_start, fsf, sfs in backup_assignments:
-                    normalized_date = DateUtils.normalize_date(weekend_start)
-                    date_str = normalized_date.strftime('%Y-%m-%d')
-                    conn.execute(f'''
-                        INSERT INTO {DBTables.WEEKEND_ASSIGNMENTS}
-                        ({DBColumns.WEEKEND_START}, {DBColumns.FSF_NURSE_ID}, {DBColumns.SFS_NURSE_ID})
-                        VALUES (?,
-                                (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
-                                (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?))
-                    ''', (date_str, fsf, sfs))
-
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Error during restore: {e}")
-                raise
-
-        self._rebuild_derived_weekend_state()
+        self.weekend_service.restore_assignments(backup_assignments)
 
     def set_violation_count(self, nurse: str, count: int) -> None:
         """Set violation count for a nurse."""
@@ -2011,50 +1976,15 @@ class WeekendHistory:
 
     def add_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Add a new weekend assignment."""
-        weekend_start = self._normalize_date(weekend_start)
-        
-        with sqlite3.connect(self.db_name) as conn:
-            # Insert assignment
-            date_str = weekend_start.strftime('%Y-%m-%d')
-            conn.execute(f"""
-                INSERT OR REPLACE INTO {DBTables.WEEKEND_ASSIGNMENTS}
-                      ({DBColumns.WEEKEND_START}, {DBColumns.FSF_NURSE_ID}, {DBColumns.SFS_NURSE_ID})
-                VALUES (
-                    ?,
-                    (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?),
-                    (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?)
-                )
-            """, (date_str, fsf_nurse, sfs_nurse))
-
-        self._rebuild_derived_weekend_state()
+        self.weekend_service.add_assignment(weekend_start, fsf_nurse, sfs_nurse)
 
     def modify_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Modify an existing weekend assignment."""
-        weekend_start = self._normalize_date(weekend_start)
-        date_str = weekend_start.strftime('%Y-%m-%d')
-
-        with sqlite3.connect(self.db_name) as conn:
-            conn.execute(f"""
-                UPDATE {DBTables.WEEKEND_ASSIGNMENTS}
-                SET {DBColumns.FSF_NURSE_ID} = (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
-                    {DBColumns.SFS_NURSE_ID} = (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?)
-                WHERE {DBColumns.WEEKEND_START} = ?
-            """, (fsf_nurse, sfs_nurse, date_str))
-
-        self._rebuild_derived_weekend_state()
+        self.weekend_service.modify_assignment(weekend_start, fsf_nurse, sfs_nurse)
 
     def remove_assignment(self, weekend_start):
         """Remove a weekend assignment."""
-        weekend_start = self._normalize_date(weekend_start)
-        date_str = weekend_start.strftime('%Y-%m-%d')
-
-        with sqlite3.connect(self.db_name) as conn:
-            conn.execute(f"""
-                DELETE FROM {DBTables.WEEKEND_ASSIGNMENTS}
-                WHERE {DBColumns.WEEKEND_START} = ?
-            """, (date_str,))
-
-        self._rebuild_derived_weekend_state()
+        self.weekend_service.remove_assignment(weekend_start)
         
 class PreScheduler:
     def __init__(self, db_name='nurse_schedule.db'):
@@ -6523,6 +6453,8 @@ class NurseSchedulerUI:
             self.nurse_manager = NurseManager(db_name)
             self.pre_scheduler = PreScheduler(db_name)
             self.weekend_history = WeekendHistory(db_name)
+            self.weekend_history_service = self.weekend_history.weekend_service
+            self.violation_history_service = self.weekend_history.violation_service
             self.assignment_history = AssignmentHistory(db_name)
             self.calendar_ui = VisualCalendarUI(self.nurse_manager)
         except Exception as e:
@@ -6665,7 +6597,7 @@ class NurseSchedulerUI:
         
         def rebuild_history():
             print("Rebuilding violation history...")
-            self.weekend_history._recalculate_violation_counts()
+            self.violation_history_service.rebuild()
             print("✅ Violation history rebuilt successfully.")
             
             # Show summary
@@ -6699,7 +6631,7 @@ class NurseSchedulerUI:
             return
     
         def add_assignment():
-            self.weekend_history.add_assignment(weekend_start, fsf_nurse, sfs_nurse)
+            self.weekend_history_service.add_assignment(weekend_start, fsf_nurse, sfs_nurse)
             logger.info(f"Added weekend assignment for {weekend_start.date()}: FSF={fsf_nurse}, SFS={sfs_nurse}")
     
         msg = f"Weekend assignment added for {weekend_start.date()}."
@@ -6716,7 +6648,7 @@ class NurseSchedulerUI:
         
         def remove_assignment():
             weekend_start = self._normalize_date(weekend_start_input)
-            self.weekend_history.remove_assignment(weekend_start)
+            self.weekend_history_service.remove_assignment(weekend_start)
             logger.info(f"Removed weekend assignment for {weekend_start.date()}")
             return f"Weekend assignment removed for {weekend_start.date()}."
         
@@ -6769,7 +6701,7 @@ class NurseSchedulerUI:
             return
         
         def modify_assignment():
-            self.weekend_history.modify_assignment(friday, new_fsf, new_sfs)
+            self.weekend_history_service.modify_assignment(friday, new_fsf, new_sfs)
             self._sync_assignment_history_for_weekend(friday, new_fsf, new_sfs)
             return True
         
@@ -6806,7 +6738,7 @@ class NurseSchedulerUI:
             return
         
         def delete_assignment():
-            self.weekend_history.remove_assignment(friday)
+            self.weekend_history_service.remove_assignment(friday)
             self._sync_assignment_history_for_weekend(friday, None, None)
             return True
         
@@ -7765,7 +7697,7 @@ class NurseSchedulerUI:
                 
                 if not NurseScheduler.is_empty(fsf_nurse) and not NurseScheduler.is_empty(sfs_nurse) and fsf_nurse != sfs_nurse:
                     weekend_date = self._normalize_date(weekend)
-                    self.weekend_history.modify_assignment(weekend_date, fsf_nurse, sfs_nurse)
+                    self.weekend_history_service.modify_assignment(weekend_date, fsf_nurse, sfs_nurse)
                     updated_count += 1
             except Exception as e:
                 logger.warning(f"Could not update weekend history for {weekend}: {e}")

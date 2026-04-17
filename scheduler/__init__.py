@@ -44,6 +44,7 @@ from .profiling import (
     PerformanceReport,
 )
 from .debug import _open_dbg, _dbg_pairs, _dbg_variants, _reject, _accept, _pair
+from .history_services import WeekendHistoryService, ViolationHistoryService
 from .legacy_core import (
     PreScheduler,
     NurseSchedulerUI,
@@ -74,7 +75,9 @@ __all__ = [
     "ScheduleVariant",
     "SharedSettings",
     "VisualCalendarUI",
+    "ViolationHistoryService",
     "WeekendHistory",
+    "WeekendHistoryService",
     "WeekendPattern",
     "WorkerMetrics",
     "_accept",

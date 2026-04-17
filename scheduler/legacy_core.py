@@ -69,6 +69,8 @@ from .scoring import (
     compute_quality_metrics,
     weighted_scores_from_rows,
 )
+from .generation import CandidateDomainBuilder, OrderGenerator
+from .optimization import WindowRefillOptimizer
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -2720,11 +2722,26 @@ class ScheduleVariant:
         else:
             self._console_debug = bool(console_debug)
 
+        self.assignment_debug_logger = ASSIGNMENT_DEBUG_LOGGER
+        self.Comparison = Comparison
+        self.StateSnapshot = StateSnapshot
+        self.BestStateTracker = BestStateTracker
+        self.DEFAULT_POST_WEEKEND_WINDOW = DEFAULT_POST_WEEKEND_WINDOW
+        self.DEFAULT_PRE_WEEKEND_WINDOW = DEFAULT_PRE_WEEKEND_WINDOW
+        self.pd = pd
+        self.domain_builder = CandidateDomainBuilder(self)
+        self.order_generator = OrderGenerator(self)
+        self.window_optimizer = WindowRefillOptimizer(self)
+
         self._initialize_pre_scheduled_slots()
 
     def _debug_print(self, msg: str, **kwargs) -> None:
         if self._console_debug:
             print(msg, **kwargs, flush=True)
+
+    @staticmethod
+    def is_empty(value) -> bool:
+        return is_empty(value)
 
     def _initialize_pre_scheduled_slots(self) -> None:
         """Initialize schedule with pre-scheduled assignments and update counters."""
@@ -4069,129 +4086,13 @@ class ScheduleVariant:
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
-        diag_map = diagnostics
-        created_local_diag = False
-        if diag_map is None and ASSIGNMENT_DEBUG_LOGGER.enabled:
-            diag_map = {}
-            created_local_diag = True
-        if diag_map is not None:
-            diag_map.clear()
-
-        candidates = self._get_eligible_nurses_for_day(
+        return self.domain_builder.eligible_domain(
             date,
             role,
-            diagnostics=diag_map if diag_map is not None else None,
-            relaxed_spacing=False,
+            diagnostics=diagnostics,
+            force_relaxed=force_relaxed,
+            gap_mode=False,
         )
-
-        used_relaxed = False
-        relaxed_candidates: list[str] = []
-
-        if force_relaxed and self.config.allow_one_day_weekday_gap:
-            capture_relaxed: Optional[dict[str, list[str]]]
-            if diag_map is not None:
-                capture_relaxed = {}
-            else:
-                capture_relaxed = None
-            relaxed_candidates = self._get_eligible_nurses_for_day(
-                date,
-                role,
-                diagnostics=capture_relaxed,
-                relaxed_spacing=True,
-            )
-            if relaxed_candidates:
-                used_relaxed = True
-                if diag_map is not None and capture_relaxed is not None:
-                    for nurse, reasons in capture_relaxed.items():
-                        diag_map.setdefault(nurse, reasons)
-        elif not candidates and self.config.allow_one_day_weekday_gap:
-            if diag_map is not None:
-                diag_map.clear()
-            candidates = self._get_eligible_nurses_for_day(
-                date,
-                role,
-                diagnostics=diag_map if diag_map is not None else None,
-                relaxed_spacing=True,
-            )
-            if candidates:
-                used_relaxed = True
-                if self._console_debug:
-                    self._debug_print(
-                        f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}"
-                    )
-
-        if relaxed_candidates:
-            seen: set[str] = set(candidates)
-            candidates.extend(n for n in relaxed_candidates if n not in seen)
-
-        if not candidates:
-            if self._console_debug:
-                self._debug_print(
-                    f"[ScheduleVariant] [Domain] empty {date.date()} role={role}"
-                )
-            if ASSIGNMENT_DEBUG_LOGGER.enabled:
-                self._log_assignment_debug(
-                    context="eligible_domain",
-                    phase="candidate_pool",
-                    date=date,
-                    role=role,
-                    eligible=candidates,
-                    diagnostics=diag_map or {},
-                    final_pick=None,
-                    note="no_candidate",
-                    extra={
-                        "relaxed_spacing": used_relaxed,
-                        "eligible_count": 0,
-                    },
-                )
-            if created_local_diag:
-                diag_map = None
-            return candidates
-
-        role_counts = (
-            self.state.main_assignment_counts
-            if role == "main"
-            else self.state.backup_assignment_counts
-        )
-        total_counts = self._get_total_counts()
-        order_index = self._order_index
-
-        wday = int(date.weekday())
-        dow_counts = self._weekday_counts_for(wday) if wday in (0, 1, 2, 3) else {}
-
-        def past_total(n: str) -> int:
-            return self.hist_main.get(n, 0) + self.hist_backup.get(n, 0)
-
-        candidates.sort(
-            key=lambda n: (
-                role_counts[n],
-                dow_counts.get(n, 0),
-                total_counts[n],
-                past_total(n),
-                order_index[n],
-            )
-        )
-
-        if ASSIGNMENT_DEBUG_LOGGER.enabled:
-            self._log_assignment_debug(
-                context="eligible_domain",
-                phase="candidate_pool",
-                date=date,
-                role=role,
-                eligible=candidates,
-                diagnostics=diag_map or {},
-                final_pick=None,
-                note="relaxed_spacing" if used_relaxed else None,
-                extra={
-                    "relaxed_spacing": used_relaxed,
-                    "eligible_count": len(candidates),
-                    "force_relaxed": force_relaxed,
-                },
-            )
-
-        if created_local_diag:
-            diag_map = None
-        return candidates
 
     def _eligible_domain_gap(
         self,
@@ -4201,124 +4102,13 @@ class ScheduleVariant:
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
-        diag_map = diagnostics
-        created_local_diag = False
-        if diag_map is None and ASSIGNMENT_DEBUG_LOGGER.enabled:
-            diag_map = {}
-            created_local_diag = True
-        if diag_map is not None:
-            diag_map.clear()
-
-        candidates = self._get_eligible_nurses_for_day_gap(
+        return self.domain_builder.eligible_domain(
             date,
             role,
-            diagnostics=diag_map if diag_map is not None else None,
-            relaxed_spacing=False,
+            diagnostics=diagnostics,
+            force_relaxed=force_relaxed,
+            gap_mode=True,
         )
-
-        used_relaxed = False
-        relaxed_candidates: list[str] = []
-
-        if force_relaxed and self.config.allow_one_day_weekday_gap:
-            capture_relaxed: Optional[dict[str, list[str]]]
-            if diag_map is not None:
-                capture_relaxed = {}
-            else:
-                capture_relaxed = None
-            relaxed_candidates = self._get_eligible_nurses_for_day_gap(
-                date,
-                role,
-                diagnostics=capture_relaxed,
-                relaxed_spacing=True,
-            )
-            if relaxed_candidates:
-                used_relaxed = True
-                if diag_map is not None and capture_relaxed is not None:
-                    for nurse, reasons in capture_relaxed.items():
-                        diag_map.setdefault(nurse, reasons)
-        elif not candidates and self.config.allow_one_day_weekday_gap:
-            if diag_map is not None:
-                diag_map.clear()
-            candidates = self._get_eligible_nurses_for_day_gap(
-                date,
-                role,
-                diagnostics=diag_map if diag_map is not None else None,
-                relaxed_spacing=True,
-            )
-            if candidates:
-                used_relaxed = True
-
-        if relaxed_candidates:
-            seen = set(candidates)
-            candidates.extend(n for n in relaxed_candidates if n not in seen)
-
-        if not candidates:
-            if ASSIGNMENT_DEBUG_LOGGER.enabled:
-                self._log_assignment_debug(
-                    context="gap_eligible_domain",
-                    phase="candidate_pool",
-                    date=date,
-                    role=role,
-                    eligible=candidates,
-                    diagnostics=diag_map or {},
-                    final_pick=None,
-                    note="no_candidate",
-                    extra={
-                        "relaxed_spacing": used_relaxed,
-                        "eligible_count": 0,
-                        "gap_fill": True,
-                        "force_relaxed": force_relaxed,
-                    },
-                )
-            if created_local_diag:
-                diag_map = None
-            return candidates
-
-        role_counts = (
-            self.state.main_assignment_counts
-            if role == "main"
-            else self.state.backup_assignment_counts
-        )
-        total_counts = self._get_total_counts()
-        order_index = self._order_index
-
-        wday = int(date.weekday())
-        dow_counts = self._weekday_counts_for(wday) if wday in (0, 1, 2, 3) else {}
-
-        def past_total(n: str) -> int:
-            return self.hist_main.get(n, 0) + self.hist_backup.get(n, 0)
-
-        candidates.sort(
-            key=lambda n: (
-                role_counts[n],
-                dow_counts.get(n, 0),
-                total_counts[n],
-                past_total(n),
-                order_index[n],
-            )
-        )
-
-        if ASSIGNMENT_DEBUG_LOGGER.enabled:
-            self._log_assignment_debug(
-                context="gap_eligible_domain",
-                phase="candidate_pool",
-                date=date,
-                role=role,
-                eligible=candidates,
-                diagnostics=diag_map or {},
-                final_pick=None,
-                note="relaxed_spacing" if used_relaxed else None,
-                extra={
-                    "relaxed_spacing": used_relaxed,
-                    "eligible_count": len(candidates),
-                    "gap_fill": True,
-                    "force_relaxed": force_relaxed,
-                },
-            )
-
-        if created_local_diag:
-            diag_map = None
-        return candidates
 
     def _build_window_varlist(self, days: list[pd.Timestamp]) -> list[tuple[pd.Timestamp, str]]:
         """
@@ -4343,102 +4133,14 @@ class ScheduleVariant:
         force_relaxed: bool = False,
         depth: int = 0,
     ) -> bool:
-        """
-        MRV backtracking with forward checking. Returns True if the window is fully assigned.
-        If any variable has an empty domain under current partial assignments, fail this attempt.
-        """
-        _dbg = self._console_debug
-        now = time.perf_counter()
-        if now >= deadline or node_budget[0] <= 0:
-            if _dbg:
-                self._debug_print(
-                    f"[ScheduleVariant] [MRV] cutoff depth={depth} nodes={node_budget[0]} time={now >= deadline}"
-                )
-            return False
-
-        unassigned = [(d, r) for (d, r) in vars_list if is_empty(self.state.schedule.at[d, r])]
-        if _dbg:
-            self._debug_print(
-                f"[ScheduleVariant] [MRV] enter depth={depth} remaining={len(unassigned)} gap={gap_mode}"
-            )
-        if not unassigned:
-            if _dbg:
-                self._debug_print(
-                    f"[ScheduleVariant] [MRV] success depth={depth}"
-                )
-            return True
-
-        if gap_mode:
-            domain_fn = lambda d, r: self._eligible_domain_gap(d, r, force_relaxed=force_relaxed)
-        else:
-            domain_fn = lambda d, r: self._eligible_domain(d, r, force_relaxed=force_relaxed)
-
-        # MRV: smallest domains first
-        domains: list[tuple[int, list[str], tuple[pd.Timestamp, str]]] = []
-        for d, r in unassigned:
-            dom = domain_fn(d, r)
-            if not dom:
-                if _dbg:
-                    self._debug_print(
-                        f"[ScheduleVariant] [MRV] empty-domain depth={depth} slot={d.date()} role={r}"
-                    )
-                return False  # must fully assign; fail this branch
-            domains.append((len(dom), dom, (d, r)))
-        domains.sort(key=lambda t: t[0])
-        _, dom0, (d0, r0) = domains[0]
-        if _dbg:
-            self._debug_print(
-                f"[ScheduleVariant] [MRV] depth={depth} slot={d0.date()} role={r0} domain={len(dom0)}"
-            )
-
-        for nurse in dom0:
-            node_budget[0] -= 1
-            now = time.perf_counter()
-            if node_budget[0] <= 0 or now >= deadline:
-                if _dbg:
-                    self._debug_print(
-                        f"[ScheduleVariant] [MRV] cutoff depth={depth} nodes={node_budget[0]} time={now >= deadline}"
-                    )
-                return False
-
-            if not self._inc_assign(d0, r0, nurse, gap_phase=gap_mode):
-                continue
-
-            # Forward check: only check variables near the assigned date
-            # Radius must cover all constraint reaches: spacing, weekly limits,
-            # and pre/post weekend windows (the largest being POST_WEEKEND = 6).
-            failed = False
-            fc_radius = max(
-                int(self.config.min_days_between_assignments) + 1,
-                DEFAULT_POST_WEEKEND_WINDOW,
-                DEFAULT_PRE_WEEKEND_WINDOW,
-            )
-            for _, _, (dv, rv) in domains[1:]:
-                if abs((dv - d0).days) <= fc_radius and is_empty(self.state.schedule.at[dv, rv]) and not domain_fn(dv, rv):
-                    failed = True
-                    break
-
-            if not failed and self._backtrack_window(
-                vars_list,
-                deadline,
-                node_budget,
-                gap_mode=gap_mode,
-                force_relaxed=force_relaxed,
-                depth=depth + 1,
-            ):
-                if _dbg:
-                    self._debug_print(
-                        f"[ScheduleVariant] [MRV] depth={depth} assigned {d0.date()} role={r0} nurse={nurse}"
-                    )
-                return True
-
-            self._dec_assign(d0, r0, nurse)
-
-        if _dbg:
-            self._debug_print(
-                f"[ScheduleVariant] [MRV] backtrack depth={depth} slot={d0.date()} role={r0}"
-            )
-        return False
+        return self.window_optimizer.backtrack_window(
+            vars_list,
+            deadline,
+            node_budget,
+            gap_mode=gap_mode,
+            force_relaxed=force_relaxed,
+            depth=depth,
+        )
     
     def iterative_window_refill_rebalance(
         self,
@@ -4449,155 +4151,14 @@ class ScheduleVariant:
         target_spread: tuple[int, int] | None = (1, 1),
         tracker: Optional[BestStateTracker] = None,
     ) -> bool:
-        """
-        Large-neighborhood search over 2-week windows:
-          • Clear non-pre-scheduled weekday cells and reassign via MRV backtracking.
-          • Accept only if (backup_spread, main_spread, total_spread) improves lexicographically
-            AND the number of gaps inside the window does not increase.
-          • Early-stop if spreads <= target_spread.
-        """
-        def good_enough() -> bool:
-            if target_spread is None:
-                return False
-            s_b, s_m, _ = self._spread_components()
-            return s_b <= target_spread[0] and s_m <= target_spread[1]
-
-        created_tracker = tracker is None
-        if created_tracker:
-            tracker = BestStateTracker(self)
-            initial_quality = tracker.initialize()
-        else:
-            initial_quality = tracker.get_global_best_quality()
-            if initial_quality is None:
-                initial_quality = tracker.initialize()
-
-        improved = False
-        windows = self._collect_weekday_windows(window_weeks=window_weeks)
-        if not windows:
-            if tracker:
-                tracker.restore_global_best()
-            return False
-        if good_enough():
-            self._debug_print(
-                "[ScheduleVariant] [WindowRefill] target already met"
-            )
-            if tracker:
-                tracker.restore_global_best()
-            return True
-
-        for pass_idx in range(1, max_passes + 1):
-            if created_tracker:
-                tracker.begin_iteration(f"[WindowRefill] Pass {pass_idx}")
-            else:
-                # Reuse caller-managed tracker without recomputing spread metrics.
-                tracker._iteration_snapshot = StateSnapshot.capture(
-                    self,
-                    tracker.get_global_best_quality() or tracker.initialize(),
-                )
-                tracker._iteration_quality = tracker._iteration_snapshot.quality
-            schedule_changed = False
-            target_hit = False
-            self._debug_print(
-                f"[ScheduleVariant] [WindowRefill] pass={pass_idx} start"
-            )
-            for days in windows:
-                if not days:
-                    continue
-                base_tuple = self._spread_components()
-                # baseline gaps within the window (use map if available; else applymap)
-                sub = self.state.schedule.loc[days, ["main", "backup"]]
-                mapper = getattr(sub, "map", None)
-                base_mask = mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
-                base_gaps = int(base_mask.to_numpy().sum())
-                window_label = f"{min(days).date()}-{max(days).date()}"
-                self._debug_print(
-                    f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} before gaps={base_gaps} spread={base_tuple}"
-                )
-
-                backup = self.backup_week_assignments(days)
-                self._clear_window_assignments(days)
-                vars_list = self._build_window_varlist(days)
-
-                deadline = time.perf_counter() + (time_limit_ms / 1000.0)
-                node_budget = [node_limit]
-
-                found = self._backtrack_window(vars_list, deadline, node_budget)
-                if not found:
-                    self._restore_from_backup(days, backup)
-                    self._debug_print(
-                        f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} search_failed"
-                    )
-                    continue
-
-                new_tuple = self._spread_components()
-                sub2 = self.state.schedule.loc[days, ["main", "backup"]]
-                mapper2 = getattr(sub2, "map", None)
-                new_mask = mapper2(is_empty) if callable(mapper2) else sub2.applymap(is_empty)
-                new_gaps = int(new_mask.to_numpy().sum())
-                self._debug_print(
-                    f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} after gaps={new_gaps} spread={new_tuple}"
-                )
-
-                if (self._lexi_better(new_tuple, base_tuple)) and (new_gaps <= base_gaps):
-                    schedule_changed = True
-                    # Counts already maintained by _inc_assign/_dec_assign in backtracking
-                    self._debug_print(
-                        f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} accepted"
-                    )
-                    if (
-                        target_spread is not None
-                        and new_tuple[0] <= target_spread[0]
-                        and new_tuple[1] <= target_spread[1]
-                    ):
-                        self._debug_print(
-                            f"[ScheduleVariant] [WindowRefill] pass={pass_idx} target met"
-                        )
-                        target_hit = True
-                        break
-                else:
-                    self._restore_from_backup(days, backup)
-                    self._debug_print(
-                        f"[ScheduleVariant] [WindowRefill] pass={pass_idx} window={window_label} rejected"
-                    )
-
-            comparison = tracker.evaluate_and_commit(
-                phase_name=f"[WindowRefill] Pass {pass_idx}",
-                allow_neutral=False,
-            )
-            if comparison == Comparison.BETTER:
-                improved = True
-
-            if target_hit:
-                tracker.restore_global_best()
-                return True
-
-            if comparison == Comparison.WORSE and not schedule_changed:
-                self._debug_print(
-                    f"[ScheduleVariant] [WindowRefill] pass={pass_idx} no-change"
-                )
-                break
-            if good_enough():
-                self._debug_print(
-                    f"[ScheduleVariant] [WindowRefill] pass={pass_idx} target met"
-                )
-                tracker.restore_global_best()
-                return True
-
-        tracker.restore_global_best()
-        final_quality = tracker.get_global_best_quality()
-
-        if final_quality and initial_quality:
-            improved = final_quality.is_better_than(initial_quality) or improved
-
-        print(
-            f"[WindowRefill] Final: {initial_quality} -> {final_quality} "
-            f"(improved={bool(improved)})"
+        return self.window_optimizer.iterative_window_refill_rebalance(
+            window_weeks=window_weeks,
+            max_passes=max_passes,
+            time_limit_ms=time_limit_ms,
+            node_limit=node_limit,
+            target_spread=target_spread,
+            tracker=tracker,
         )
-
-        return bool(improved)
-
-    
-    import random
 
     def _get_all_weekdays(self) -> list[pd.Timestamp]:
         """All Mon–Thu dates in the schedule period (non-weekend)."""
@@ -4610,161 +4171,14 @@ class ScheduleVariant:
         role_order "MB" → assign MAIN then BACKUP for each day; "BM" → BACKUP then MAIN.
         Skips pre-scheduled cells that already have fixed nurses.
         """
-        vars_list: list[tuple[pd.Timestamp, str]] = []
-        for d in days:
-            if role_order == "MB":
-                order = ("main", "backup")
-            else:
-                order = ("backup", "main")
-            for role in order:
-                if not self._is_pre_scheduled(d, role):
-                    val = self.state.schedule.at[d, role]
-                    if is_empty(val):
-                        vars_list.append((d, role))
-        return vars_list
+        return self.order_generator.build_full_varlist(days, role_order=role_order)
     
     def _gen_full_orders(
         self,
         days: list[pd.Timestamp],
         max_orders: int = 50,
     ) -> list[list[tuple[pd.Timestamp, str]]]:
-        """
-        Generate many different variable orders deterministically to explore
-        the assignment space without exploding permutations. Includes:
-          - chronological and reverse, MB and BM
-          - day-of-week blocks
-          - contiguous week blocks
-          - alternating weeks (odd first then even)
-          - middle-out and spiral orders
-          - static MRV (by initial domain size)
-          - many deterministic pseudo-random shuffles
-          - per-day mixed role priority sequences
-        """
-        import random
-    
-        def week_key(d: pd.Timestamp) -> pd.Timestamp:
-            return d - pd.Timedelta(days=d.weekday())  # Monday start
-    
-        orders: list[list[tuple[pd.Timestamp, str]]] = []
-        chrono = sorted(days)
-    
-        # 1) chronological MB/BM
-        orders.append(self._build_full_varlist(chrono, "MB"))
-        orders.append(self._build_full_varlist(chrono, "BM"))
-    
-        # 2) reversed MB/BM
-        rev = list(reversed(chrono))
-        orders.append(self._build_full_varlist(rev, "MB"))
-        orders.append(self._build_full_varlist(rev, "BM"))
-    
-        # 3) day-of-week blocks (Mon..Thu), both role priorities
-        dow_blocks: list[pd.Timestamp] = []
-        for dow in (0, 1, 2, 3):
-            dow_blocks.extend([d for d in chrono if d.weekday() == dow])
-        orders.append(self._build_full_varlist(dow_blocks, "MB"))
-        orders.append(self._build_full_varlist(dow_blocks, "BM"))
-    
-        # 4) contiguous week blocks (all Mon-Thu of week1, then week2, ...)
-        by_week: dict[pd.Timestamp, list[pd.Timestamp]] = {}
-        for d in chrono:
-            by_week.setdefault(week_key(d), []).append(d)
-        week_blocks: list[pd.Timestamp] = []
-        for wk in sorted(by_week):
-            week_blocks.extend(sorted(by_week[wk]))
-        orders.append(self._build_full_varlist(week_blocks, "MB"))
-        orders.append(self._build_full_varlist(week_blocks, "BM"))
-    
-        # 5) alternating weeks: odd-indexed weeks first, then even (or vice versa)
-        weeks_sorted = [sorted(by_week[wk]) for wk in sorted(by_week)]
-        alt_seq: list[pd.Timestamp] = []
-        # odd indices (0-based): 0,2,4,... then 1,3,5,...
-        odds = [weeks_sorted[i] for i in range(0, len(weeks_sorted), 2)]
-        evens = [weeks_sorted[i] for i in range(1, len(weeks_sorted), 2)]
-        for grp in odds + evens:
-            alt_seq.extend(grp)
-        orders.append(self._build_full_varlist(alt_seq, "BM"))
-    
-        # 6) middle-out (start in the middle day and expand outward)
-        mid_idx = len(chrono) // 2
-        middle_out: list[pd.Timestamp] = []
-        L, R = mid_idx - 1, mid_idx
-        # If even-length, R starts at mid; for odd, R==L+1; both ok
-        while L >= 0 or R < len(chrono):
-            if R < len(chrono):
-                middle_out.append(chrono[R])
-                R += 1
-            if L >= 0:
-                middle_out.append(chrono[L])
-                L -= 1
-        orders.append(self._build_full_varlist(middle_out, "MB"))
-        orders.append(self._build_full_varlist(middle_out, "BM"))
-    
-        # 7) spiral (outside-in: first, last, second, second-last, ...)
-        spiral: list[pd.Timestamp] = []
-        i, j = 0, len(chrono) - 1
-        while i <= j:
-            if i <= j:
-                spiral.append(chrono[i]); i += 1
-            if i <= j:
-                spiral.append(rono := chrono[j]); j -= 1
-        orders.append(self._build_full_varlist(spiral, "BM"))
-    
-        # 8) static MRV on initial domains (smallest domain first)
-        def domain_size(d, r):
-            dom = self._eligible_domain(d, r)
-            return len(dom) if dom else 0
-        mrvl: list[tuple[pd.Timestamp, str]] = []
-        for d in chrono:
-            for r in ("main", "backup"):
-                if not self._is_pre_scheduled(d, r) and is_empty(self.state.schedule.at[d, r]):
-                    mrvl.append((d, r))
-        mrvl.sort(key=lambda v: domain_size(v[0], v[1]))
-        orders.append(mrvl)
-    
-        # 9) deterministic pseudo-random shuffles with role variety
-        base_vars_MB = self._build_full_varlist(chrono, "MB")
-        base_vars_BM = self._build_full_varlist(chrono, "BM")
-    
-        # per-day mixed role priority: alternate by day index
-        mixed_vars: list[tuple[pd.Timestamp, str]] = []
-        for i, d in enumerate(chrono):
-            if (
-                not self._is_pre_scheduled(d, "main")
-                and is_empty(self.state.schedule.at[d, "main"])
-                and not self._is_pre_scheduled(d, "backup")
-                and is_empty(self.state.schedule.at[d, "backup"])
-            ):
-                if i % 2 == 0:
-                    mixed_vars.extend([(d, "backup"), (d, "main")])
-                else:
-                    mixed_vars.extend([(d, "main"), (d, "backup")])
-        if mixed_vars:
-            orders.append(mixed_vars)
-    
-        seeds = [7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
-                 42, 55, 66, 77, 88, 99, 123, 222, 321, 999]
-        # expand until max_orders
-        for seed in seeds:
-            if len(orders) >= max_orders:
-                break
-            rnd_MB = list(base_vars_MB)
-            rnd_BM = list(base_vars_BM)
-            random.Random(seed).shuffle(rnd_MB)
-            random.Random(seed * 3 + 1).shuffle(rnd_BM)
-            orders.append(rnd_MB)
-            if len(orders) < max_orders:
-                orders.append(rnd_BM)
-    
-        # De-duplicate sequences
-        seen = set()
-        uniq_orders: list[list[tuple[pd.Timestamp, str]]] = []
-        for seq in orders[:max_orders]:
-            key = tuple(seq)
-            if key not in seen:
-                seen.add(key)
-                uniq_orders.append(seq)
-    
-        return uniq_orders
+        return self.order_generator.gen_full_orders(days, max_orders=max_orders)
     
     def _backtrack_full_order(
         self,
@@ -4837,139 +4251,14 @@ class ScheduleVariant:
         required_spread: bool = True,
         tracker: Optional[BestStateTracker] = None,
     ) -> bool:
-        """
-        Full-period weekday removal + reassignment using multiple variable orders.
-        Acceptance:
-          - If required_spread: accept only if spreads <= target_spread AND gaps do not increase.
-          - Else: accept any lexicographic spread improvement provided gaps do not increase.
-        """
-        created_tracker = tracker is None
-        if created_tracker:
-            tracker = BestStateTracker(self)
-            initial_quality = tracker.initialize()
-        else:
-            initial_quality = tracker.get_global_best_quality()
-
-        # Early success check
-        s_b, s_m, _ = self._spread_components()
-        if s_b <= target_spread[0] and s_m <= target_spread[1]:
-            if tracker:
-                tracker.restore_global_best()
-            return True
-
-        days = self._get_all_weekdays()
-        if not days:
-            return False
-
-        baseline_quality = tracker.begin_iteration("[FullRefill]")
-        if initial_quality is None:
-            initial_quality = baseline_quality
-
-        backup = self.backup_week_assignments(days)
-        base_tuple = self._spread_components()
-
-        sub = self.state.schedule.loc[days, ["main", "backup"]]
-        mapper = getattr(sub, "map", None)
-        base_mask = mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
-        base_gaps  = int(base_mask.to_numpy().sum())
-        self._debug_print(
-            f"[ScheduleVariant] [FullRefill] start gaps={base_gaps} spread={base_tuple}"
+        return self.window_optimizer.iterative_full_period_refill(
+            max_orders=max_orders,
+            per_attempt_time_ms=per_attempt_time_ms,
+            per_attempt_nodes=per_attempt_nodes,
+            target_spread=target_spread,
+            required_spread=required_spread,
+            tracker=tracker,
         )
-
-        # Clear all non-pre-scheduled weekday cells
-        self._clear_window_assignments(days)
-
-        orders = self._gen_full_orders(days, max_orders=max_orders)
-
-        improved = False
-        best_rows = None
-        best_tuple = base_tuple
-        success_rows = None
-
-        for attempt_idx, order in enumerate(orders, start=1):
-            deadline = time.perf_counter() + (per_attempt_time_ms / 1000.0)
-            node_budget = [per_attempt_nodes]
-
-            # Clear before each attempt (in case previous attempt assigned something)
-            self._clear_window_assignments(days)
-
-            found = self._backtrack_full_order(order, deadline, node_budget)
-            if not found:
-                if attempt_idx == 1 or attempt_idx % 10 == 0:
-                    self._debug_print(
-                        f"[ScheduleVariant] [FullRefill] attempt={attempt_idx} search_failed"
-                    )
-                continue
-
-            new_tuple = self._spread_components()
-
-            sub2 = self.state.schedule.loc[days, ["main", "backup"]]
-            mapper2 = getattr(sub2, "map", None)
-            new_mask = mapper2(is_empty) if callable(mapper2) else sub2.applymap(is_empty)
-            new_gaps  = int(new_mask.to_numpy().sum())
-            self._debug_print(
-                f"[ScheduleVariant] [FullRefill] attempt={attempt_idx} gaps={new_gaps} spread={new_tuple}"
-            )
-
-            # Immediate success if target met and no gap increase
-            if (new_tuple[0] <= target_spread[0] and new_tuple[1] <= target_spread[1] and
-                new_gaps <= base_gaps):
-                success_rows = self.state.schedule.loc[days, ['main', 'backup']].copy()
-                best_tuple = new_tuple
-                improved = True
-                self._debug_print(
-                    f"[ScheduleVariant] [FullRefill] attempt={attempt_idx} target met"
-                )
-                break
-
-            # Track best lexicographic improvement if allowed to accept later; do not increase gaps
-            if self._lexi_better(new_tuple, best_tuple) and new_gaps <= base_gaps:
-                best_tuple = new_tuple
-                best_rows  = self.state.schedule.loc[days, ['main', 'backup']].copy()
-                improved   = True
-                self._debug_print(
-                    f"[ScheduleVariant] [FullRefill] attempt={attempt_idx} improved {base_tuple}->{new_tuple}"
-                )
-
-        if success_rows is not None:
-            self.state.schedule.loc[days, ['main', 'backup']] = success_rows
-            self._recalculate_assignment_counts()
-            self._update_last_assignment_dates()
-        elif not required_spread and improved and best_rows is not None:
-            self.state.schedule.loc[days, ['main', 'backup']] = best_rows
-            self._recalculate_assignment_counts()
-            self._update_last_assignment_dates()
-        else:
-            self._restore_from_backup(days, backup)
-            if required_spread:
-                self._debug_print(
-                    "[ScheduleVariant] [FullRefill] restore (no target solution)"
-                )
-            elif not improved:
-                self._debug_print(
-                    "[ScheduleVariant] [FullRefill] no improvement"
-                )
-
-        comparison = tracker.evaluate_and_commit(
-            phase_name="[FullRefill]",
-            allow_neutral=False,
-        )
-
-        if comparison == Comparison.BETTER:
-            improved = True
-
-        tracker.restore_global_best()
-        final_quality = tracker.get_global_best_quality()
-
-        if final_quality and initial_quality:
-            improved = final_quality.is_better_than(initial_quality) or improved
-
-        print(
-            f"[FullRefill] Final: {initial_quality} -> {final_quality} "
-            f"(improved={bool(improved)})"
-        )
-
-        return bool(improved)
     
     def _rebalance_all_weeks(self) -> bool:
         """Rebalance all Monday-Thursday weeks."""

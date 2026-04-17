@@ -3,4 +3,79 @@
 During migration, import backend symbols from ``scheduler`` directly.
 """
 
-from scheduler import *  # noqa: F401,F403
+from warnings import warn as _warn
+
+from scheduler import (
+    ASSIGNMENT_DEBUG_LOGGER,
+    AssignmentDebugLogger,
+    AssignmentHistory,
+    DatabaseMixin,
+    MetricsCollector,
+    NurseManager,
+    NurseScheduler,
+    NurseSchedulerUI,
+    PerformanceProfiler,
+    PerformanceReport,
+    PhaseMetrics,
+    PreScheduler,
+    ScheduleQuality,
+    SchedulerConfig,
+    ScheduleState,
+    ScheduleVariant,
+    SharedSettings,
+    VisualCalendarUI,
+    WeekendHistory,
+    WeekendPattern,
+    WorkerMetrics,
+    _accept,
+    _dbg_pairs,
+    _dbg_variants,
+    _evaluate_variant_worker,
+    _evaluate_variant_worker_profiled,
+    _open_dbg,
+    _pair,
+    _reject,
+    build_scheduler_config_from_settings,
+    build_scheduler_from_settings,
+)
+
+_warn(
+    "NCSSQL55 is deprecated and will be removed in a future release. "
+    "Import from scheduler instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+__all__ = [
+    "AssignmentDebugLogger",
+    "ASSIGNMENT_DEBUG_LOGGER",
+    "AssignmentHistory",
+    "DatabaseMixin",
+    "MetricsCollector",
+    "NurseManager",
+    "NurseScheduler",
+    "NurseSchedulerUI",
+    "PerformanceProfiler",
+    "PerformanceReport",
+    "PhaseMetrics",
+    "PreScheduler",
+    "ScheduleQuality",
+    "SchedulerConfig",
+    "ScheduleState",
+    "ScheduleVariant",
+    "SharedSettings",
+    "VisualCalendarUI",
+    "WeekendHistory",
+    "WeekendPattern",
+    "WorkerMetrics",
+    "_accept",
+    "_dbg_pairs",
+    "_dbg_variants",
+    "_evaluate_variant_worker",
+    "_evaluate_variant_worker_profiled",
+    "_open_dbg",
+    "_pair",
+    "_reject",
+    "build_scheduler_config_from_settings",
+    "build_scheduler_from_settings",
+]

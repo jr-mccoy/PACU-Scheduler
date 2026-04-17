@@ -35,8 +35,8 @@ from PySide6.QtGui     import QDesktopServices
 from typing import Optional, Callable, Any
 from PySide6.QtCore import Slot
 # ----------------------- Custom Backend Imports -----------------------
-import NCSSQL55 as backend_mod
-from NCSSQL55 import (
+import scheduler.legacy_core as backend_mod
+from scheduler import (
     NurseManager, PreScheduler, AssignmentHistory, NurseScheduler,
     WeekendHistory, _evaluate_variant_worker, SchedulerConfig, WeekendPattern,
     NurseSchedulerUI
@@ -113,7 +113,7 @@ def _normalize_bool(value: Any, *, default: bool = False) -> bool:
 
 def apply_backend_debug_preferences(settings: Any) -> None:
     """
-    Configure NCSSQL55's debug helpers based on persisted settings.
+    Configure scheduler backend debug helpers based on persisted settings.
 
     * ``debug_variant_logging`` controls NSCHED_DEBUG (pairs/variants/all/off)
     * ``assignment_debug_enabled`` toggles the structured AssignmentDebugLogger
@@ -4482,7 +4482,7 @@ class ScheduleProgressWorker(QThread):
             wh = WeekendHistory(DB_NAME)
             ps = PreScheduler(DB_NAME)
 
-            from NCSSQL55 import build_scheduler_from_settings
+            from scheduler import build_scheduler_from_settings
             sched = build_scheduler_from_settings(self._start, self._end, nm, wh, ps, self.settings)
 
             sched.set_allow_rotation_violations(self.allow_rotation_violations)
@@ -5086,7 +5086,7 @@ class App(QMainWindow):
             # NurseSchedulerUI instance kept in self.backend
             # It created self.settings = SharedSettings() at init time.
             # Replace it with a fresh snapshot.
-            from NCSSQL55 import SharedSettings
+            from scheduler import SharedSettings
             self.backend.settings = SharedSettings()
         except Exception:
             pass

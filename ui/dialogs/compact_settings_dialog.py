@@ -1,5 +1,5 @@
 """Compact settings dialog."""
 
-from ..legacy import CompactSettingsDialog
+from .compact_settings_dialog_widget import CompactSettingsDialog
 
 __all__ = ["CompactSettingsDialog"]

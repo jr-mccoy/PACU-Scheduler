@@ -1,5 +1,5 @@
 """Weekend history calendar screen."""
 
-from ..legacy import WeekendHistoryCalendarScreen
+from .weekend_history_calendar_screen import WeekendHistoryCalendarScreen
 
 __all__ = ["WeekendHistoryCalendarScreen"]

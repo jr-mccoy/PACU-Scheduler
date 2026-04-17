@@ -1,5 +1,5 @@
 """Variant review dialog."""
 
-from ..legacy import VariantReviewDialog
+from .variant_review_dialog_widget import VariantReviewDialog
 
 __all__ = ["VariantReviewDialog"]

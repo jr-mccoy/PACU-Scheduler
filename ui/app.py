@@ -1,5 +1,5 @@
 """Application shell and navigation wiring."""
 
-from .legacy import App
+from .app_shell import App
 
 __all__ = ["App"]

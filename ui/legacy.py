@@ -5170,6 +5170,53 @@ class App(QMainWindow):
             if page and hasattr(page, "apply_theme_update"):
                 page.apply_theme_update()
                              
+
+# Re-export refactored presenter/service functions for backward compatibility.
+from .presenters.variant_review_presenter import (
+    _build_html_for_top_variants as _presenter_build_html_for_top_variants,
+    _prepare_variant_debug_payload as _presenter_prepare_variant_debug_payload,
+)
+from .services.variant_export import (
+    _save_outputs_for_variants as _service_save_outputs_for_variants,
+    export_top_variants_pdfs as _service_export_top_variants_pdfs,
+    export_variants_calendar_html as _service_export_variants_calendar_html,
+)
+
+
+def _build_html_for_top_variants(variants, max_variants=5):
+    return _presenter_build_html_for_top_variants(variants, max_variants=max_variants)
+
+
+def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_history, start_date, history_window=4):
+    return _presenter_prepare_variant_debug_payload(
+        candidate_schedules,
+        scheduler,
+        weekend_history,
+        start_date,
+        history_window=history_window,
+    )
+
+
+def _save_outputs_for_variants(variants, scheduler, *, top_n=5) -> str:
+    return _service_save_outputs_for_variants(
+        variants,
+        scheduler,
+        top_n=top_n,
+        debug_save_variants=DEBUG_SAVE_VARIANTS,
+    )
+
+
+def export_variants_calendar_html(variants, max_variants=5, filename_prefix="schedule_variants"):
+    return _service_export_variants_calendar_html(
+        variants,
+        max_variants=max_variants,
+        filename_prefix=filename_prefix,
+    )
+
+
+def export_top_variants_pdfs(variants, scheduler, out_prefix="schedule_variant"):
+    return _service_export_top_variants_pdfs(variants, scheduler, out_prefix=out_prefix)
+
 # ──────────────────────────────────────────────────────────────────────
 #  Entry-point
 # ──────────────────────────────────────────────────────────────────────

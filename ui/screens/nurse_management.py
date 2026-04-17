@@ -1,5 +1,5 @@
 """Nurse management screen."""
 
-from ..legacy import NurseManagementScreen
+from .nurse_management_screen import NurseManagementScreen
 
 __all__ = ["NurseManagementScreen"]

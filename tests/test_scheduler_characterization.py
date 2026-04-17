@@ -174,25 +174,26 @@ def _assert_weekend_history_consistent(history: WeekendHistory, db_path: Path):
 
 def test_weekend_history_integrity_operations(temp_weekend_db: Path):
     history = WeekendHistory(str(temp_weekend_db))
+    service = history.weekend_service
 
     d1 = pd.Timestamp("2026-01-02")
     d2 = pd.Timestamp("2026-01-09")
 
-    history.add_assignment(d1, "Alice", "Bob")
+    service.add_assignment(d1, "Alice", "Bob")
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
-    history.add_assignment(d2, "Alice", "Bob")
+    service.add_assignment(d2, "Alice", "Bob")
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
     backup = history.backup()
 
-    history.modify_assignment(d2, "Bob", "Alice")
+    service.modify_assignment(d2, "Bob", "Alice")
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
-    history.remove_assignment(d1)
+    service.remove_assignment(d1)
     _assert_weekend_history_consistent(history, temp_weekend_db)
 
-    history.restore(backup)
+    service.restore_assignments(backup)
     assert history.get_assignments() == backup
     assert history.get_last_pattern("Alice") == WeekendPattern.FSF
     assert history.get_last_pattern("Bob") == WeekendPattern.SFS
@@ -203,6 +204,22 @@ def test_weekend_history_integrity_operations(temp_weekend_db: Path):
         ("Bob", "2026-01-09", "SFS", "SFS"),
     ]
     _assert_weekend_history_consistent(history, temp_weekend_db)
+
+
+def test_violation_manual_override_persists_until_explicit_rebuild(temp_weekend_db: Path):
+    history = WeekendHistory(str(temp_weekend_db))
+    weekend_service = history.weekend_service
+    violation_service = history.violation_service
+
+    weekend_service.add_assignment(pd.Timestamp("2026-01-02"), "Alice", "Bob")
+    weekend_service.add_assignment(pd.Timestamp("2026-01-09"), "Alice", "Bob")
+    assert history.get_violation_counts()["Alice"] == 1
+
+    history.set_violation_count("Alice", 7)
+    assert history.get_violation_counts()["Alice"] == 7
+
+    violation_service.rebuild()
+    assert history.get_violation_counts()["Alice"] == 1
 
 
 def _build_variant(nurses=("Alice", "Bob")) -> ScheduleVariant:

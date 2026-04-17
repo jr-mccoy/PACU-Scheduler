@@ -354,13 +354,17 @@ def _runtime_base_dir() -> str:
 class RebuildViolationWorker(QThread):
     finished = Signal(bool, str)  # (success, message)
 
-    def __init__(self, weekend_history):
+    def __init__(self, weekend_history, violation_service=None):
         super().__init__()
         self.weekend_history = weekend_history
+        self.violation_service = violation_service or getattr(weekend_history, "violation_service", None)
 
     def run(self):
         try:
-            self.weekend_history._recalculate_violation_counts()
+            if self.violation_service is not None:
+                self.violation_service.rebuild()
+            else:
+                self.weekend_history._recalculate_violation_counts()
             self.finished.emit(True, "Violation history rebuilt.")
         except Exception as e:
             self.finished.emit(False, f"Error: {e}")

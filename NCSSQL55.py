@@ -1,4 +1,4 @@
-"""Temporary compatibility shim for legacy ``NCSSQL57`` imports.
+"""Temporary compatibility shim for legacy ``NCSSQL55`` imports.
 
 During migration, import backend symbols from ``scheduler`` directly.
 """

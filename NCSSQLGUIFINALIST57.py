@@ -4,9 +4,30 @@ from ui import *  # noqa: F401,F403
 from ui import App, UiStyle
 
 
+def _verify_backend_imports() -> None:
+    """Fail fast if the stable scheduler backend API is incomplete."""
+    from scheduler import (
+        NurseScheduler,
+        SchedulerConfig,
+        SharedSettings,
+        build_scheduler_from_settings,
+    )
+
+    expected = [
+        NurseScheduler,
+        SchedulerConfig,
+        SharedSettings,
+        build_scheduler_from_settings,
+    ]
+    if not all(expected):  # pragma: no cover - import smoke guard
+        raise RuntimeError("scheduler backend public API import smoke test failed")
+
+
 if __name__ == "__main__":
     import sys
     from PySide6.QtWidgets import QApplication
+
+    _verify_backend_imports()
 
     app = QApplication(sys.argv)
     UiStyle.apply(app)

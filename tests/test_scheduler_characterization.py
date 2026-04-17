@@ -563,3 +563,59 @@ def test_module_log_reuses_cached_file_per_kind(tmp_path: Path, monkeypatch: pyt
     log_files = list(tmp_path.glob("assignments_dump_*.log"))
     assert len(log_files) == 1
     assert scheduler_module._LOG_FILE_CACHE["assignments"] == log_files[0].name
+
+
+def test_window_refill_target_hit_short_circuits_before_search(monkeypatch: pytest.MonkeyPatch):
+    variant = _build_variant()
+    tracker = BestStateTracker(variant)
+    tracker.initialize()
+
+    monkeypatch.setattr(variant, "_collect_weekday_windows", lambda window_weeks=3: [[variant.state.schedule.index[0]]])
+
+    def fail_backtrack(*_args, **_kwargs):
+        raise AssertionError("backtrack should not run when target already met")
+
+    monkeypatch.setattr(variant.window_optimizer, "backtrack_window", fail_backtrack)
+    assert variant.iterative_window_refill_rebalance(target_spread=(1, 1), tracker=tracker) is True
+
+
+def test_window_refill_restores_global_best_after_mutation(monkeypatch: pytest.MonkeyPatch):
+    variant = _build_variant()
+    first_day = variant.state.schedule.index[0]
+    second_day = variant.state.schedule.index[1]
+    variant.state.schedule.at[first_day, "main"] = "Alice"
+    variant._recalculate_assignment_counts()
+    variant._update_last_assignment_dates()
+
+    baseline = variant.state.schedule.copy(deep=True)
+
+    monkeypatch.setattr(variant, "_collect_weekday_windows", lambda window_weeks=3: [[second_day]])
+
+    def mutate_backtrack(vars_list, *_args, **_kwargs):
+        day, role = vars_list[0]
+        variant.state.schedule.at[day, role] = "Bob"
+        return True
+
+    monkeypatch.setattr(variant.window_optimizer, "backtrack_window", mutate_backtrack)
+    monkeypatch.setattr(variant, "_lexi_better", lambda _new, _base: False)
+
+    variant.iterative_window_refill_rebalance(max_passes=1, target_spread=(0, 0))
+    pd.testing.assert_frame_equal(variant.state.schedule, baseline)
+
+
+def test_domain_builder_boundary_preserves_strict_vs_relaxed_modes(monkeypatch: pytest.MonkeyPatch):
+    variant = _build_variant()
+    calls = []
+
+    def capture(day, role, diagnostics=None, *, force_relaxed=False, gap_mode=False):
+        calls.append((day, role, force_relaxed, gap_mode))
+        return []
+
+    monkeypatch.setattr(variant.domain_builder, "eligible_domain", capture)
+    day = variant.state.schedule.index[0]
+
+    variant._eligible_domain(day, "main", force_relaxed=False)
+    variant._eligible_domain_gap(day, "backup", force_relaxed=True)
+
+    assert calls[0] == (day, "main", False, False)
+    assert calls[1] == (day, "backup", True, True)

@@ -10,3 +10,12 @@ The scheduler currently applies the following intentional policies:
 - **Conflict handling for pre-scheduled weekends is hard-blocking.** Candidate FSF/SFS pairs are rejected when they contradict any non-empty prefilled Friday/Saturday/Sunday cell.
 
 These policies are intentionally conservative to prioritize schedule consistency and operator control.
+
+## Legacy module migration map
+
+Legacy compatibility module names are deprecated. Migrate imports to stable
+package paths using the map below:
+
+- `NCSSQL55` -> `scheduler`
+- `NCSSQL57` -> `scheduler`
+- `NCSSQLGUIFINALIST57` -> `ui` (for `App`, `UiStyle`)

@@ -1,7 +1,17 @@
 """Compatibility layer for legacy imports during GUI package transition."""
 
-from ui import *  # noqa: F401,F403
+from warnings import warn as _warn
+
 from ui import App, UiStyle
+
+_warn(
+    "NCSSQLGUIFINALIST57 is deprecated and will be removed in a future release. "
+    "Import from ui instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+__all__ = ["App", "UiStyle"]
 
 
 def _verify_backend_imports() -> None:

@@ -1,5 +1,5 @@
 """Full settings dialog."""
 
-from ..legacy import SettingsDialog
+from .settings_dialog_widget import SettingsDialog
 
 __all__ = ["SettingsDialog"]

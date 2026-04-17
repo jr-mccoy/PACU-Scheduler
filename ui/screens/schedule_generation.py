@@ -1,5 +1,5 @@
 """Schedule generation screen."""
 
-from ..legacy import ScheduleGenerationScreen
+from .schedule_generation_screen import ScheduleGenerationScreen
 
 __all__ = ["ScheduleGenerationScreen"]

@@ -41,6 +41,7 @@ from NCSSQL55 import (
     WeekendHistory, _evaluate_variant_worker, SchedulerConfig, WeekendPattern,
     NurseSchedulerUI
 )
+from .theme import shade_color
 
 # ------------------------------ Constants -----------------------------
 DB_NAME = "nurse_schedule.db"
@@ -303,6 +304,7 @@ class ToolDialog(QWidget):
     @staticmethod
     def _fix_selection_contrast(w: QWidget, accent: str) -> None:
         """Force text to stay readable when accenting selection background."""
+        accent = shade_color(accent, 1.0)
         pal = w.palette()
         pal.setColor(QPalette.Highlight, QColor(accent))
         pal.setColor(QPalette.HighlightedText, Qt.white)
@@ -1447,13 +1449,8 @@ def themed_icon(basename: str, theme: str) -> QIcon:
     return QIcon(themed_file(basename, theme))
 
 def _shade(hex_rgb: str, k: float) -> str:
-    """Darken (k<1) or lighten (k>1) a #RRGGBB colour."""
-    if not hex_rgb.startswith('#') or len(hex_rgb) != 7:
-        return hex_rgb
-    r = max(0, min(255, int(int(hex_rgb[1:3], 16) * k)))
-    g = max(0, min(255, int(int(hex_rgb[3:5], 16) * k)))
-    b = max(0, min(255, int(int(hex_rgb[5:7], 16) * k)))
-    return f'#{r:02X}{g:02X}{b:02X}'
+    """Deprecated wrapper; use ``ui.theme.shade_color``."""
+    return shade_color(hex_rgb, k)
 
 
 class ConfirmOverlay(QWidget):
@@ -1542,6 +1539,9 @@ def _apply_header(cal: QCalendarWidget, *, accent="#5C8DBC",
     Style the built-in header strip using the supplied accent.
     Keeps week-numbers hidden and Sunday/Saturday red.
     """
+    accent = shade_color(accent, 1.0)
+    fg_white = shade_color(fg_white, 1.0)
+    sat_sun = shade_color(sat_sun, 1.0)
     view: QTableView | None = cal.findChild(QTableView)
     if view:
         hh: QHeaderView = view.horizontalHeader()
@@ -2448,11 +2448,8 @@ class UiStyle:
     # ────────── colour helpers ──────────
     @staticmethod
     def _shade(hex_rgb: str, k: float) -> str:
-        """Return `hex_rgb` darkened (k<1) or lightened (k>1) by factor k."""
-        r = int(int(hex_rgb[1:3], 16) * k)
-        g = int(int(hex_rgb[3:5], 16) * k)
-        b = int(int(hex_rgb[5:7], 16) * k)
-        return f'#{r:02X}{g:02X}{b:02X}'
+        """Deprecated wrapper; use ``ui.theme.shade_color``."""
+        return shade_color(hex_rgb, k)
 
     # ────────── QSS blocks (shared) ──────────
     _SCROLLBAR_QSS = r"""
@@ -2696,8 +2693,8 @@ class UiStyle:
     def apply(app: QApplication, theme="dark", accent_color="#5C8DBC") -> None:
         """Apply palette + QSS to *app* (now supports enhanced dark/light themes)."""
         accent       = accent_color
-        accent_dark  = UiStyle._shade(accent, 0.85)
-        accent_drkst = UiStyle._shade(accent, 0.7)
+        accent_dark  = shade_color(accent, 0.85)
+        accent_drkst = shade_color(accent, 0.7)
 
         pal = QPalette()
         if theme == "light":
@@ -2722,7 +2719,7 @@ class UiStyle:
             pal.setColor(QPalette.Highlight, QColor("#FF85A1"))   # rose
             pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
             # use rose family for accent overrides
-            accent = "#FF85A1"; accent_dark = UiStyle._shade(accent, 0.85); accent_drkst = UiStyle._shade(accent, 0.7)
+            accent = "#FF85A1"; accent_dark = shade_color(accent, 0.85); accent_drkst = shade_color(accent, 0.7)
             qss_core = UiStyle._CORE_PINK_QSS
         else:   # dark (enhanced blue-gray theme)
             pal.setColor(QPalette.Window, QColor("#1A1D23"))
@@ -2849,6 +2846,9 @@ def _apply_pink_header(cal: QCalendarWidget, *, accent="#FF4F79",
     Style the built-in QCalendarWidget: pink/blue header, no week numbers.
     Safe to call multiple times.
     """
+    accent = shade_color(accent, 1.0)
+    fg_white = shade_color(fg_white, 1.0)
+    sat_sun = shade_color(sat_sun, 1.0)
     view: QTableView | None = cal.findChild(QTableView)
     if view:
         # horizontal header (days of week)
@@ -4195,16 +4195,6 @@ class AssignmentHistoryScreen(QWidget):
         self.refresh()
         
         
-# small helper (already exists elsewhere in your code)
-def _shade(rgb: str, k: float) -> str:
-    if not (rgb.startswith('#') and len(rgb) == 7):
-        return rgb
-    r = max(0, min(255, int(int(rgb[1:3], 16) * k)))
-    g = max(0, min(255, int(int(rgb[3:5], 16) * k)))
-    b = max(0, min(255, int(int(rgb[5:7], 16) * k)))
-    return f'#{r:02X}{g:02X}{b:02X}'
-
-
 class ViewAllUnavailableScreen(QWidget):
 
     _SPAN_RE = re.compile(r'color:\s*#[0-9A-Fa-f]{6}')
@@ -4263,12 +4253,12 @@ class ViewAllUnavailableScreen(QWidget):
         accent = self.parent.settings.get("accent_color")
 
         if theme == "dark":
-            bg, edge = "#2D3238", _shade("#2D3238", 1.15)
-            act_bg, act_edge = accent, _shade(accent, .80)
+            bg, edge = "#2D3238", shade_color("#2D3238", 1.15)
+            act_bg, act_edge = accent, shade_color(accent, .80)
             month_idle, month_sel = accent, "#FFFFFF"
         elif theme == "light":
             bg, edge = "#FFFFFF", "#E1DDD6"
-            act_bg, act_edge = accent, _shade(accent, .80)
+            act_bg, act_edge = accent, shade_color(accent, .80)
             month_idle, month_sel = accent, "#FFFFFF"
         else:                           # pink
             bg, edge = "#FFE6E6", "#F4C2C2"
@@ -5005,6 +4995,7 @@ class WeekendHistoryCalendarScreen(QWidget):
 # ────────────────────────────────────────────────────────────────────
 # helper: guarantee high-contrast selections everywhere
 def _fix_selection_contrast(widget: QWidget, accent: str) -> None:
+    accent = shade_color(accent, 1.0)
     pal = widget.palette()
     pal.setColor(QPalette.Highlight, QColor(accent))
     pal.setColor(QPalette.HighlightedText, Qt.white)
@@ -5121,6 +5112,7 @@ class App(QMainWindow):
     
         # helper ensures white-on-accent wherever Qt falls back to palette
         def _fix_selection_contrast(w: QWidget, accent_hex: str) -> None:
+            accent_hex = shade_color(accent_hex, 1.0)
             pal = w.palette()
             pal.setColor(QPalette.Highlight,       QColor(accent_hex))
             pal.setColor(QPalette.HighlightedText, Qt.white)

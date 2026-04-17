@@ -893,3 +893,14 @@ If you only do three things first, do these:
 
 
 Those three remove the biggest sources of silent wrongness.
+
+---
+
+## Package migration checklist (facade → owned modules)
+
+- [x] `scheduler/domain.py`: owns `WeekendPattern` and `SchedulerConfig`; legacy-backed types remain temporarily imported.
+- [x] `scheduler/repositories.py`: owns `DatabaseMixin`; legacy-backed repository classes remain temporarily imported.
+- [x] `scheduler/engine.py`: owns worker tuning config (`WorkerTuningConfig`, `WORKER_TUNING`); engine entrypoints still temporarily imported from legacy.
+- [x] `ui/screens/*.py` named modules now own screen compatibility subclasses; `*_screen.py` files reduced to wrappers.
+- [x] `ui/dialogs/*.py` named modules now own dialog compatibility subclasses; `*_widget.py` files reduced to wrappers.
+- [ ] Follow-up: remove temporary legacy imports once direct implementations are extracted from `scheduler/legacy_core.py` and `ui/legacy.py`.

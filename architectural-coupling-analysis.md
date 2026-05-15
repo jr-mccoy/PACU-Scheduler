@@ -372,8 +372,8 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 | 1 | #1 — Facade boundary (`ui/legacy.py` → `scheduler` facade only) | ✅ | `claude/implement-phase-1-qa7d0` | Added `configure_pair_variant_debug` / `configure_assignment_debug_logger` to facade; UI now imports `scheduler` only |
 | 2a | #5 — Extract PDF rendering off `NurseScheduler` | ✅ | `claude/implement-phase-2-uwJ8E` | Moved `_export_variant_pdf`/`_draw_*` and the `reportlab` imports into `scheduler/exporters/pdf.py`; `NurseScheduler` methods are now thin delegations |
 | 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ✅ | `claude/implement-phase-2-uwJ8E` | Both workers now share `_evaluate_variant_core` with a profiling flag; `WorkerTuningConfig` drives both paths |
-| 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ⬜ | | Requires Phase 1 |
-| 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ⬜ | | Requires Phases 1, 3 |
+| 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ✅ | `claude/implement-phase-3-jb3pS` | New `scheduler/factory.py` exposes `BackendService`/`SchedulerService`/`build_scheduler_service`; `NurseSchedulerUI`, `CLIHelper`, `InputValidator`, `VisualCalendarUI`, and `main()` moved to the top-level `cli/` package; `App.__init__` now constructs the backend via the factory |
+| 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ⬜ | | Phases 1 & 3 are complete; ready to start |
 | 5 | #4 — Define `VariantSearchContext`; remove optimizer back-reference | ⬜ | | Requires Phases 1–4 |
 | 6 | #6 — Migrate screens/dialogs from `ui/legacy.py` into existing wrappers | ⬜ | | Incremental; can run alongside later phases |
 
@@ -400,13 +400,14 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 - [x] Verify scoring parity on a fixed-seed run (`tests/test_worker_parity.py` covers shared-core delegation, identical stats/nurse-counts/schedule between profiled and unprofiled paths, and timing-key population)
 
 #### Phase 3 — CLI separation
-- [ ] Inventory `App.backend.*` call sites in `ui/`
-- [ ] Define `BackendService` protocol
-- [ ] Add `SchedulerFactory` / `build_scheduler_service(db_path)`
-- [ ] Update `App.__init__` to use the factory
-- [ ] Move `NurseSchedulerUI` + `CLIHelper` to `cli/` (or delete)
-- [ ] Remove from `scheduler/__init__.py` `__all__`
-- [ ] `grep -R "input(" scheduler/` returns empty
+- [x] Inventory `App.backend.*` call sites in `ui/` (only `weekend_history`, `settings`, and `_handle_sync_assignment_history_with_weekend` were touched — see `ui/legacy.py:3040,3314,3467,3495,3497,3507,3520,3538,4169,4622,4966,5003,5068`)
+- [x] Define `BackendService` protocol (`scheduler/factory.py`)
+- [x] Add `SchedulerFactory` / `build_scheduler_service(db_path)` (`scheduler/factory.py:146`)
+- [x] Update `App.__init__` to use the factory (`ui/legacy.py:5003`); replaced CLI sync call with `SchedulerService.sync_assignment_history_with_weekend()` (`ui/legacy.py:4169,4966`)
+- [x] Move `NurseSchedulerUI` + `CLIHelper` (and `InputValidator`, `VisualCalendarUI`, `main()`) to `cli/nurse_scheduler_ui.py`; `python -m cli` boots the menu loop via `cli/__main__.py`
+- [x] Remove from `scheduler/__init__.py` `__all__` (kept a `__getattr__` deprecation shim so `scheduler.NurseSchedulerUI` still works with a `DeprecationWarning`); `scheduler/ui_legacy.py` re-exports from `cli` with deprecation; `NCSSQL55`/`NCSSQL57` updated to drop the CLI names and pick up `BackendService` / `SchedulerService` / `build_scheduler_service`
+- [x] `grep -R "input(" scheduler/` returns empty (only docstring mentions remain); guarded by `tests/test_cli_separation.py::test_scheduler_package_contains_no_input_calls`
+- [x] Regression: `tests/test_cli_separation.py` adds four invariants — no `input(` in `scheduler/`, no `NurseSchedulerUI` references under `ui/`, `SchedulerService` advertises the GUI's required surface, and `cli` owns the moved classes
 
 #### Phase 4 — `WeekendHistory` rebuild
 - [ ] Inventory all derived-state writes in `WeekendHistory`

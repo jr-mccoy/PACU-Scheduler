@@ -16,7 +16,9 @@ def test_stable_backend_public_api_exports_expected_symbols():
         "AssignmentHistory",
         "WeekendHistory",
         "_evaluate_variant_worker",
-        "NurseSchedulerUI",
+        "BackendService",
+        "SchedulerService",
+        "build_scheduler_service",
     ]
 
     missing = [name for name in required if not hasattr(scheduler, name)]

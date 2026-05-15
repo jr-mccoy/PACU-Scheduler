@@ -1362,27 +1362,6 @@ class WeekendHistory:
         """Normalize input date to pandas Timestamp at midnight."""
         return DateUtils.normalize_date(date_input)
 
-    def _execute_with_connection(self, func, *args, **kwargs):
-        """Execute a function with a database connection."""
-        with sqlite3.connect(self.db_name) as conn:
-            return func(conn, *args, **kwargs)
-
-    def _get_nurse_id(self, conn, nurse_name: str) -> Optional[int]:
-        """Get nurse ID from name."""
-        result = conn.execute(
-            f"SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?",
-            (nurse_name,)
-        ).fetchone()
-        return result[0] if result else None
-
-    def _get_nurse_name(self, conn, nurse_id: int) -> Optional[str]:
-        """Get nurse name from ID."""
-        result = conn.execute(
-            f"SELECT {DBColumns.NAME} FROM {DBTables.NURSES} WHERE {DBColumns.NURSE_ID} = ?",
-            (nurse_id,)
-        ).fetchone()
-        return result[0] if result else None
-
     # Data Loading Methods
     def _load_assignments(self) -> Dict[pd.Timestamp, Tuple[Optional[str], Optional[str]]]:
         """Load weekend assignments from the database with normalized timestamps."""
@@ -1444,86 +1423,14 @@ class WeekendHistory:
                 """)
             return cursor.fetchall()
 
-    def _calculate_consecutive_violations(self, last_violation_date: Optional[pd.Timestamp], 
-                                        current_violation_date: pd.Timestamp, 
+    def _calculate_consecutive_violations(self, last_violation_date: Optional[pd.Timestamp],
+                                        current_violation_date: pd.Timestamp,
                                         current_streak: int) -> int:
         """Calculate consecutive violation count."""
         if last_violation_date is None:
             return 1
         delta_days = (current_violation_date - last_violation_date).days
         return current_streak + 1 if delta_days == 7 else 1
-
-    def _record_violation_stat(self, conn, nurse: str, viol_date: pd.Timestamp):
-        """Update rotation_violation_stats for a violation."""
-        # Get current stats
-        row = conn.execute(f"""
-            SELECT {DBColumns.VIOLATION_COUNT}, {DBColumns.LAST_VIOLATION_DATE}, {DBColumns.CONSEC_VIOLATIONS}
-            FROM {DBTables.ROTATION_VIOLATION_STATS} vs
-            JOIN {DBTables.NURSES} n ON vs.{DBColumns.NURSE_ID} = n.{DBColumns.NURSE_ID}
-            WHERE n.{DBColumns.NAME} = ?
-        """, (nurse,)).fetchone()
-
-        if row:
-            count, last_date_str, streak = row
-            last_dt = DateUtils.normalize_date(last_date_str) if last_date_str else None
-            new_streak = self._calculate_consecutive_violations(last_dt, viol_date, streak)
-            new_count = count + 1
-        else:
-            new_count = 1
-            new_streak = 1
-
-        # Update stats
-        conn.execute(f"""
-            INSERT INTO {DBTables.ROTATION_VIOLATION_STATS}
-                ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_COUNT}, 
-                 {DBColumns.LAST_VIOLATION_DATE}, {DBColumns.CONSEC_VIOLATIONS})
-            VALUES(
-                (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?),
-                ?, ?, ?
-            )
-            ON CONFLICT({DBColumns.NURSE_ID}) DO UPDATE
-              SET {DBColumns.VIOLATION_COUNT} = excluded.{DBColumns.VIOLATION_COUNT},
-                  {DBColumns.LAST_VIOLATION_DATE} = excluded.{DBColumns.LAST_VIOLATION_DATE},
-                  {DBColumns.CONSEC_VIOLATIONS} = excluded.{DBColumns.CONSEC_VIOLATIONS}
-        """, (nurse, new_count, viol_date.strftime("%Y-%m-%d"), new_streak))
-
-    def _add_violation_date(self, nurse: str, violation_date: pd.Timestamp, 
-                           pattern: WeekendPattern, previous_pattern: WeekendPattern, 
-                           conn=None) -> None:
-        """Add a violation date record."""
-        def _add_violation(conn):
-            date_str = violation_date.strftime('%Y-%m-%d')
-            conn.execute(f"""
-                INSERT OR IGNORE INTO {DBTables.ROTATION_VIOLATION_DATES}
-                ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_DATE},
-                 {DBColumns.PATTERN}, {DBColumns.PREVIOUS_PATTERN})
-                VALUES (
-                    (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
-                    ?, ?, ?
-                )
-            """, (nurse, date_str, pattern.value, previous_pattern.value))
-            self._record_violation_stat(conn, nurse, violation_date)
-
-        if conn is not None:
-            _add_violation(conn)
-        else:
-            self._execute_with_connection(_add_violation)
-
-    def _clear_violation_dates(self, nurse: str = None, conn=None) -> None:
-        """Clear violation dates for a nurse or all nurses."""
-        def _clear_violations(conn):
-            if nurse:
-                conn.execute(f"""
-                    DELETE FROM {DBTables.ROTATION_VIOLATION_DATES} 
-                    WHERE {DBColumns.NURSE_ID} = (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?)
-                """, (nurse,))
-            else:
-                conn.execute(f"DELETE FROM {DBTables.ROTATION_VIOLATION_DATES}")
-
-        if conn is not None:
-            _clear_violations(conn)
-        else:
-            self._execute_with_connection(_clear_violations)
 
     def _build_nurse_sequences(self) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
         """Build chronological sequences of assignments for each nurse."""
@@ -1669,53 +1576,6 @@ class WeekendHistory:
                 {DBColumns.EXPECTED_NEXT_PATTERN}=excluded.{DBColumns.EXPECTED_NEXT_PATTERN}
         """, (nurse, new_pat.value, expected_next.value))
 
-    def _pattern_for_row(self, row, nurse_id: int) -> WeekendPattern:
-        """Determine pattern for a nurse from a database row."""
-        wk_start, fsf_id, sfs_id = row
-        return WeekendPattern.FSF if fsf_id == nurse_id else WeekendPattern.SFS
-
-    def _recompute_last_pattern(self, conn, nurse: str, removed_fri: pd.Timestamp) -> None:
-        """Recompute last pattern for a nurse after assignment removal."""
-        nurse_id = self._get_nurse_id(conn, nurse)
-        if not nurse_id:
-            return
-
-        # Look for future assignments first
-        removed_fri_str = removed_fri.strftime('%Y-%m-%d')
-
-        row = conn.execute(f"""
-            SELECT {DBColumns.WEEKEND_START}, {DBColumns.FSF_NURSE_ID}, {DBColumns.SFS_NURSE_ID}
-            FROM {DBTables.WEEKEND_ASSIGNMENTS}
-            WHERE {DBColumns.WEEKEND_START} > ?
-              AND ({DBColumns.FSF_NURSE_ID} = ? OR {DBColumns.SFS_NURSE_ID} = ?)
-            ORDER BY {DBColumns.WEEKEND_START} ASC
-            LIMIT 1
-        """, (removed_fri_str, nurse_id, nurse_id)).fetchone()
-        
-        if row:
-            return
-
-        # Look for past assignments
-        row = conn.execute(f"""
-            SELECT {DBColumns.WEEKEND_START}, {DBColumns.FSF_NURSE_ID}, {DBColumns.SFS_NURSE_ID}
-            FROM {DBTables.WEEKEND_ASSIGNMENTS}
-            WHERE {DBColumns.WEEKEND_START} < ?
-              AND ({DBColumns.FSF_NURSE_ID} = ? OR {DBColumns.SFS_NURSE_ID} = ?)
-            ORDER BY {DBColumns.WEEKEND_START} DESC
-            LIMIT 1
-        """, (removed_fri_str, nurse_id, nurse_id)).fetchone()
-        
-        if row:
-            new_pat = self._pattern_for_row(row, nurse_id)
-            self._write_pattern(conn, nurse, new_pat)
-        else:
-            # No assignments found, remove from history
-            conn.execute(f"""
-                DELETE FROM {DBTables.WEEKEND_ROTATION_HISTORY} 
-                WHERE {DBColumns.NURSE_ID} = ?
-            """, (nurse_id,))
-            self._last_patterns.pop(nurse, None)
-
     # Violation Statistics Methods
     def get_violation_summary(self, as_of=None):
         """Returns a DataFrame with violation summary for all nurses."""
@@ -1775,22 +1635,6 @@ class WeekendHistory:
             """)
             return {name: cnt for name, cnt in cur.fetchall()}
 
-    def _set_violation_count(self, nurse: str, new_val: int, conn=None) -> None:
-        """Set violation count for a nurse."""
-        def _update_count(conn):
-            conn.execute(f"""
-                INSERT INTO {DBTables.ROTATION_VIOLATION_STATS}
-                      ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_COUNT})
-                VALUES ((SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?), ?)
-                ON CONFLICT({DBColumns.NURSE_ID}) DO UPDATE
-                SET {DBColumns.VIOLATION_COUNT} = excluded.{DBColumns.VIOLATION_COUNT}
-            """, (nurse, new_val))
-
-        if conn is not None:
-            _update_count(conn)
-        else:
-            self._execute_with_connection(_update_count)
-
     # Public Interface Methods
     def get_last_weekend_before(self, nurse: str, before_date: pd.Timestamp) -> Optional[pd.Timestamp]:
         """Get the last weekend assignment before a given date."""
@@ -1824,14 +1668,18 @@ class WeekendHistory:
         self.weekend_service.restore_assignments(backup_assignments)
 
     def set_violation_count(self, nurse: str, count: int) -> None:
-        """Set violation count for a nurse."""
-        self._set_violation_count(nurse, count)
+        """Manual override for a nurse's violation count.
+
+        Persists until the next canonical-from-assignments rebuild.
+        """
+        self.violation_service.set_violation_count(nurse, count)
 
     def set_last_pattern(self, nurse: str, pattern: WeekendPattern) -> None:
-        """Set last pattern for a nurse."""
-        with sqlite3.connect(self.db_name) as conn:
-            self._write_pattern(conn, nurse, pattern)
-        self._last_patterns[nurse] = pattern
+        """Manual override for a nurse's last weekend pattern.
+
+        Persists until the next canonical-from-assignments rebuild.
+        """
+        self.weekend_service.set_last_pattern(nurse, pattern)
 
     def add_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str):
         """Add a new weekend assignment."""

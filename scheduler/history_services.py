@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Iterable, Optional
 import pandas as pd
 
 if TYPE_CHECKING:
-    from .legacy_core import WeekendHistory
+    from .legacy_core import WeekendHistory, WeekendPattern
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,37 @@ class WeekendHistoryService:
 
         self._run_command("restore", _write)
 
+    def set_last_pattern(self, nurse: str, pattern: "WeekendPattern") -> None:
+        """Manual override: pin the last pattern for a nurse.
+
+        Does not trigger a canonical-from-assignments rebuild — the override
+        persists until the next call into a canonical-write path.
+        """
+        from .legacy_core import WeekendPattern as _WeekendPattern
+
+        expected_next = (
+            _WeekendPattern.FSF if pattern == _WeekendPattern.SFS else _WeekendPattern.SFS
+        )
+
+        def _write(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """
+                INSERT INTO weekend_rotation_history
+                    (nurse_id, last_pattern, expected_next_pattern)
+                VALUES (
+                    (SELECT nurse_id FROM nurses WHERE name=?),
+                    ?, ?
+                )
+                ON CONFLICT(nurse_id) DO UPDATE
+                SET last_pattern = excluded.last_pattern,
+                    expected_next_pattern = excluded.expected_next_pattern
+                """,
+                (nurse, pattern.value, expected_next.value),
+            )
+
+        self._run_override("set_last_pattern", _write)
+        self._history._last_patterns[nurse] = pattern
+
     def _run_command(self, command_name: str, canonical_write) -> None:
         with sqlite3.connect(self._history.db_name) as conn:
             try:
@@ -123,6 +154,20 @@ class WeekendHistoryService:
 
         self._history._assignments = self._history._load_assignments()
         self._history._rebuild_last_patterns()
+
+    def _run_override(self, command_name: str, write) -> None:
+        """Execute an atomic derived-state write without rebuilding from canonical."""
+        with sqlite3.connect(self._history.db_name) as conn:
+            try:
+                conn.execute("BEGIN")
+                write(conn)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.exception(
+                    "WeekendHistoryService override failed: %s", command_name
+                )
+                raise
 
     def _load_chronological_assignments(
         self,
@@ -174,4 +219,33 @@ class ViolationHistoryService:
             except Exception:
                 conn.rollback()
                 logger.exception("ViolationHistoryService rebuild failed")
+                raise
+
+    def set_violation_count(self, nurse: str, count: int) -> None:
+        """Manual override: pin a nurse's violation count.
+
+        Persists until the next canonical-from-assignments rebuild.
+        """
+        with sqlite3.connect(self._history.db_name) as conn:
+            try:
+                conn.execute("BEGIN")
+                conn.execute(
+                    """
+                    INSERT INTO rotation_violation_stats
+                        (nurse_id, violation_count)
+                    VALUES (
+                        (SELECT nurse_id FROM nurses WHERE name=?),
+                        ?
+                    )
+                    ON CONFLICT(nurse_id) DO UPDATE
+                    SET violation_count = excluded.violation_count
+                    """,
+                    (nurse, count),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.exception(
+                    "ViolationHistoryService set_violation_count failed"
+                )
                 raise

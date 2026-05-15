@@ -373,7 +373,7 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 | 2a | #5 — Extract PDF rendering off `NurseScheduler` | ✅ | `claude/implement-phase-2-uwJ8E` | Moved `_export_variant_pdf`/`_draw_*` and the `reportlab` imports into `scheduler/exporters/pdf.py`; `NurseScheduler` methods are now thin delegations |
 | 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ✅ | `claude/implement-phase-2-uwJ8E` | Both workers now share `_evaluate_variant_core` with a profiling flag; `WorkerTuningConfig` drives both paths |
 | 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ✅ | `claude/implement-phase-3-jb3pS` | New `scheduler/factory.py` exposes `BackendService`/`SchedulerService`/`build_scheduler_service`; `NurseSchedulerUI`, `CLIHelper`, `InputValidator`, `VisualCalendarUI`, and `main()` moved to the top-level `cli/` package; `App.__init__` now constructs the backend via the factory |
-| 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ⬜ | | Phases 1 & 3 are complete; ready to start |
+| 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ✅ | `claude/implement-phase-4-K31bd` | Manual overrides (`set_last_pattern`, `set_violation_count`) now route through `WeekendHistoryService` / `ViolationHistoryService`; dead derived-state writers (`_recompute_last_pattern`, `_add_violation_date`, `_clear_violation_dates`, `_set_violation_count`, `_record_violation_stat`, `_execute_with_connection`, `_get_nurse_id/_name`, `_pattern_for_row`) removed; only the rebuild path now mutates derived state |
 | 5 | #4 — Define `VariantSearchContext`; remove optimizer back-reference | ⬜ | | Requires Phases 1–4 |
 | 6 | #6 — Migrate screens/dialogs from `ui/legacy.py` into existing wrappers | ⬜ | | Incremental; can run alongside later phases |
 
@@ -410,12 +410,12 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 - [x] Regression: `tests/test_cli_separation.py` adds four invariants — no `input(` in `scheduler/`, no `NurseSchedulerUI` references under `ui/`, `SchedulerService` advertises the GUI's required surface, and `cli` owns the moved classes
 
 #### Phase 4 — `WeekendHistory` rebuild
-- [ ] Inventory all derived-state writes in `WeekendHistory`
-- [ ] Route mutations through `WeekendHistoryService._run_command`
-- [ ] Remove direct derived-state writes from public mutators
-- [ ] Same treatment for `ViolationHistoryService`
-- [ ] Regression tests reproducing `code-review.md:183-298` bug classes
-- [ ] Manual GUI: generate → edit → re-open calendar parity check
+- [x] Inventory all derived-state writes in `WeekendHistory` (mutators: `add_assignment`, `modify_assignment`, `remove_assignment`, `restore` already on the service; manual overrides `set_last_pattern`/`set_violation_count` plus dead helpers `_recompute_last_pattern`, `_add_violation_date`, `_clear_violation_dates`, `_set_violation_count`, `_record_violation_stat` were the remaining direct writers)
+- [x] Route mutations through `WeekendHistoryService._run_command` (existing canonical mutators already use it; manual overrides added via new `WeekendHistoryService._run_override` helper)
+- [x] Remove direct derived-state writes from public mutators (`WeekendHistory.set_last_pattern` and `set_violation_count` now delegate to their services; no public method on `WeekendHistory` writes derived tables directly)
+- [x] Same treatment for `ViolationHistoryService` (added `ViolationHistoryService.set_violation_count` with its own transactional path)
+- [x] Regression tests reproducing `code-review.md:183-298` bug classes (`tests/test_weekend_history_rebuild.py` — old-weekend edit does not clobber latest pattern; remove rolls back to prior pattern; `restore()` round-trip rebuilds assignments + derived; manual overrides survive until canonical rebuild; guard test asserts dead helpers stay gone)
+- [ ] Manual GUI: generate → edit → re-open calendar parity check (sandbox has no display — covered headlessly by `tests/test_weekend_history_rebuild.py`)
 
 #### Phase 5 — `VariantSearchContext`
 - [ ] Catalogue optimizer/builder/ordering accesses on `variant`

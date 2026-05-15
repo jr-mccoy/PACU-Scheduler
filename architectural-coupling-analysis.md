@@ -370,8 +370,8 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 | Phase | Recommendation | Status | Branch / PR | Notes |
 | ---: | --- | :---: | --- | --- |
 | 1 | #1 — Facade boundary (`ui/legacy.py` → `scheduler` facade only) | ✅ | `claude/implement-phase-1-qa7d0` | Added `configure_pair_variant_debug` / `configure_assignment_debug_logger` to facade; UI now imports `scheduler` only |
-| 2a | #5 — Extract PDF rendering off `NurseScheduler` | ⬜ | | Parallel-safe with 2b |
-| 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ⬜ | | Parallel-safe with 2a |
+| 2a | #5 — Extract PDF rendering off `NurseScheduler` | ✅ | `claude/implement-phase-2-uwJ8E` | Moved `_export_variant_pdf`/`_draw_*` and the `reportlab` imports into `scheduler/exporters/pdf.py`; `NurseScheduler` methods are now thin delegations |
+| 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ✅ | `claude/implement-phase-2-uwJ8E` | Both workers now share `_evaluate_variant_core` with a profiling flag; `WorkerTuningConfig` drives both paths |
 | 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ⬜ | | Requires Phase 1 |
 | 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ⬜ | | Requires Phases 1, 3 |
 | 5 | #4 — Define `VariantSearchContext`; remove optimizer back-reference | ⬜ | | Requires Phases 1–4 |
@@ -387,17 +387,17 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 - [ ] Manual GUI smoke test (sandboxed env has no display; verified `import ui.legacy` + `apply_backend_debug_preferences` round-trip via headless Python)
 
 #### Phase 2a — PDF extraction
-- [ ] Create `scheduler/exporters/__init__.py` and `scheduler/exporters/pdf.py`
-- [ ] Move `_export_variant_pdf`, `_draw_weekday_header`, `_draw_week_rows`
-- [ ] Move top-level `reportlab` import out of `legacy_core.py`
-- [ ] Replace `NurseScheduler` methods with thin delegations
-- [ ] PDF snapshot test for a fixture variant
+- [x] Create `scheduler/exporters/__init__.py` and `scheduler/exporters/pdf.py`
+- [x] Move `_export_variant_pdf`, `_draw_weekday_header`, `_draw_week_rows` (now function-style in `scheduler/exporters/pdf.py`, parameterised on `font_sizes`)
+- [x] Move top-level `reportlab` import out of `legacy_core.py` (the only `reportlab.*` imports now live in the new exporter module)
+- [x] Replace `NurseScheduler` methods with thin delegations (`scheduler/legacy_core.py:5837-5849`)
+- [x] PDF snapshot test for a fixture variant (`tests/test_pdf_export.py::test_export_variant_pdf_produces_valid_multi_page_pdf` asserts `%PDF-…%%EOF` envelope and `/Type /Page` page count for a Jan+Feb fixture)
 
 #### Phase 2b — Worker dedup
-- [ ] Audit differences between `_evaluate_variant_worker` and `_evaluate_variant_worker_profiled`
-- [ ] Route both through `WorkerTuningConfig` (`scheduler/engine.py:9-25`)
-- [ ] Collapse to single implementation
-- [ ] Verify scoring parity on a fixed-seed run
+- [x] Audit differences between `_evaluate_variant_worker` and `_evaluate_variant_worker_profiled` (identical algorithm; the only divergence was timing primitive — `time.perf_counter` vs `MetricsCollector.profile_phase` — and whether `WorkerMetrics` is returned)
+- [x] Route both through `WorkerTuningConfig` (already in `scheduler/engine.py:9-25`; consolidated reads via the shared `WORKER_TUNING` module-level)
+- [x] Collapse to single implementation (`_evaluate_variant_core` in `scheduler/legacy_core.py`; public `_evaluate_variant_worker[_profiled]` are one-line delegations)
+- [x] Verify scoring parity on a fixed-seed run (`tests/test_worker_parity.py` covers shared-core delegation, identical stats/nurse-counts/schedule between profiled and unprofiled paths, and timing-key population)
 
 #### Phase 3 — CLI separation
 - [ ] Inventory `App.backend.*` call sites in `ui/`

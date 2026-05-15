@@ -325,23 +325,8 @@ def _runtime_base_dir() -> str:
         pass
     return os.getcwd()
 
-class RebuildViolationWorker(QThread):
-    finished = Signal(bool, str)  # (success, message)
-
-    def __init__(self, weekend_history, violation_service=None):
-        super().__init__()
-        self.weekend_history = weekend_history
-        self.violation_service = violation_service or getattr(weekend_history, "violation_service", None)
-
-    def run(self):
-        try:
-            if self.violation_service is not None:
-                self.violation_service.rebuild()
-            else:
-                self.weekend_history._recalculate_violation_counts()
-            self.finished.emit(True, "Violation history rebuilt.")
-        except Exception as e:
-            self.finished.emit(False, f"Error: {e}")
+# RebuildViolationWorker / ScheduleProgressWorker now live in ui.worker_threads;
+# re-imported below for backward compatibility.
 
 def _open_external(path: str) -> bool:
     """
@@ -4418,146 +4403,12 @@ class ViewAllUnavailableScreen(QWidget):
         v.addWidget(btns); dlg.setLayout(v); dlg.open() 
         
 # ──────────────────────────────────────────────────────────────────────
-#  Worker threads (unchanged from our earlier rewrite)
+#  Worker threads now live in ui.worker_threads;
+#  RebuildViolationWorker and ScheduleProgressWorker are re-imported at the
+#  bottom of this module for backward compatibility.
 # ──────────────────────────────────────────────────────────────────────
-from concurrent.futures import ThreadPoolExecutor
 
-class ScheduleProgressWorker(QThread):
-    progress = Signal(int, int)
-    finished = Signal(object, object, object)
-    error    = Signal(str)
 
-    def __init__(self, start_date, end_date, *, allow_rotation_violations=False,
-                 nurses_allowed_rotation_violation=None, settings=None):
-        super().__init__()
-        self._start = start_date
-        self._end   = end_date
-        self.allow_rotation_violations = allow_rotation_violations
-        self.nurses_allowed_rotation_violation = nurses_allowed_rotation_violation or []
-        try:
-            if hasattr(settings, "all"):
-                self.settings = settings.all()
-            elif isinstance(settings, dict):
-                self.settings = dict(settings)
-            else:
-                self.settings = {}
-        except Exception:
-            self.settings = {}
-    
-        # --- NEW: normalize legacy midweek toggles into the master flag
-        try:
-            if "allow_one_day_weekday_gap" not in self.settings:
-                a = bool(self.settings.get("allow_midweek_pair_backup_only", False))
-                b = bool(self.settings.get("allow_midweek_pair_mixed", False))
-                self.settings["allow_one_day_weekday_gap"] = a or b
-        except Exception:
-            pass
-
-    def run(self):
-        try:
-            apply_backend_debug_preferences(self.settings)
-            nm = NurseManager(DB_NAME)
-            wh = WeekendHistory(DB_NAME)
-            ps = PreScheduler(DB_NAME)
-
-            from scheduler import build_scheduler_from_settings
-            sched = build_scheduler_from_settings(self._start, self._end, nm, wh, ps, self.settings)
-
-            sched.set_allow_rotation_violations(self.allow_rotation_violations)
-            sched.set_nurses_allowed_rotation_violation(self.nurses_allowed_rotation_violation or [])
-
-            # Weekend variants only (never None here)
-            variants = sched.generate_all_weekend_variants(
-                allow_rotation_violations=self.allow_rotation_violations
-            )
-            if not variants:
-                self.finished.emit([], sched, wh)
-                return
-
-            total = len(variants)
-            candidate_schedules = []
-
-            # Use threads on Android to avoid GL/fork issues; processes elsewhere
-            override_env = os.environ.get("NSCHED_FORCE_THREAD_POOL")
-            override = _coerce_env_flag(override_env)
-            detected_android = is_android_platform()
-            use_threads = detected_android if override is None else override
-            maxw = min(4, os.cpu_count() or 1, total) if use_threads else min(8, os.cpu_count() or 1, total)
-            Executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
-            print(
-                "[progress-worker] using"
-                f" {'ThreadPoolExecutor' if use_threads else 'ProcessPoolExecutor'}"
-                f" (android={detected_android}, override={override_env!r})"
-            )
-
-            try:
-                with Executor(max_workers=maxw) as pool:
-                    futures = [pool.submit(_evaluate_variant_worker, (i, v)) for i, v in enumerate(variants)]
-                    for done, fut in enumerate(as_completed(futures), start=1):
-                        try:
-                            res = fut.result()
-                            if res is not None:
-                                candidate_schedules.append(res)
-                        except Exception as ex:
-                            # Keep going; we’ll do a serial fallback if everything failed
-                            pass
-                        self.progress.emit(done, total)
-            except Exception:
-                # Pool itself failed → serial path
-                candidate_schedules.clear()
-
-            # If nothing came back (exceptions or strict filters in older worker), build weekend-only candidates
-            if not candidate_schedules:
-                for i, var in enumerate(variants):
-                    try:
-                        df = var.state.schedule.copy()
-                        counts = {}
-                        for n in getattr(var, "nurses", []):
-                            m = int((df["main"] == n).sum()) if "main" in df.columns else 0
-                            b = int((df["backup"] == n).sum()) if "backup" in df.columns else 0
-                            counts[n] = {"main": m, "backup": b, "total": m + b}
-                        mains = list(counts[n]["main"] for n in counts) or [0]
-                        backs = list(counts[n]["backup"] for n in counts) or [0]
-                        stats = {
-                            "gaps": int(df[["main", "backup"]].isna().sum().sum()) if not df.empty else 0,
-                            "balance_main": int(max(mains) - min(mains)) if len(mains) > 1 else 0,
-                            "balance_backup": int(max(backs) - min(backs)) if len(backs) > 1 else 0,
-                            "rotation_rep": int(getattr(var.state, "rotation_repeats", 0)),
-                        }
-                        candidate_schedules.append((i, stats, counts, df))
-                    except Exception:
-                        # If even this fails for a variant, just skip it
-                        pass
-
-            if not candidate_schedules:
-                # Truly nothing usable
-                self.finished.emit([], sched, wh)
-                return
-
-            # Rank and return top-5
-            try:
-                sched._score_and_rank_variants(candidate_schedules)
-            except Exception as ex:
-                # If ranking fails, still show raw candidates
-                pass
-
-            if DEBUG_SAVE_VARIANTS:
-                try:
-                    sched._debug_variant_dump = _prepare_variant_debug_payload(
-                        candidate_schedules,
-                        sched,
-                        wh,
-                        self._start,
-                    )
-                except Exception:
-                    pass
-
-            self.finished.emit(candidate_schedules[:5], sched, wh)
-
-        except Exception:
-            self.error.emit(traceback.format_exc())
-                
-            
 # ───────────────────────────────────────────────────────────────────
 class ScheduleGenerationScreen(QWidget):
     """
@@ -5148,6 +4999,10 @@ class App(QMainWindow):
             if page and hasattr(page, "apply_theme_update"):
                 page.apply_theme_update()
                              
+
+# Re-export worker threads from their new home in ui.worker_threads
+# (the implementations were moved out of this module in the Phase 6 migration).
+from .worker_threads import RebuildViolationWorker, ScheduleProgressWorker  # noqa: F401
 
 # Re-export refactored presenter/service functions for backward compatibility.
 from .presenters.variant_review_presenter import (

@@ -23,8 +23,10 @@ from scheduler import (
     ScheduleState,
     ScheduleVariant,
     SharedSettings,
+    ViolationHistoryService,
     VisualCalendarUI,
     WeekendHistory,
+    WeekendHistoryService,
     WeekendPattern,
     WorkerMetrics,
     _accept,
@@ -37,6 +39,8 @@ from scheduler import (
     _reject,
     build_scheduler_config_from_settings,
     build_scheduler_from_settings,
+    configure_assignment_debug_logger,
+    configure_pair_variant_debug,
 )
 
 _warn(
@@ -65,7 +69,9 @@ __all__ = [
     "ScheduleVariant",
     "SharedSettings",
     "VisualCalendarUI",
+    "ViolationHistoryService",
     "WeekendHistory",
+    "WeekendHistoryService",
     "WeekendPattern",
     "WorkerMetrics",
     "_accept",
@@ -78,4 +84,6 @@ __all__ = [
     "_reject",
     "build_scheduler_config_from_settings",
     "build_scheduler_from_settings",
+    "configure_assignment_debug_logger",
+    "configure_pair_variant_debug",
 ]

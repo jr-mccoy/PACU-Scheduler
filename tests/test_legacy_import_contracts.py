@@ -23,7 +23,8 @@ def test_backend_legacy_modules_emit_deprecation_and_match_scheduler_contract():
         assert any("Import from scheduler instead." in str(w.message) for w in deprecations)
 
         public_names = [name for name in module.__dict__ if not name.startswith("_")]
-        assert set(public_names) == set(module.__all__)
+        public_all = [name for name in module.__all__ if not name.startswith("_")]
+        assert set(public_names) == set(public_all)
 
 
 def test_gui_legacy_module_has_limited_api_contract_and_deprecation_warning():

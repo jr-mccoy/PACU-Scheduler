@@ -35,11 +35,11 @@ from PySide6.QtGui     import QDesktopServices
 from typing import Optional, Callable, Any
 from PySide6.QtCore import Slot
 # ----------------------- Custom Backend Imports -----------------------
-import scheduler.legacy_core as backend_mod
 from scheduler import (
     NurseManager, PreScheduler, AssignmentHistory, NurseScheduler,
     WeekendHistory, _evaluate_variant_worker, SchedulerConfig, WeekendPattern,
-    NurseSchedulerUI
+    NurseSchedulerUI,
+    configure_pair_variant_debug, configure_assignment_debug_logger,
 )
 from .theme import shade_color
 
@@ -141,39 +141,13 @@ def apply_backend_debug_preferences(settings: Any) -> None:
         os.environ.pop("NSCHED_DEBUG", None)
 
     try:
-        with suppress(Exception):
-            fh = getattr(backend_mod, "_DBG_FILE_PAIRS", None)
-            if fh:
-                fh.close()
-        with suppress(Exception):
-            fh = getattr(backend_mod, "_DBG_FILE_VARIANTS", None)
-            if fh:
-                fh.close()
-
-        backend_mod._DBG_MODE = backend_mode
-        backend_mod._DBG_FILE_PAIRS = (
-            backend_mod._open_dbg("debug_pairs.txt")
-            if backend_mode in {"pairs", "all"}
-            else None
-        )
-        backend_mod._DBG_FILE_VARIANTS = (
-            backend_mod._open_dbg("debug_variants.txt")
-            if backend_mode in {"variants", "all"}
-            else None
-        )
+        configure_pair_variant_debug(backend_mode)
     except Exception as exc:  # pragma: no cover - errors shouldn't stop GUI
         print(f"[debug] unable to configure NSCHED_DEBUG: {exc}")
 
     os.environ["DEBUG_SCHED"] = "1" if assignment_enabled else "0"
     try:
-        backend_mod._DEBUG = assignment_enabled
-        logger = getattr(backend_mod, "ASSIGNMENT_DEBUG_LOGGER", None)
-        if logger:
-            with suppress(Exception):
-                logger.close()
-        backend_mod.ASSIGNMENT_DEBUG_LOGGER = backend_mod.AssignmentDebugLogger(
-            enabled=assignment_enabled
-        )
+        configure_assignment_debug_logger(assignment_enabled)
     except Exception as exc:  # pragma: no cover
         print(f"[debug] unable to configure assignment logger: {exc}")
 

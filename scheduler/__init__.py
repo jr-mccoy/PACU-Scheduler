@@ -43,7 +43,16 @@ from .profiling import (
     MetricsCollector,
     PerformanceReport,
 )
-from .debug import _open_dbg, _dbg_pairs, _dbg_variants, _reject, _accept, _pair
+from .debug import (
+    _open_dbg,
+    _dbg_pairs,
+    _dbg_variants,
+    _reject,
+    _accept,
+    _pair,
+    configure_pair_variant_debug,
+    configure_assignment_debug_logger,
+)
 from .history_services import WeekendHistoryService, ViolationHistoryService
 from .legacy_core import (
     PreScheduler,
@@ -90,4 +99,6 @@ __all__ = [
     "_reject",
     "build_scheduler_config_from_settings",
     "build_scheduler_from_settings",
+    "configure_assignment_debug_logger",
+    "configure_pair_variant_debug",
 ]

@@ -1,5 +1,8 @@
 """Smoke tests for UI import wiring and compatibility wrappers."""
 
+import pathlib
+import re
+
 from ui import app as app_wrapper
 from ui import app_shell
 from ui import workers as workers_wrapper
@@ -39,6 +42,26 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert settings_dialog.SettingsDialog is settings_dialog_widget.SettingsDialog
     assert compact_settings_dialog.CompactSettingsDialog is compact_settings_dialog_widget.CompactSettingsDialog
     assert variant_review_dialog.VariantReviewDialog is variant_review_dialog_widget.VariantReviewDialog
+
+
+def test_ui_modules_do_not_import_scheduler_legacy_core_directly():
+    """``ui/**`` must reach the backend through the ``scheduler`` package facade.
+
+    Importing ``scheduler.legacy_core`` directly defeats the facade boundary
+    documented in ``scheduler/__init__.py``; this guard fails the build if any
+    UI module re-introduces that coupling.
+    """
+    ui_root = pathlib.Path(__file__).resolve().parent.parent / "ui"
+    pattern = re.compile(r"\bscheduler\.legacy_core\b")
+    offenders = []
+    for path in ui_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if pattern.search(text):
+            offenders.append(str(path.relative_to(ui_root.parent)))
+    assert not offenders, (
+        "UI modules must import from `scheduler`, not `scheduler.legacy_core`: "
+        + ", ".join(offenders)
+    )
 
 
 def test_variant_presenter_and_export_services_are_importable():

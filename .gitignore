@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+assignment_debug_*.csv
+assignment_debug_*.jsonl

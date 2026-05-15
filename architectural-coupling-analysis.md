@@ -369,7 +369,7 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 
 | Phase | Recommendation | Status | Branch / PR | Notes |
 | ---: | --- | :---: | --- | --- |
-| 1 | #1 — Facade boundary (`ui/legacy.py` → `scheduler` facade only) | ⬜ | | |
+| 1 | #1 — Facade boundary (`ui/legacy.py` → `scheduler` facade only) | ✅ | `claude/implement-phase-1-qa7d0` | Added `configure_pair_variant_debug` / `configure_assignment_debug_logger` to facade; UI now imports `scheduler` only |
 | 2a | #5 — Extract PDF rendering off `NurseScheduler` | ⬜ | | Parallel-safe with 2b |
 | 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ⬜ | | Parallel-safe with 2a |
 | 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ⬜ | | Requires Phase 1 |
@@ -380,11 +380,11 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 ### Per-phase sub-checklist
 
 #### Phase 1 — Facade boundary
-- [ ] Remove `import scheduler.legacy_core as backend_mod` from `ui/legacy.py:38`
-- [ ] Audit `ui/**` for any `scheduler.legacy_core` imports
-- [ ] Add missing re-exports to `scheduler/__init__.py`
-- [ ] Add lint rule / smoke test forbidding `scheduler.legacy_core` imports from `ui/**`
-- [ ] Manual GUI smoke test
+- [x] Remove `import scheduler.legacy_core as backend_mod` from `ui/legacy.py:38`
+- [x] Audit `ui/**` for any `scheduler.legacy_core` imports (only offender was `ui/legacy.py:38`)
+- [x] Add missing re-exports to `scheduler/__init__.py` (`configure_pair_variant_debug`, `configure_assignment_debug_logger` in `scheduler/debug.py`; NCSSQL55/57 shims synced)
+- [x] Add lint rule / smoke test forbidding `scheduler.legacy_core` imports from `ui/**` (`tests/test_ui_import_smoke.py::test_ui_modules_do_not_import_scheduler_legacy_core_directly`)
+- [ ] Manual GUI smoke test (sandboxed env has no display; verified `import ui.legacy` + `apply_backend_debug_preferences` round-trip via headless Python)
 
 #### Phase 2a — PDF extraction
 - [ ] Create `scheduler/exporters/__init__.py` and `scheduler/exporters/pdf.py`

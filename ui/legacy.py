@@ -38,7 +38,7 @@ from PySide6.QtCore import Slot
 from scheduler import (
     NurseManager, PreScheduler, AssignmentHistory, NurseScheduler,
     WeekendHistory, _evaluate_variant_worker, SchedulerConfig, WeekendPattern,
-    NurseSchedulerUI,
+    build_scheduler_service,
     configure_pair_variant_debug, configure_assignment_debug_logger,
 )
 from .theme import shade_color
@@ -4166,7 +4166,7 @@ class AssignmentHistoryScreen(QWidget):
     # --- NEW: Sync Button Handler ---
     def _on_sync(self):
         try:
-            self.parent.backend._handle_sync_assignment_history_with_weekend()
+            self.parent.backend.sync_assignment_history_with_weekend()
             show_info(self, "Sync", "Sync complete.")
         except Exception as e:
             show_warning(self, "Sync Error", str(e))
@@ -4963,7 +4963,7 @@ class WeekendHistoryCalendarScreen(QWidget):
 
     def _on_sync(self):
         try:
-            self.parent.backend._handle_sync_assignment_history_with_weekend()
+            self.parent.backend.sync_assignment_history_with_weekend()
             show_info(self, "Sync", "Weekend / Assignment history are now synced.")
             self._refresh_all()
         except Exception as e:
@@ -5000,7 +5000,7 @@ class App(QMainWindow):
         self.stack = QStackedWidget(self)
         self.setCentralWidget(self.stack)
 
-        self.backend = NurseSchedulerUI(DB_NAME)  # Your backend logic instance
+        self.backend = build_scheduler_service(DB_NAME)  # SchedulerService composition
 
         self._pages: list[tuple[str, type[QWidget]]] = [
             ("main",            MainMenu),
@@ -5061,7 +5061,7 @@ class App(QMainWindow):
         # If any code in the backend still reads SharedSettings directly,
         # refresh its snapshot so it sees the newly written settings.json.
         try:
-            # NurseSchedulerUI instance kept in self.backend
+            # SchedulerService instance kept in self.backend
             # It created self.settings = SharedSettings() at init time.
             # Replace it with a fresh snapshot.
             from scheduler import SharedSettings

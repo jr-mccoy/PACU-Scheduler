@@ -1,23 +1,36 @@
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
+
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .context import VariantSearchContext
 
 
 class OrderGenerator:
-    """Generate deterministic variable orders used for full-period refill."""
+    """Generate deterministic variable orders used for full-period refill.
 
-    def __init__(self, variant):
-        self.variant = variant
+    Depends on `VariantSearchContext` instead of `ScheduleVariant` directly.
+    """
+
+    def __init__(self, context: "VariantSearchContext"):
+        self.context = context
+
+    @property
+    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+        return self.context
 
     def build_full_varlist(self, days, role_order: str = "MB"):
+        ctx = self.context
         vars_list = []
         for day in days:
             order = ("main", "backup") if role_order == "MB" else ("backup", "main")
             for role in order:
-                if not self.variant._is_pre_scheduled(day, role):
-                    val = self.variant.state.schedule.at[day, role]
-                    if self.variant.is_empty(val):
+                if not ctx.is_pre_scheduled(day, role):
+                    val = ctx.state.schedule.at[day, role]
+                    if ctx.is_empty(val):
                         vars_list.append((day, role))
         return vars_list
 
@@ -82,15 +95,17 @@ class OrderGenerator:
                 j -= 1
         orders.append(self.build_full_varlist(spiral, "BM"))
 
+        ctx = self.context
+
         def domain_size(day, role):
-            dom = self.variant._eligible_domain(day, role)
+            dom = ctx.eligible_domain(day, role)
             return len(dom) if dom else 0
 
         mrvl = []
         for day in chrono:
             for role in ("main", "backup"):
-                if not self.variant._is_pre_scheduled(day, role) and self.variant.is_empty(
-                    self.variant.state.schedule.at[day, role]
+                if not ctx.is_pre_scheduled(day, role) and ctx.is_empty(
+                    ctx.state.schedule.at[day, role]
                 ):
                     mrvl.append((day, role))
         mrvl.sort(key=lambda item: domain_size(item[0], item[1]))
@@ -102,10 +117,10 @@ class OrderGenerator:
         mixed_vars = []
         for idx, day in enumerate(chrono):
             if (
-                not self.variant._is_pre_scheduled(day, "main")
-                and self.variant.is_empty(self.variant.state.schedule.at[day, "main"])
-                and not self.variant._is_pre_scheduled(day, "backup")
-                and self.variant.is_empty(self.variant.state.schedule.at[day, "backup"])
+                not ctx.is_pre_scheduled(day, "main")
+                and ctx.is_empty(ctx.state.schedule.at[day, "main"])
+                and not ctx.is_pre_scheduled(day, "backup")
+                and ctx.is_empty(ctx.state.schedule.at[day, "backup"])
             ):
                 if idx % 2 == 0:
                     mixed_vars.extend([(day, "backup"), (day, "main")])

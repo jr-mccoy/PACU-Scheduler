@@ -42,9 +42,6 @@ import csv
 import sys, subprocess, platform, shutil
 from dataclasses import dataclass, field
 import numpy as np      # needed for median in long-term score helpers
-from reportlab.lib.pagesizes import landscape, letter   # or A4 etc.
-from reportlab.lib.units     import cm
-from reportlab.pdfgen        import canvas
 
 try:  # Optional dependency used for performance profiling
     import psutil  # type: ignore
@@ -72,6 +69,12 @@ from .scoring import (
 from .generation import CandidateDomainBuilder, OrderGenerator
 from .optimization import WindowRefillOptimizer
 from .history_services import WeekendHistoryService, ViolationHistoryService
+from .exporters.pdf import (
+    DEFAULT_PDF_FONT_SIZES as _DEFAULT_PDF_FONT_SIZES,
+    draw_week_rows as _draw_week_rows_fn,
+    draw_weekday_header as _draw_weekday_header_fn,
+    export_variant_pdf as _export_variant_pdf_fn,
+)
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -414,35 +417,68 @@ class PerformanceReport:
             json.dump(data, f, indent=2)
         print(f"Exported metrics to {filename}")
 
-def _evaluate_variant_worker_profiled(args):
-    """Profiling-enabled variant evaluation used when performance profiling is requested."""
+@contextmanager
+def _noop_phase_timer(_phase_name: str):
+    """Phase-timer no-op used when profiling is disabled."""
+    yield
+
+
+def _evaluate_variant_core(args, *, with_profiling: bool):
+    """Shared implementation for variant evaluation.
+
+    The profiled and non-profiled worker paths historically diverged into
+    near-duplicate copies; both routed through the same algorithm but used
+    different timing primitives.  This implementation runs the algorithm
+    once and conditionally collects ``MetricsCollector`` data for callers
+    that requested profiling.
+    """
     idx, variant = args
     tuning = WORKER_TUNING
 
-    collector = MetricsCollector(worker_id=idx, variant_idx=idx)
+    if with_profiling:
+        collector = MetricsCollector(worker_id=idx, variant_idx=idx)
+        phase_timer = collector.profile_phase
 
-    def _phase_duration(name: str) -> float:
-        phase = collector.metrics.phases.get(name)
-        return phase.duration_sec if phase else 0.0
+        def _phase_duration(name: str) -> float:
+            phase = collector.metrics.phases.get(name)
+            return phase.duration_sec if phase else 0.0
+    else:
+        collector = None
+        phase_timer = _noop_phase_timer
+        t0 = time.perf_counter()
+        phase_starts: dict[str, float] = {}
+        phase_durations: dict[str, float] = {}
+
+        @contextmanager
+        def phase_timer(name: str):  # type: ignore[no-redef]
+            start = time.perf_counter()
+            phase_starts[name] = start
+            try:
+                yield
+            finally:
+                phase_durations[name] = time.perf_counter() - start
+
+        def _phase_duration(name: str) -> float:
+            return phase_durations.get(name, 0.0)
 
     try:
-        with collector.profile_phase("clone"):
+        with phase_timer("clone"):
             var = variant.clone()
 
-        with collector.profile_phase("assign_weekdays"):
+        with phase_timer("assign_weekdays"):
             var.assign_weekdays()
             tracker = BestStateTracker(var)
             tracker.initialize()
 
         early_gaps = _count_weekday_gaps(var.state.schedule)
 
-        with collector.profile_phase("gap_fill"):
+        with phase_timer("gap_fill"):
             var.iterative_gap_fill_no_revert(
                 max_iterations=tuning.gap_fill_iterations,
                 tracker=tracker,
             )
 
-        with collector.profile_phase("rebalance"):
+        with phase_timer("rebalance"):
             var.iterative_rebalance_no_revert(
                 tolerance=tuning.rebalance_tolerance,
                 max_iterations=tuning.rebalance_iterations,
@@ -450,7 +486,7 @@ def _evaluate_variant_worker_profiled(args):
                 tracker=tracker,
             )
 
-        with collector.profile_phase("window_refill"):
+        with phase_timer("window_refill"):
             var.iterative_window_refill_rebalance(
                 window_weeks=tuning.window_refill_weeks,
                 max_passes=tuning.window_refill_max_passes,
@@ -462,7 +498,7 @@ def _evaluate_variant_worker_profiled(args):
 
         s_b, s_m, _ = var._spread_components()
         if s_b > 1 or s_m > 1:
-            with collector.profile_phase("full_period_refill"):
+            with phase_timer("full_period_refill"):
                 var.iterative_full_period_refill(
                     max_orders=tuning.full_period_max_orders,
                     per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
@@ -473,7 +509,7 @@ def _evaluate_variant_worker_profiled(args):
 
         tracker.restore_global_best()
 
-        with collector.profile_phase("compute_stats"):
+        with phase_timer("compute_stats"):
             df = var.state.schedule
             final_quality = tracker.get_global_best_quality()
 
@@ -512,7 +548,12 @@ def _evaluate_variant_worker_profiled(args):
 
             sched_copy = df.copy()
 
-        metrics = collector.finalize()
+        if with_profiling:
+            metrics = collector.finalize()
+            total_duration = metrics.total_duration_sec
+        else:
+            metrics = None
+            total_duration = time.perf_counter() - t0
 
         if MEASURE_PHASE_TIMES:
             stats.update(
@@ -523,137 +564,36 @@ def _evaluate_variant_worker_profiled(args):
                     "t_rebalance": _phase_duration("rebalance"),
                     "t_lns_2w": _phase_duration("window_refill"),
                     "t_full": _phase_duration("full_period_refill"),
-                    "t_total": metrics.total_duration_sec,
+                    "t_total": total_duration,
                 }
             )
 
-        return idx, stats, nurse_counts, sched_copy, metrics
+        if with_profiling:
+            return idx, stats, nurse_counts, sched_copy, metrics
+        return idx, stats, nurse_counts, sched_copy
 
     except Exception:
-        metrics = collector.finalize()
-        print(f"Worker {idx} failed during profiling")
+        if with_profiling and collector is not None:
+            collector.finalize()
+            print(f"Worker {idx} failed during profiling")
         raise
 
+
 def _evaluate_variant_worker(args):
+    """Heavy lifting for one weekend variant.
+
+    Returns ``(idx, stats, nurse_counts, schedule_df)`` with extra timing
+    keys if :data:`MEASURE_PHASE_TIMES` is ``True``.
     """
-    Heavy lifting for one weekend variant.
-    Returns (idx, stats_dict, nurse_counts_dict, schedule_df)
-    with extra timing keys if MEASURE_PHASE_TIMES is True.
+    return _evaluate_variant_core(args, with_profiling=False)
+
+
+def _evaluate_variant_worker_profiled(args):
+    """Profiling-enabled variant evaluation used when profiling is requested.
+
+    Returns ``(idx, stats, nurse_counts, schedule_df, worker_metrics)``.
     """
-    idx, variant = args
-    tuning = WORKER_TUNING
-
-    # timing
-    tic = time.perf_counter
-    t0 = tic()
-
-    # Clone
-    t_clone_start = tic()
-    var = variant.clone()
-    t_clone = tic() - t_clone_start
-
-    # Initial weekday pass
-    t_assign_start = tic()
-    var.assign_weekdays()
-    tracker = BestStateTracker(var)
-    tracker.initialize()
-    t_assign = tic() - t_assign_start
-
-    early_gaps = _count_weekday_gaps(var.state.schedule)
-
-    # Gap fill (per week)
-    t_gap_start = tic()
-    var.iterative_gap_fill_no_revert(
-        max_iterations=tuning.gap_fill_iterations,
-        tracker=tracker,
-    )
-    t_gap = tic() - t_gap_start
-
-    # Weekly rebalance (no early-stop; cheap; lexicographic acceptance inside)
-    t_reb_start = tic()
-    var.iterative_rebalance_no_revert(
-        tolerance=tuning.rebalance_tolerance,
-        max_iterations=tuning.rebalance_iterations,
-        early_stop_spread=tuning.rebalance_early_stop_spread,
-        tracker=tracker,
-    )
-    t_reb = tic() - t_reb_start
-
-    # Two-week refill (bounded; lexicographic acceptance inside)
-    t_lns2w_start = tic()
-    var.iterative_window_refill_rebalance(
-        window_weeks=tuning.window_refill_weeks,
-        max_passes=tuning.window_refill_max_passes,
-        time_limit_ms=tuning.window_refill_time_limit_ms,
-        node_limit=tuning.window_refill_node_limit,
-        target_spread=tuning.window_refill_target_spread,
-        tracker=tracker,
-    )
-    t_lns2w = tic() - t_lns2w_start
-
-    # Full-period refill if still not good enough
-    t_full_start = tic()
-    s_b, s_m, _ = var._spread_components()
-    if s_b > 1 or s_m > 1:
-        var.iterative_full_period_refill(
-            max_orders=tuning.full_period_max_orders,
-            per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
-            per_attempt_nodes=tuning.full_period_per_attempt_nodes,
-            target_spread=tuning.full_period_target_spread,
-            tracker=tracker,
-        )
-    t_full = tic() - t_full_start
-
-    t_total = tic() - t0
-
-    tracker.restore_global_best()
-
-    # Final stats
-    df          = var.state.schedule
-    final_quality = tracker.get_global_best_quality()
-
-    if final_quality:
-        gaps_final = final_quality.total_gaps
-        balance_main = final_quality.main_spread
-        balance_backup = final_quality.backup_spread
-        rotation_rep = final_quality.rotation_penalty
-    else:
-        gaps_final = _count_main_backup_empties(df)
-        main_counts = var.state.main_assignment_counts.values
-        back_counts = var.state.backup_assignment_counts.values
-        balance_main = int(main_counts.max()  - main_counts.min()) if len(main_counts) else 0
-        balance_backup = int(back_counts.max()  - back_counts.min()) if len(back_counts) else 0
-        rotation_rep = int(var.state.rotation_repeats)
-
-    stats = {
-        "gaps"          : int(gaps_final),
-        "balance_main"  : int(balance_main),
-        "balance_backup": int(balance_backup),
-        "early_gaps"    : int(early_gaps),
-        "rotation_rep"  : int(rotation_rep),
-    }
-
-    stats.update(tracker.get_statistics())
-
-    if MEASURE_PHASE_TIMES:
-        stats.update({
-            "t_clone"     : t_clone,
-            "t_assign"    : t_assign,
-            "t_gapfill"   : t_gap,
-            "t_rebalance" : t_reb,
-            "t_lns_2w"    : t_lns2w,
-            "t_full"      : t_full,
-            "t_total"     : t_total
-        })
-
-    # per-nurse counts
-    nurse_counts = {}
-    for nurse in var.nurses:
-        m = int((df['main']   == nurse).sum())
-        b = int((df['backup'] == nurse).sum())
-        nurse_counts[nurse] = {"main": m, "backup": b, "total": m + b}
-
-    return (idx, stats, nurse_counts, df.copy())
+    return _evaluate_variant_core(args, with_profiling=True)
 
 def build_scheduler_config_from_settings(settings) -> "SchedulerConfig":
     """
@@ -5834,90 +5774,19 @@ class NurseScheduler:
                 f.write(weekend_df[['main', 'backup']].to_string())
                 f.write("\n" + "-"*40 + "\n")
 
-    def _export_variant_pdf(self, pdf_path: str, sched_df: "pd.DataFrame", 
+    def _export_variant_pdf(self, pdf_path: str, sched_df: "pd.DataFrame",
                           cal: "calendar.Calendar") -> None:
-        """
-        Create a landscape-letter PDF containing every month in `sched_df`
-        (one month per page).  Day-numbers are top-left; names are centred.
-        """
-        # Layout constants
-        PAGE_W, PAGE_H = landscape(letter)
-        MARGIN = 0.5 * cm
-        TITLE_H = 1.5 * cm
-        COL_W = (PAGE_W - 2*MARGIN) / 7
-
-        def draw_month(cvs, year: int, month: int):
-            """Draw one month on the current PDF page."""
-            weeks = cal.monthdayscalendar(year, month)
-            total_rows = len(weeks) + 1
-            table_h = PAGE_H - 2*MARGIN - TITLE_H
-            row_h = table_h / total_rows
-
-            # Draw title
-            cvs.setFont("Helvetica-Bold", self.PDF_FONT_SIZES['title'])
-            cvs.drawCentredString(PAGE_W/2, PAGE_H - MARGIN - 0.6*cm,
-                                f"{calendar.month_name[month]} {year}")
-
-            # Draw weekday header
-            self._draw_weekday_header(cvs, PAGE_H - MARGIN - TITLE_H, row_h, COL_W)
-
-            # Draw week rows
-            self._draw_week_rows(cvs, weeks, year, month, sched_df, 
-                               PAGE_H - MARGIN - TITLE_H - row_h, row_h, COL_W)
-
-        # Build PDF
-        c = canvas.Canvas(pdf_path, pagesize=landscape(letter))
-        start, end = sched_df.index.min(), sched_df.index.max()
-        year, month = start.year, start.month
-        
-        while (year, month) <= (end.year, end.month):
-            draw_month(c, year, month)
-            c.showPage()
-            month = 1 if month == 12 else month + 1
-            year = year + 1 if month == 1 else year
-            
-        c.save()
-        print(f"[analysis] wrote PDF {pdf_path}")
+        """Delegate to :func:`scheduler.exporters.pdf.export_variant_pdf`."""
+        _export_variant_pdf_fn(pdf_path, sched_df, cal, self.PDF_FONT_SIZES)
 
     def _draw_weekday_header(self, cvs, hdr_y_top, row_h, col_w):
-        """Draw the weekday header row."""
-        cvs.setFont("Helvetica-Bold", self.PDF_FONT_SIZES['dow'])
-        for col, dow in enumerate(["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]):
-            x0 = 0.5 * cm + col * col_w  # MARGIN
-            cvs.rect(x0, hdr_y_top - row_h, col_w, row_h)
-            cvs.drawCentredString(x0 + col_w/2, 
-                                hdr_y_top - row_h/2 + self.PDF_FONT_SIZES['dow']/3, dow)
+        _draw_weekday_header_fn(cvs, hdr_y_top, row_h, col_w, self.PDF_FONT_SIZES)
 
     def _draw_week_rows(self, cvs, weeks, year, month, sched_df, y_top, row_h, col_w):
-        """Draw the week rows with day numbers and assignments."""
-        for week in weeks:
-            for col, day in enumerate(week):
-                x0 = 0.5 * cm + col * col_w  # MARGIN
-                cvs.rect(x0, y_top - row_h, col_w, row_h)
-
-                if day:
-                    dt = pd.Timestamp(year=year, month=month, day=day)
-                    main = ""
-                    backup = ""
-                    if dt in sched_df.index:
-                        main_raw = sched_df.at[dt, "main"]
-                        backup_raw = sched_df.at[dt, "backup"]
-                        main = "" if self.is_empty(main_raw) else str(main_raw)
-                        backup = "" if self.is_empty(backup_raw) else str(backup_raw)
-
-                    # Day number – top-left
-                    cvs.setFont("Helvetica-Bold", self.PDF_FONT_SIZES['dayno'])
-                    cvs.drawString(x0 + 2, y_top - self.PDF_FONT_SIZES['dayno'] - 2, str(day))
-
-                    # Names – centered horizontally (stacked vertically)
-                    name_x = x0 + col_w/2
-                    line_gap = self.PDF_FONT_SIZES['name'] + 2
-                    first_line = y_top - row_h/2 + line_gap/2
-
-                    cvs.setFont("Helvetica", self.PDF_FONT_SIZES['name'])
-                    cvs.drawCentredString(name_x, first_line, main)
-                    cvs.drawCentredString(name_x, first_line - line_gap, backup)
-            y_top -= row_h
+        _draw_week_rows_fn(
+            cvs, weeks, year, month, sched_df, y_top, row_h, col_w,
+            self.PDF_FONT_SIZES,
+        )
 
     # =====================================================================
     # MAIN SCHEDULE GENERATION METHOD

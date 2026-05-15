@@ -374,7 +374,7 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 | 2b | #7 — Deduplicate `_evaluate_variant_worker[_profiled]` | ✅ | `claude/implement-phase-2-uwJ8E` | Both workers now share `_evaluate_variant_core` with a profiling flag; `WorkerTuningConfig` drives both paths |
 | 3 | #2 — Move `NurseSchedulerUI` out of `scheduler/`; introduce `SchedulerFactory` | ✅ | `claude/implement-phase-3-jb3pS` | New `scheduler/factory.py` exposes `BackendService`/`SchedulerService`/`build_scheduler_service`; `NurseSchedulerUI`, `CLIHelper`, `InputValidator`, `VisualCalendarUI`, and `main()` moved to the top-level `cli/` package; `App.__init__` now constructs the backend via the factory |
 | 4 | #3 — Collapse `WeekendHistory` canonical/derived dual-writer | ✅ | `claude/implement-phase-4-K31bd` | Manual overrides (`set_last_pattern`, `set_violation_count`) now route through `WeekendHistoryService` / `ViolationHistoryService`; dead derived-state writers (`_recompute_last_pattern`, `_add_violation_date`, `_clear_violation_dates`, `_set_violation_count`, `_record_violation_stat`, `_execute_with_connection`, `_get_nurse_id/_name`, `_pattern_for_row`) removed; only the rebuild path now mutates derived state |
-| 5 | #4 — Define `VariantSearchContext`; remove optimizer back-reference | ⬜ | | Requires Phases 1–4 |
+| 5 | #4 — Define `VariantSearchContext`; remove optimizer back-reference | ✅ | `claude/implement-phase-5-9illR` | New `scheduler/generation/context.py` defines the `VariantSearchContext` `Protocol`; `WindowRefillOptimizer`, `CandidateDomainBuilder`, and `OrderGenerator` now take `context: VariantSearchContext` and use the public surface (`eligible_domain`, `inc_assign`, `dec_assign`, `spread_components`, `backup_week_assignments`, `restore_from_backup`, `BestStateTracker`, …) instead of `_xxx` privates; eager `self.window_optimizer = …` back-references in `ScheduleVariant.__init__` replaced with `@cached_property`; public method aliases added to `ScheduleVariant` so it conforms to the protocol at runtime; `tests/test_variant_search_context.py` exercises the optimizer/builder/ordering against a `SimpleNamespace` fake context (proving no implicit `ScheduleVariant` coupling) and verifies the back-reference is no longer eager |
 | 6 | #6 — Migrate screens/dialogs from `ui/legacy.py` into existing wrappers | ⬜ | | Incremental; can run alongside later phases |
 
 ### Per-phase sub-checklist
@@ -418,13 +418,13 @@ Status legend: ⬜ Not started · 🟡 In progress · ✅ Complete · ⏸ Blocke
 - [ ] Manual GUI: generate → edit → re-open calendar parity check (sandbox has no display — covered headlessly by `tests/test_weekend_history_rebuild.py`)
 
 #### Phase 5 — `VariantSearchContext`
-- [ ] Catalogue optimizer/builder/ordering accesses on `variant`
-- [ ] Define `VariantSearchContext` Protocol in `scheduler/generation/context.py`
-- [ ] Promote required underscored methods to public names
-- [ ] Switch `WindowRefillOptimizer` to take `context` instead of `variant`
-- [ ] Remove back-references in `ScheduleVariant.__init__`
-- [ ] Type-check protocol conformance
-- [ ] Score-parity regression test on fixture seeds
+- [x] Catalogue optimizer/builder/ordering accesses on `variant` (full surface enumerated in the docstring of `scheduler/generation/context.py`; covers `state`, `config`, `pre_scheduled`, `hist_main`/`hist_backup`, `assignment_debug_logger`, `console_debug`, `order_index`, `BestStateTracker`, `StateSnapshot`, `Comparison`, `DEFAULT_POST_WEEKEND_WINDOW`, `DEFAULT_PRE_WEEKEND_WINDOW`, and ~25 methods)
+- [x] Define `VariantSearchContext` Protocol in `scheduler/generation/context.py` (`@runtime_checkable`, also re-exported from `scheduler.generation`)
+- [x] Promote required underscored methods to public names (added public delegating methods on `ScheduleVariant`: `console_debug`, `order_index`, `debug_print`, `is_pre_scheduled`, `eligible_domain[_gap]`, `get_eligible_nurses_for_day[_gap]`, `inc_assign`, `dec_assign`, `spread_components`, `lexi_better`, `collect_weekday_windows`, `build_window_varlist`, `clear_window_assignments`, `restore_from_backup`, `get_all_weekdays`, `gen_full_orders`, `backtrack_full_order`, `recalculate_assignment_counts`, `update_last_assignment_dates`, `get_total_counts`, `weekday_counts_for`, `log_assignment_debug`; underscored versions kept as one-line callers)
+- [x] Switch `WindowRefillOptimizer` to take `context` instead of `variant` (also `CandidateDomainBuilder` and `OrderGenerator`); `optimizer.variant` kept as a backwards-compat property
+- [x] Remove back-references in `ScheduleVariant.__init__` — `self.window_optimizer`/`self.domain_builder`/`self.order_generator` no longer set eagerly; replaced with `@cached_property` so helpers are only constructed on first access and only through the public protocol surface
+- [x] Type-check protocol conformance (`isinstance(variant, VariantSearchContext)` passes via `@runtime_checkable`; `tests/test_variant_search_context.py::test_schedule_variant_satisfies_protocol_at_runtime`)
+- [x] Score-parity regression test on fixture seeds (`tests/test_variant_search_context.py` — 9 tests: protocol conformance, no eager back-references, lazy `cached_property` construction, `WindowRefillOptimizer.backtrack_window` runs end-to-end against a `SimpleNamespace` fake context, `CandidateDomainBuilder.eligible_domain` runs against the fake, `OrderGenerator.build_full_varlist`/`gen_full_orders` run against the fake, helpers share the variant only via `context`, backwards-compat `optimizer.variant`/`builder.variant`/`generator.variant` alias still works, runtime-checkable introspection)
 
 #### Phase 6 — UI ownership migration
 - [ ] `MainMenuScreen`

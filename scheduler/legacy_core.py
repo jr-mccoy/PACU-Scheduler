@@ -41,6 +41,7 @@ import pathlib
 import csv
 import sys, subprocess, platform, shutil
 from dataclasses import dataclass, field
+from functools import cached_property
 import numpy as np      # needed for median in long-term score helpers
 
 try:  # Optional dependency used for performance profiling
@@ -2366,9 +2367,10 @@ class ScheduleVariant:
         self.DEFAULT_POST_WEEKEND_WINDOW = DEFAULT_POST_WEEKEND_WINDOW
         self.DEFAULT_PRE_WEEKEND_WINDOW = DEFAULT_PRE_WEEKEND_WINDOW
         self.pd = pd
-        self.domain_builder = CandidateDomainBuilder(self)
-        self.order_generator = OrderGenerator(self)
-        self.window_optimizer = WindowRefillOptimizer(self)
+        # NOTE: search helpers (domain_builder, order_generator, window_optimizer)
+        # are constructed lazily via @cached_property below so they only hold a
+        # reference to this variant through the VariantSearchContext surface,
+        # not via an unconditional back-reference at __init__ time.
 
         self._initialize_pre_scheduled_slots()
 
@@ -2379,6 +2381,158 @@ class ScheduleVariant:
     @staticmethod
     def is_empty(value) -> bool:
         return is_empty(value)
+
+    # ------------------------------------------------------------------
+    # VariantSearchContext public surface
+    # ------------------------------------------------------------------
+    # The optimizer/builder/ordering helpers depend on this stable public
+    # surface (see scheduler/generation/context.py). Underscored aliases
+    # are retained as internal call sites — they may be removed once all
+    # internal references to the underscored names are migrated.
+
+    @property
+    def console_debug(self) -> bool:
+        return self._console_debug
+
+    @property
+    def order_index(self) -> dict[str, int]:
+        return self._order_index
+
+    def debug_print(self, msg: str, **kwargs) -> None:
+        return self._debug_print(msg, **kwargs)
+
+    def is_pre_scheduled(self, date: pd.Timestamp, role: str) -> bool:
+        return self._is_pre_scheduled(date, role)
+
+    def eligible_domain(
+        self,
+        date: pd.Timestamp,
+        role: str,
+        diagnostics: Optional[dict[str, list[str]]] = None,
+        *,
+        force_relaxed: bool = False,
+    ) -> list[str]:
+        return self._eligible_domain(date, role, diagnostics, force_relaxed=force_relaxed)
+
+    def eligible_domain_gap(
+        self,
+        date: pd.Timestamp,
+        role: str,
+        diagnostics: Optional[dict[str, list[str]]] = None,
+        *,
+        force_relaxed: bool = False,
+    ) -> list[str]:
+        return self._eligible_domain_gap(date, role, diagnostics, force_relaxed=force_relaxed)
+
+    def get_eligible_nurses_for_day(
+        self,
+        date: pd.Timestamp,
+        role: str,
+        diagnostics: Optional[dict[str, list[str]]] = None,
+        *,
+        relaxed_spacing: bool = False,
+    ) -> list[str]:
+        return self._get_eligible_nurses_for_day(
+            date, role, diagnostics, relaxed_spacing=relaxed_spacing
+        )
+
+    def get_eligible_nurses_for_day_gap(
+        self,
+        date: pd.Timestamp,
+        role: str,
+        diagnostics: Optional[dict[str, list[str]]] = None,
+        *,
+        relaxed_spacing: bool = False,
+    ) -> list[str]:
+        return self._get_eligible_nurses_for_day_gap(
+            date, role, diagnostics, relaxed_spacing=relaxed_spacing
+        )
+
+    def inc_assign(
+        self,
+        date: pd.Timestamp,
+        role: str,
+        nurse: str,
+        *,
+        gap_phase: bool = False,
+    ) -> bool:
+        return self._inc_assign(date, role, nurse, gap_phase=gap_phase)
+
+    def dec_assign(self, date: pd.Timestamp, role: str, nurse: str) -> None:
+        return self._dec_assign(date, role, nurse)
+
+    def spread_components(self) -> tuple[int, int, int]:
+        return self._spread_components()
+
+    def lexi_better(
+        self,
+        new_tuple: tuple[int, int, int],
+        base_tuple: tuple[int, int, int],
+    ) -> bool:
+        return self._lexi_better(new_tuple, base_tuple)
+
+    def collect_weekday_windows(self, window_weeks: int = 2) -> list[list[pd.Timestamp]]:
+        return self._collect_weekday_windows(window_weeks=window_weeks)
+
+    def build_window_varlist(
+        self, days: list[pd.Timestamp]
+    ) -> list[tuple[pd.Timestamp, str]]:
+        return self._build_window_varlist(days)
+
+    def clear_window_assignments(self, days: list[pd.Timestamp]) -> None:
+        return self._clear_window_assignments(days)
+
+    def restore_from_backup(self, days: list[pd.Timestamp], backup) -> None:
+        return self._restore_from_backup(days, backup)
+
+    def get_all_weekdays(self) -> list[pd.Timestamp]:
+        return self._get_all_weekdays()
+
+    def gen_full_orders(
+        self,
+        days: list[pd.Timestamp],
+        max_orders: int = 50,
+    ) -> list[list[tuple[pd.Timestamp, str]]]:
+        return self._gen_full_orders(days, max_orders=max_orders)
+
+    def backtrack_full_order(
+        self,
+        vars_list: list[tuple[pd.Timestamp, str]],
+        deadline: float,
+        node_budget: list[int],
+    ) -> bool:
+        return self._backtrack_full_order(vars_list, deadline, node_budget)
+
+    def recalculate_assignment_counts(self) -> None:
+        return self._recalculate_assignment_counts()
+
+    def update_last_assignment_dates(self) -> None:
+        return self._update_last_assignment_dates()
+
+    def get_total_counts(self) -> pd.Series:
+        return self._get_total_counts()
+
+    def weekday_counts_for(self, weekday: int) -> dict[str, int]:
+        return self._weekday_counts_for(weekday)
+
+    def log_assignment_debug(self, **kwargs) -> None:
+        return self._log_assignment_debug(**kwargs)
+
+    # Search helpers — lazily constructed against the public context surface
+    # rather than being held as eager back-references. This means a freshly
+    # constructed variant does not unconditionally instantiate these helpers,
+    # and helpers depend only on the `VariantSearchContext` protocol.
+    @cached_property
+    def domain_builder(self) -> "CandidateDomainBuilder":
+        return CandidateDomainBuilder(self)
+
+    @cached_property
+    def order_generator(self) -> "OrderGenerator":
+        return OrderGenerator(self)
+
+    @cached_property
+    def window_optimizer(self) -> "WindowRefillOptimizer":
+        return WindowRefillOptimizer(self)
 
     def _initialize_pre_scheduled_slots(self) -> None:
         """Initialize schedule with pre-scheduled assignments and update counters."""

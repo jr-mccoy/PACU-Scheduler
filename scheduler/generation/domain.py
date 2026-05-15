@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .context import VariantSearchContext
 
 
 class CandidateDomainBuilder:
-    """Build and rank candidate nurse domains for assignment slots."""
+    """Build and rank candidate nurse domains for assignment slots.
 
-    def __init__(self, variant):
-        self.variant = variant
+    Depends on `VariantSearchContext` instead of `ScheduleVariant` directly,
+    so renaming underscored attributes on the variant cannot silently break
+    domain construction.
+    """
+
+    def __init__(self, context: "VariantSearchContext"):
+        self.context = context
+
+    @property
+    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+        return self.context
 
     def eligible_domain(
         self,
@@ -18,21 +30,21 @@ class CandidateDomainBuilder:
         force_relaxed: bool = False,
         gap_mode: bool = False,
     ) -> list[str]:
-        variant = self.variant
+        ctx = self.context
         diag_map = diagnostics
         created_local_diag = False
-        if diag_map is None and variant.assignment_debug_logger.enabled:
+        if diag_map is None and ctx.assignment_debug_logger.enabled:
             diag_map = {}
             created_local_diag = True
         if diag_map is not None:
             diag_map.clear()
 
         get_eligible = (
-            variant._get_eligible_nurses_for_day_gap
+            ctx.get_eligible_nurses_for_day_gap
             if gap_mode
-            else variant._get_eligible_nurses_for_day
+            else ctx.get_eligible_nurses_for_day
         )
-        context = "gap_eligible_domain" if gap_mode else "eligible_domain"
+        context_label = "gap_eligible_domain" if gap_mode else "eligible_domain"
 
         candidates = get_eligible(
             date,
@@ -44,7 +56,7 @@ class CandidateDomainBuilder:
         used_relaxed = False
         relaxed_candidates: list[str] = []
 
-        if force_relaxed and variant.config.allow_one_day_weekday_gap:
+        if force_relaxed and ctx.config.allow_one_day_weekday_gap:
             capture_relaxed: Optional[dict[str, list[str]]] = {} if diag_map is not None else None
             relaxed_candidates = get_eligible(
                 date,
@@ -57,7 +69,7 @@ class CandidateDomainBuilder:
                 if diag_map is not None and capture_relaxed is not None:
                     for nurse, reasons in capture_relaxed.items():
                         diag_map.setdefault(nurse, reasons)
-        elif not candidates and variant.config.allow_one_day_weekday_gap:
+        elif not candidates and ctx.config.allow_one_day_weekday_gap:
             if diag_map is not None:
                 diag_map.clear()
             candidates = get_eligible(
@@ -68,8 +80,8 @@ class CandidateDomainBuilder:
             )
             if candidates:
                 used_relaxed = True
-                if variant._console_debug and not gap_mode:
-                    variant._debug_print(
+                if ctx.console_debug and not gap_mode:
+                    ctx.debug_print(
                         f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}"
                     )
 
@@ -78,13 +90,13 @@ class CandidateDomainBuilder:
             candidates.extend(n for n in relaxed_candidates if n not in seen)
 
         if not candidates:
-            if variant._console_debug and not gap_mode:
-                variant._debug_print(
+            if ctx.console_debug and not gap_mode:
+                ctx.debug_print(
                     f"[ScheduleVariant] [Domain] empty {date.date()} role={role}"
                 )
-            if variant.assignment_debug_logger.enabled:
-                variant._log_assignment_debug(
-                    context=context,
+            if ctx.assignment_debug_logger.enabled:
+                ctx.log_assignment_debug(
+                    context=context_label,
                     phase="candidate_pool",
                     date=date,
                     role=role,
@@ -102,18 +114,18 @@ class CandidateDomainBuilder:
             return candidates
 
         role_counts = (
-            variant.state.main_assignment_counts
+            ctx.state.main_assignment_counts
             if role == "main"
-            else variant.state.backup_assignment_counts
+            else ctx.state.backup_assignment_counts
         )
-        total_counts = variant._get_total_counts()
-        order_index = variant._order_index
+        total_counts = ctx.get_total_counts()
+        order_index = ctx.order_index
 
         wday = int(date.weekday())
-        dow_counts = variant._weekday_counts_for(wday) if wday in (0, 1, 2, 3) else {}
+        dow_counts = ctx.weekday_counts_for(wday) if wday in (0, 1, 2, 3) else {}
 
         def past_total(nurse: str) -> int:
-            return variant.hist_main.get(nurse, 0) + variant.hist_backup.get(nurse, 0)
+            return ctx.hist_main.get(nurse, 0) + ctx.hist_backup.get(nurse, 0)
 
         candidates.sort(
             key=lambda nurse: (
@@ -125,9 +137,9 @@ class CandidateDomainBuilder:
             )
         )
 
-        if variant.assignment_debug_logger.enabled:
-            variant._log_assignment_debug(
-                context=context,
+        if ctx.assignment_debug_logger.enabled:
+            ctx.log_assignment_debug(
+                context=context_label,
                 phase="candidate_pool",
                 date=date,
                 role=role,

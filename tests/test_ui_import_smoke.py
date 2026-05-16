@@ -10,6 +10,8 @@ from ui import worker_threads
 from ui.dialogs import (
     compact_settings_dialog,
     compact_settings_dialog_widget,
+    rotation_violation_dialog,
+    rotation_violation_dialog_widget,
     settings_dialog,
     settings_dialog_widget,
     tool_dialog,
@@ -42,6 +44,16 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert settings_dialog.SettingsDialog is settings_dialog_widget.SettingsDialog
     assert compact_settings_dialog.CompactSettingsDialog is compact_settings_dialog_widget.CompactSettingsDialog
     assert variant_review_dialog.VariantReviewDialog is variant_review_dialog_widget.VariantReviewDialog
+    assert rotation_violation_dialog.RotationViolationDialog is rotation_violation_dialog_widget.RotationViolationDialog
+
+    # The migrated dialogs must own the class — ui.legacy re-exports them.
+    import ui.legacy as legacy
+
+    assert legacy.ToolDialog is tool_dialog.ToolDialog
+    assert legacy.SettingsDialog is settings_dialog.SettingsDialog
+    assert legacy.CompactSettingsDialog is compact_settings_dialog.CompactSettingsDialog
+    assert legacy.VariantReviewDialog is variant_review_dialog.VariantReviewDialog
+    assert legacy.RotationViolationDialog is rotation_violation_dialog.RotationViolationDialog
 
 
 def test_ui_modules_do_not_import_scheduler_legacy_core_directly():

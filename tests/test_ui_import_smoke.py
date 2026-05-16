@@ -21,10 +21,15 @@ from ui.dialogs import (
 )
 from ui.presenters import variant_review_presenter
 from ui.screens import (
+    advanced_weekend_stats,
+    assignment_history,
+    main_menu,
     nurse_management,
     nurse_management_screen,
+    prescheduled,
     schedule_generation,
     schedule_generation_screen,
+    view_all_unavailable,
     weekend_history_calendar,
     weekend_history_calendar_screen,
 )
@@ -54,6 +59,28 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert legacy.CompactSettingsDialog is compact_settings_dialog.CompactSettingsDialog
     assert legacy.VariantReviewDialog is variant_review_dialog.VariantReviewDialog
     assert legacy.RotationViolationDialog is rotation_violation_dialog.RotationViolationDialog
+
+    # The migrated screens must own their class — ui.legacy re-exports them.
+    assert legacy.MainMenu is main_menu.MainMenu
+    assert legacy.NurseManagementScreen is nurse_management.NurseManagementScreen
+    assert legacy.PreScheduledScreen is prescheduled.PreScheduledScreen
+    assert legacy.AssignmentHistoryScreen is assignment_history.AssignmentHistoryScreen
+    assert legacy.ViewAllUnavailableScreen is view_all_unavailable.ViewAllUnavailableScreen
+    assert legacy.ScheduleGenerationScreen is schedule_generation.ScheduleGenerationScreen
+    assert legacy.WeekendHistoryCalendarScreen is weekend_history_calendar.WeekendHistoryCalendarScreen
+    assert legacy.AdvancedWeekendStatsScreen is advanced_weekend_stats.AdvancedWeekendStatsScreen
+
+    # And the new screen modules must own classes from their own files, not
+    # subclass the legacy implementation (the previous wrapper-subclass pattern
+    # is gone now that the screens live in their own modules).
+    assert main_menu.MainMenu.__module__ == "ui.screens.main_menu"
+    assert nurse_management.NurseManagementScreen.__module__ == "ui.screens.nurse_management"
+    assert prescheduled.PreScheduledScreen.__module__ == "ui.screens.prescheduled"
+    assert assignment_history.AssignmentHistoryScreen.__module__ == "ui.screens.assignment_history"
+    assert view_all_unavailable.ViewAllUnavailableScreen.__module__ == "ui.screens.view_all_unavailable"
+    assert schedule_generation.ScheduleGenerationScreen.__module__ == "ui.screens.schedule_generation"
+    assert weekend_history_calendar.WeekendHistoryCalendarScreen.__module__ == "ui.screens.weekend_history_calendar"
+    assert advanced_weekend_stats.AdvancedWeekendStatsScreen.__module__ == "ui.screens.advanced_weekend_stats"
 
 
 def test_ui_modules_do_not_import_scheduler_legacy_core_directly():

@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Iterable, Optional
 import pandas as pd
 
 if TYPE_CHECKING:
-    from .legacy_core import WeekendHistory, WeekendPattern
+    from .domain import WeekendPattern
+    from .repositories import WeekendHistory
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ class WeekendHistoryService:
         Does not trigger a canonical-from-assignments rebuild — the override
         persists until the next call into a canonical-write path.
         """
-        from .legacy_core import WeekendPattern as _WeekendPattern
+        from .domain import WeekendPattern as _WeekendPattern
 
         expected_next = (
             _WeekendPattern.FSF if pattern == _WeekendPattern.SFS else _WeekendPattern.SFS

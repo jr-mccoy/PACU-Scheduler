@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from scheduler import WeekendPattern
 
 from ..dialogs.tool_dialog import ToolDialog
-from ..legacy import confirm, show_info
+from ..messages import confirm, show_info
 from ..widgets.date_pickers import SingleDatePicker
 from ..worker_threads import RebuildViolationWorker
 

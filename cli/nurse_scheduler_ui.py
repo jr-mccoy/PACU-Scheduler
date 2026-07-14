@@ -36,7 +36,7 @@ from scheduler import (
     WeekendPattern,
     build_scheduler_from_settings,
 )
-from scheduler.legacy_core import DateUtils
+from scheduler import DateUtils
 
 logger = logging.getLogger(__name__)
 

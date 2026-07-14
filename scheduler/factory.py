@@ -21,15 +21,16 @@ from typing import Any, Optional, Protocol, Tuple
 
 import pandas as pd
 
-from .legacy_core import (
+from .domain import SchedulerConfig
+from .engine import NurseScheduler
+from .repositories import (
     AssignmentHistory,
     DateUtils,
     NurseManager,
-    NurseScheduler,
     PreScheduler,
-    SharedSettings,
     WeekendHistory,
 )
+from .settings import SharedSettings
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +154,60 @@ def build_scheduler_service(db_name: str = "nurse_schedule.db") -> SchedulerServ
     return SchedulerService(db_name)
 
 
+def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
+    """Translate any settings-like object into a scheduler configuration."""
+    return SchedulerConfig(
+        weekend_gap_days=settings.get("weekend_gap_days"),
+        main_score_factor=settings.get("main_score_factor"),
+        backup_score_factor=settings.get("backup_score_factor"),
+        availability_penalty=settings.get("availability_penalty"),
+        min_days_between_assignments=settings.get("min_days_between_assignments"),
+        allow_post_weekend_wednesday_main=settings.get(
+            "allow_post_weekend_wednesday_main"
+        ),
+        allow_post_weekend_wednesday_backup=settings.get(
+            "allow_post_weekend_wednesday_backup"
+        ),
+        allow_post_weekend_thursday_main=settings.get(
+            "allow_post_weekend_thursday_main"
+        ),
+        allow_post_weekend_thursday_backup=settings.get(
+            "allow_post_weekend_thursday_backup"
+        ),
+        allow_one_day_weekday_gap=settings.get("allow_one_day_weekday_gap"),
+        scoring_weights=settings.get("scoring_weights"),
+    )
+
+
+def build_scheduler_from_settings(
+    start_date,
+    end_date,
+    nm: NurseManager,
+    wh: WeekendHistory,
+    ps: PreScheduler,
+    settings,
+) -> NurseScheduler:
+    """Build a scheduler using deterministic nurse ordering and shared settings."""
+    config = build_scheduler_config_from_settings(settings)
+    non_prn = sorted(nm.get_non_prn_nurses(), key=str.casefold)
+    prn = sorted(nm.get_prn_nurses(), key=str.casefold)
+    return NurseScheduler(
+        start_date,
+        end_date,
+        non_prn,
+        prn,
+        nm,
+        wh,
+        ps,
+        config=config,
+        history_window_days=settings.get("history_window_days"),
+    )
+
+
 __all__ = [
     "BackendService",
     "SchedulerService",
+    "build_scheduler_config_from_settings",
+    "build_scheduler_from_settings",
     "build_scheduler_service",
 ]

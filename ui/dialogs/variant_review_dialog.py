@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
 )
 
 from .tool_dialog import ToolDialog
+from ..messages import show_info
+from ..services.variant_export import export_variants_calendar_html
+from ..theme import themed_icon
 
 
 class VariantReviewDialog(ToolDialog):
@@ -75,8 +78,6 @@ class VariantReviewDialog(ToolDialog):
             self.counts_tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
         outer.addWidget(self.counts_tbl, 2)
 
-        from ..legacy import themed_icon
-
         nav = QHBoxLayout()
         nav.setSpacing(16)
         nav.addStretch()
@@ -109,8 +110,6 @@ class VariantReviewDialog(ToolDialog):
         act.addStretch()
         self.save_btn = QPushButton("Save")
         self.cancel_btn = QPushButton("Cancel")
-
-        from ..legacy import export_variants_calendar_html
 
         self.calendar_btn = QPushButton("Calendar View")
         self.calendar_btn.clicked.connect(
@@ -228,15 +227,11 @@ class VariantReviewDialog(ToolDialog):
                 self.wh.modify_assignment(dt.isoformat(), main, backup)
             self.ah.update_history(dt.isoformat(), main, backup)
 
-        from ..legacy import show_info
-
         show_info(self, "Saved", "Schedule and history have been updated.")
         self.accept()
 
     def apply_theme_update(self):
         """Refresh navigation button icons when theme changes."""
-        from ..legacy import themed_icon
-
         theme = (
             self.parent().settings.get("theme")
             if hasattr(self.parent(), "settings")

@@ -1,5 +1,28 @@
 # PACU Scheduler
 
+The original versioned Python monoliths have been fully decomposed. The three
+root modules remain only as deprecated launch/import facades so existing
+installations continue to work:
+
+- `scheduler/` owns scheduling state, persistence, constraints, evaluation,
+  optimization, ranking, diagnostics, and export.
+- `ui/` owns the Qt application shell, themes, settings, messages, widgets,
+  dialogs, screens, presenters, and export services.
+- `cli/` owns all terminal input and menu workflows.
+
+`scheduler/legacy_core.py` and `ui/legacy.py` are compatibility facades; neither
+contains concrete application logic.
+
+## Setup and verification
+
+```bash
+python -m pip install -r requirements-dev.txt
+pytest -q
+```
+
+Launch the desktop GUI with `python NCSSQLGUIFINALIST57.py` or the terminal UI
+with `python -m cli`.
+
 ## Operator policy notes
 
 The scheduler currently applies the following intentional policies:

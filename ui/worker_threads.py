@@ -109,7 +109,7 @@ class ScheduleProgressWorker(QThread):
     def run(self):
         # Imported lazily to keep module import lightweight and avoid cycles
         # with ui.legacy during module load.
-        from .legacy import apply_backend_debug_preferences
+        from .platform import apply_backend_debug_preferences
         from .presenters.variant_review_presenter import (
             _prepare_variant_debug_payload,
         )

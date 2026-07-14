@@ -25,8 +25,9 @@ from PySide6.QtWidgets import (
 
 from scheduler import NurseManager
 
+from ..config import DB_NAME
 from ..dialogs.tool_dialog import ToolDialog
-from ..legacy import DB_NAME, show_error, show_warning
+from ..messages import show_error, show_warning
 from ..theme import shade_color
 from ..widgets.date_pickers import MultiDatePicker
 

@@ -1,67 +1,180 @@
-"""Debug logging and helper functions for schedule assignment diagnostics."""
+"""Debug logging and assignment diagnostics with stable object identity."""
 
+from __future__ import annotations
+
+import atexit
+import csv
+import datetime
+import json
+import os
+import pathlib
+import threading
 from contextlib import suppress
+from typing import Any, Dict, Optional
 
-from . import legacy_core as _legacy_core
-from .legacy_core import (
-    _open_dbg,
-    _dbg_pairs,
-    _dbg_variants,
-    _reject,
-    _accept,
-    _pair,
-)
+from . import runtime as _runtime
 
+_open_dbg = _runtime._open_dbg
+_dbg_pairs = _runtime._dbg_pairs
+_dbg_variants = _runtime._dbg_variants
+_reject = _runtime._reject
+_accept = _runtime._accept
+_pair = _runtime._pair
+
+_DEBUG = bool(int(os.getenv("DEBUG_SCHED", "1")))
+_LOCK = threading.Lock()
+_LOG_FILE_CACHE: Dict[str, str] = {}
+
+
+class AssignmentDebugLogger:
+    """Structured assignment logger that writes JSONL and CSV side by side."""
+
+    CSV_FIELDS = [
+        "timestamp",
+        "context",
+        "phase",
+        "date",
+        "role",
+        "final_pick",
+        "eligible",
+        "candidate_stats",
+        "rejections",
+        "counts_main",
+        "counts_backup",
+        "counts_total",
+        "history_main",
+        "history_backup",
+        "note",
+        "extra",
+    ]
+
+    def __init__(self, enabled: bool, *, directory: pathlib.Path | None = None) -> None:
+        self.enabled = bool(enabled)
+        self._json_handle: Optional[Any] = None
+        self._csv_handle: Optional[Any] = None
+        self._csv_writer: Optional[csv.DictWriter] = None
+        self.json_path: Optional[pathlib.Path] = None
+        self.csv_path: Optional[pathlib.Path] = None
+
+        if not self.enabled:
+            return
+
+        base_dir = pathlib.Path(directory) if directory else pathlib.Path.cwd()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        base_name = f"assignment_debug_{timestamp}"
+
+        self.json_path = base_dir / f"{base_name}.jsonl"
+        self.csv_path = base_dir / f"{base_name}.csv"
+
+        self._json_handle = _runtime._open_dbg(str(self.json_path), "a")
+        self._csv_handle = _runtime._open_dbg(str(self.csv_path), "a")
+
+        if not self._json_handle or not self._csv_handle:
+            # Could not open one or both handles (likely due to Windows file
+            # locking when workers fork). Disable structured logging so the
+            # scheduler continues instead of hanging forever.
+            self.enabled = False
+            self.close()
+            return
+
+        self._csv_writer = csv.DictWriter(self._csv_handle, fieldnames=self.CSV_FIELDS)
+        if self._csv_handle.tell() == 0:
+            self._csv_writer.writeheader()
+
+        atexit.register(self.close)
+
+    def close(self) -> None:
+        """Close both debug files."""
+        if self._json_handle:
+            try:
+                self._json_handle.close()
+            finally:
+                self._json_handle = None
+        if self._csv_handle:
+            try:
+                self._csv_handle.close()
+            finally:
+                self._csv_handle = None
+                self._csv_writer = None
+
+    @staticmethod
+    def _stringify(value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float)):
+            return value
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return json.dumps(value, default=str, sort_keys=True)
+
+    def log(self, payload: dict) -> None:
+        """Write a payload to JSONL/CSV if debugging is enabled."""
+        if not self.enabled or not payload:
+            return
+
+        record = payload.copy()
+        record.setdefault("timestamp", datetime.datetime.now().isoformat())
+
+        with _LOCK:
+            assert self._json_handle is not None and self._csv_writer is not None and self._csv_handle is not None
+            self._json_handle.write(json.dumps(record, default=str) + "\n")
+
+            row = {field: self._stringify(record.get(field)) for field in self.CSV_FIELDS}
+            self._csv_writer.writerow(row)
+            self._json_handle.flush()
+            self._csv_handle.flush()
+
+
+def _ts():
+    return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def log(kind: str, payload: dict):
+    """Write one JSON line to <kind>_dump_<timestamp>.log."""
+    if not _DEBUG:
+        return
+    line  = json.dumps(payload, default=str)
+    with _LOCK:
+        fname = _LOG_FILE_CACHE.setdefault(kind, f"{kind}_dump_{_ts()}.log")
+        with open(fname, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+ASSIGNMENT_DEBUG_LOGGER = AssignmentDebugLogger(enabled=_DEBUG)
 
 def configure_pair_variant_debug(mode: str) -> None:
-    """Reconfigure the pair/variant debug file handles on the backend.
-
-    ``mode`` is one of ``""``, ``"pairs"``, ``"variants"`` or ``"all"``.
-    Any previously opened handles are closed before the new ones are created.
-    """
-
-    with suppress(Exception):
-        fh = getattr(_legacy_core, "_DBG_FILE_PAIRS", None)
-        if fh:
-            fh.close()
-    with suppress(Exception):
-        fh = getattr(_legacy_core, "_DBG_FILE_VARIANTS", None)
-        if fh:
-            fh.close()
-
-    _legacy_core._DBG_MODE = mode
-    _legacy_core._DBG_FILE_PAIRS = (
-        _legacy_core._open_dbg("debug_pairs.txt")
-        if mode in {"pairs", "all"}
-        else None
-    )
-    _legacy_core._DBG_FILE_VARIANTS = (
-        _legacy_core._open_dbg("debug_variants.txt")
-        if mode in {"variants", "all"}
-        else None
-    )
-
+    """Reconfigure pair/variant debug streams without stale aliases."""
+    normalized = mode if mode in {"", "pairs", "variants", "all"} else ""
+    for attr in ("_DBG_FILE_PAIRS", "_DBG_FILE_VARIANTS"):
+        with suppress(Exception):
+            handle = getattr(_runtime, attr, None)
+            if handle:
+                handle.close()
+        setattr(_runtime, attr, None)
+    _runtime._DBG_MODE = normalized
+    if normalized in {"pairs", "all"}:
+        _runtime._DBG_FILE_PAIRS = _runtime._open_dbg("debug_pairs.txt")
+    if normalized in {"variants", "all"}:
+        _runtime._DBG_FILE_VARIANTS = _runtime._open_dbg("debug_variants.txt")
 
 def configure_assignment_debug_logger(enabled: bool) -> None:
-    """Swap in a fresh ``AssignmentDebugLogger`` with ``enabled`` toggled."""
-
-    _legacy_core._DEBUG = enabled
-    logger = getattr(_legacy_core, "ASSIGNMENT_DEBUG_LOGGER", None)
-    if logger:
-        with suppress(Exception):
-            logger.close()
-    _legacy_core.ASSIGNMENT_DEBUG_LOGGER = _legacy_core.AssignmentDebugLogger(
-        enabled=enabled
-    )
-
+    """Reconfigure the shared logger while preserving imported references."""
+    global _DEBUG
+    _DEBUG = bool(enabled)
+    replacement = AssignmentDebugLogger(enabled=_DEBUG)
+    ASSIGNMENT_DEBUG_LOGGER.close()
+    ASSIGNMENT_DEBUG_LOGGER.__dict__.clear()
+    ASSIGNMENT_DEBUG_LOGGER.__dict__.update(replacement.__dict__)
 
 __all__ = [
+    "AssignmentDebugLogger",
+    "ASSIGNMENT_DEBUG_LOGGER",
     "_open_dbg",
     "_dbg_pairs",
     "_dbg_variants",
     "_reject",
     "_accept",
     "_pair",
+    "log",
     "configure_pair_variant_debug",
     "configure_assignment_debug_logger",
 ]

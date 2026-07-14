@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..legacy import apply_theme_to_calendar, themed_icon
+from ..theme import apply_theme_to_calendar, themed_icon
 
 
 class MultiDatePickerGrid(QCalendarWidget):

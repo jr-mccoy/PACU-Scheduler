@@ -898,9 +898,9 @@ Those three remove the biggest sources of silent wrongness.
 
 ## Package migration checklist (facade → owned modules)
 
-- [x] `scheduler/domain.py`: owns `WeekendPattern` and `SchedulerConfig`; legacy-backed types remain temporarily imported.
-- [x] `scheduler/repositories.py`: owns `DatabaseMixin`; legacy-backed repository classes remain temporarily imported.
-- [x] `scheduler/engine.py`: owns worker tuning config (`WorkerTuningConfig`, `WORKER_TUNING`); engine entrypoints still temporarily imported from legacy.
+- [x] `scheduler/domain.py`: directly owns every domain type, state tracker, and schedule variant.
+- [x] `scheduler/repositories.py`: directly owns all database/repository classes and weekend history.
+- [x] `scheduler/engine.py`: directly owns orchestration and public worker entrypoints; worker implementation lives in `scheduler/evaluation/`.
 - [x] `ui/screens/*.py` named modules now own screen compatibility subclasses; `*_screen.py` files reduced to wrappers.
 - [x] `ui/dialogs/*.py` named modules now own dialog compatibility subclasses; `*_widget.py` files reduced to wrappers.
-- [ ] Follow-up: remove temporary legacy imports once direct implementations are extracted from `scheduler/legacy_core.py` and `ui/legacy.py`.
+- [x] Removed temporary legacy imports. `scheduler/legacy_core.py` and `ui/legacy.py` are compatibility-only facades.

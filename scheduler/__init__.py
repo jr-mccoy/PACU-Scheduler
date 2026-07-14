@@ -1,74 +1,74 @@
-"""Stable backend entrypoint for scheduler consumers.
+"""Stable public API for the PACU scheduling backend.
 
-Public API
-==========
-The GUI and external callers should import backend symbols from this package
-instead of versioned module filenames.
-
-Core scheduling API relied on by the GUI:
-
-- ``NurseScheduler``
-- ``SchedulerConfig``
-- ``build_scheduler_from_settings``
-- ``build_scheduler_config_from_settings``
-- ``build_scheduler_service`` / ``SchedulerService`` / ``BackendService``
-- ``SharedSettings``
-- ``NurseManager``
-- ``PreScheduler``
-- ``AssignmentHistory``
-- ``WeekendHistory``
-- ``WeekendPattern``
-- ``_evaluate_variant_worker``
-
-Debug helpers used by legacy GUI wiring:
-
-- ``AssignmentDebugLogger``
-- ``ASSIGNMENT_DEBUG_LOGGER``
-- ``_open_dbg``
-
-Deprecated (will be removed in a future release):
-
-- ``NurseSchedulerUI`` and ``VisualCalendarUI`` now live in the top-level
-  ``cli`` package. Importing them from ``scheduler`` still works but emits
-  a :class:`DeprecationWarning`.
+Implementations are owned by focused modules; no public package import routes
+through the deprecated ``legacy_core`` compatibility facade.
 """
 
-from .domain import (
-    WeekendPattern,
-    SchedulerConfig,
-    ScheduleState,
-    ScheduleVariant,
-    ScheduleQuality,
-)
-from .repositories import DatabaseMixin, WeekendHistory, NurseManager, AssignmentHistory
-from .engine import NurseScheduler, _evaluate_variant_worker, _evaluate_variant_worker_profiled
-from .profiling import (
-    PhaseMetrics,
-    WorkerMetrics,
-    PerformanceProfiler,
-    MetricsCollector,
-    PerformanceReport,
-)
 from .debug import (
-    _open_dbg,
+    ASSIGNMENT_DEBUG_LOGGER,
+    AssignmentDebugLogger,
+    _accept,
     _dbg_pairs,
     _dbg_variants,
-    _reject,
-    _accept,
+    _open_dbg,
     _pair,
-    configure_pair_variant_debug,
+    _reject,
     configure_assignment_debug_logger,
+    configure_pair_variant_debug,
+    log,
 )
-from .history_services import WeekendHistoryService, ViolationHistoryService
-from .legacy_core import (
-    PreScheduler,
-    SharedSettings,
-    build_scheduler_from_settings,
+from .debug import _DEBUG, _LOG_FILE_CACHE
+from .domain import (
+    BestStateTracker,
+    Comparison,
+    NurseManagerProtocol,
+    PreSchedulerProtocol,
+    Role,
+    ScheduleQuality,
+    ScheduleState,
+    ScheduleVariant,
+    SchedulerConfig,
+    StateSnapshot,
+    WeekBackup,
+    WeekendAssignment,
+    WeekendHistoryProtocol,
+    WeekendPattern,
+)
+from .engine import (
+    WORKER_TUNING,
+    NurseScheduler,
+    WorkerTuningConfig,
+    _evaluate_variant_worker,
+    _evaluate_variant_worker_profiled,
+)
+from .factory import (
+    BackendService,
+    SchedulerService,
     build_scheduler_config_from_settings,
-    AssignmentDebugLogger,
-    ASSIGNMENT_DEBUG_LOGGER,
+    build_scheduler_from_settings,
+    build_scheduler_service,
 )
-from .factory import BackendService, SchedulerService, build_scheduler_service
+from .history_services import ViolationHistoryService, WeekendHistoryService
+from .platform import allow_sleep, inhibit_sleep
+from .profiling import (
+    MetricsCollector,
+    PerformanceProfiler,
+    PerformanceReport,
+    PhaseMetrics,
+    WorkerMetrics,
+)
+from .repositories import (
+    AssignmentHistory,
+    DBColumns,
+    DBTables,
+    DatabaseMixin,
+    DateUtils,
+    NurseManager,
+    PreScheduler,
+    WeekendHistory,
+)
+from .runtime import is_empty
+from .settings import SharedSettings
 
 
 __all__ = [
@@ -76,25 +76,41 @@ __all__ = [
     "ASSIGNMENT_DEBUG_LOGGER",
     "AssignmentHistory",
     "BackendService",
+    "BestStateTracker",
+    "Comparison",
+    "DBColumns",
+    "DBTables",
     "DatabaseMixin",
+    "DateUtils",
     "MetricsCollector",
     "NurseManager",
+    "NurseManagerProtocol",
     "NurseScheduler",
     "PerformanceProfiler",
     "PerformanceReport",
     "PhaseMetrics",
     "PreScheduler",
+    "PreSchedulerProtocol",
+    "Role",
     "ScheduleQuality",
     "SchedulerConfig",
     "SchedulerService",
     "ScheduleState",
     "ScheduleVariant",
     "SharedSettings",
+    "StateSnapshot",
     "ViolationHistoryService",
+    "WeekBackup",
+    "WeekendAssignment",
     "WeekendHistory",
+    "WeekendHistoryProtocol",
     "WeekendHistoryService",
     "WeekendPattern",
+    "WORKER_TUNING",
     "WorkerMetrics",
+    "WorkerTuningConfig",
+    "_DEBUG",
+    "_LOG_FILE_CACHE",
     "_accept",
     "_dbg_pairs",
     "_dbg_variants",
@@ -103,33 +119,37 @@ __all__ = [
     "_open_dbg",
     "_pair",
     "_reject",
+    "allow_sleep",
     "build_scheduler_config_from_settings",
     "build_scheduler_from_settings",
     "build_scheduler_service",
     "configure_assignment_debug_logger",
     "configure_pair_variant_debug",
+    "inhibit_sleep",
+    "is_empty",
+    "log",
 ]
 
 
 _DEPRECATED_CLI_REEXPORTS = {
+    "CLIHelper": ("cli.nurse_scheduler_ui", "CLIHelper"),
+    "InputValidator": ("cli.nurse_scheduler_ui", "InputValidator"),
     "NurseSchedulerUI": ("cli.nurse_scheduler_ui", "NurseSchedulerUI"),
     "VisualCalendarUI": ("cli.nurse_scheduler_ui", "VisualCalendarUI"),
 }
 
 
-def __getattr__(name: str):  # pragma: no cover - thin deprecation shim
-    """Lazy re-export of CLI classes for callers that haven't migrated yet."""
+def __getattr__(name: str):  # pragma: no cover - compatibility only
     if name in _DEPRECATED_CLI_REEXPORTS:
         import importlib
         import warnings
 
-        module_name, attr = _DEPRECATED_CLI_REEXPORTS[name]
+        module_name, attribute = _DEPRECATED_CLI_REEXPORTS[name]
         warnings.warn(
-            f"scheduler.{name} has moved to {module_name}.{attr}; "
+            f"scheduler.{name} has moved to {module_name}.{attribute}; "
             "import it from the `cli` package instead.",
             DeprecationWarning,
             stacklevel=2,
         )
-        module = importlib.import_module(module_name)
-        return getattr(module, attr)
+        return getattr(importlib.import_module(module_name), attribute)
     raise AttributeError(f"module 'scheduler' has no attribute {name!r}")

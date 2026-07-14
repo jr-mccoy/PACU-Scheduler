@@ -1,48 +1,9 @@
-"""Temporary compatibility shim for legacy ``NCSSQL55`` imports.
-
-During migration, import backend symbols from ``scheduler`` directly.
-"""
+"""Deprecated compatibility facade for legacy ``NCSSQL55`` imports."""
 
 from warnings import warn as _warn
 
-from scheduler import (
-    ASSIGNMENT_DEBUG_LOGGER,
-    AssignmentDebugLogger,
-    AssignmentHistory,
-    BackendService,
-    DatabaseMixin,
-    MetricsCollector,
-    NurseManager,
-    NurseScheduler,
-    PerformanceProfiler,
-    PerformanceReport,
-    PhaseMetrics,
-    PreScheduler,
-    ScheduleQuality,
-    SchedulerConfig,
-    SchedulerService,
-    ScheduleState,
-    ScheduleVariant,
-    SharedSettings,
-    ViolationHistoryService,
-    WeekendHistory,
-    WeekendHistoryService,
-    WeekendPattern,
-    WorkerMetrics,
-    _accept,
-    _dbg_pairs,
-    _dbg_variants,
-    _evaluate_variant_worker,
-    _evaluate_variant_worker_profiled,
-    _open_dbg,
-    _pair,
-    _reject,
-    build_scheduler_config_from_settings,
-    build_scheduler_from_settings,
-    build_scheduler_service,
-    configure_assignment_debug_logger,
-    configure_pair_variant_debug,
-)
+from scheduler import *  # noqa: F403 - compatibility surface is intentional
+from scheduler import __all__ as __all__
 
 _warn(
     "NCSSQL55 is deprecated and will be removed in a future release. "
@@ -51,41 +12,9 @@ _warn(
     stacklevel=2,
 )
 
-__all__ = [
-    "AssignmentDebugLogger",
-    "ASSIGNMENT_DEBUG_LOGGER",
-    "AssignmentHistory",
-    "BackendService",
-    "DatabaseMixin",
-    "MetricsCollector",
-    "NurseManager",
-    "NurseScheduler",
-    "PerformanceProfiler",
-    "PerformanceReport",
-    "PhaseMetrics",
-    "PreScheduler",
-    "ScheduleQuality",
-    "SchedulerConfig",
-    "SchedulerService",
-    "ScheduleState",
-    "ScheduleVariant",
-    "SharedSettings",
-    "ViolationHistoryService",
-    "WeekendHistory",
-    "WeekendHistoryService",
-    "WeekendPattern",
-    "WorkerMetrics",
-    "_accept",
-    "_dbg_pairs",
-    "_dbg_variants",
-    "_evaluate_variant_worker",
-    "_evaluate_variant_worker_profiled",
-    "_open_dbg",
-    "_pair",
-    "_reject",
-    "build_scheduler_config_from_settings",
-    "build_scheduler_from_settings",
-    "build_scheduler_service",
-    "configure_assignment_debug_logger",
-    "configure_pair_variant_debug",
-]
+
+def __getattr__(name: str):
+    """Preserve lazy access to CLI names moved out of the backend package."""
+    import scheduler
+
+    return getattr(scheduler, name)

@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
 
 from scheduler import AssignmentHistory, WeekendHistory
 
+from ..config import DB_NAME
 from ..dialogs.rotation_violation_dialog import RotationViolationDialog
 from ..dialogs.variant_review_dialog import VariantReviewDialog
-from ..legacy import DB_NAME, UiStyle, show_error, show_info, show_warning
+from ..messages import show_error, show_info, show_warning
+from ..style import UiStyle
 from ..widgets.date_pickers import MultiDatePicker, SingleDatePicker
 from ..worker_threads import ScheduleProgressWorker
 
@@ -164,7 +166,7 @@ class ScheduleGenerationScreen(QWidget):
             picker.set_theme(theme, accent)
 
     def _on_worker_finished(self, variants, scheduler, wh):
-        from ..legacy import _save_outputs_for_variants
+        from ..services.variant_export import _save_outputs_for_variants
 
         # hide progress bar
         if self._progress:

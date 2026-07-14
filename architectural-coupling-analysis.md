@@ -1,8 +1,16 @@
 # PACU-SCHEDULER — Coupling & Cohesion Analysis
 
+> **Migration status (2026-07-13): complete.** This document records the
+> original findings and phased work. Concrete backend and UI implementations
+> now live in focused owned modules. `scheduler/legacy_core.py` and
+> `ui/legacy.py` have been reduced to compatibility-only facades, and the
+> deprecated root modules contain no application implementation.
+
 ## 1. Overall Assessment
 
-The repository is mid-migration from two monolithic modules (`scheduler/legacy_core.py` — 7,772 LOC; `ui/legacy.py` — 5,231 LOC) toward focused, single-purpose modules. The migration is acknowledged in `README.md:14-22` and `code-review.md:899-906`. The extracted modules (`scheduler/constraints.py`, `scheduler/scoring.py`, `scheduler/assignment.py`, `scheduler/history_services.py`, `ui/theme.py`) show high cohesion and low coupling, but the bulk of the logic still lives inside god-classes inside the two legacy files.
+The repository began with two monolithic implementation modules. The findings
+below describe that pre-refactor state and the rationale for the completed
+migration; they are retained as an architectural decision record.
 
 **Confidence: High** — based on direct file/class/method counts, import graph inspection, and an explicit in-tree migration checklist (`code-review.md:899-906`) and TODO (`README.md:14-22`) confirming intent.
 

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..legacy import UiStyle
+from ..style import UiStyle
 
 
 class MainMenu(QWidget):

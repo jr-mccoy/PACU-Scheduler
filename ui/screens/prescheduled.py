@@ -25,8 +25,10 @@ from PySide6.QtWidgets import (
 
 from scheduler import NurseManager, PreScheduler
 
+from ..config import DB_NAME
 from ..dialogs.tool_dialog import ToolDialog
-from ..legacy import DB_NAME, UiStyle, confirm, show_warning
+from ..messages import confirm, show_warning
+from ..style import UiStyle
 from ..widgets.date_pickers import SingleDatePicker
 
 

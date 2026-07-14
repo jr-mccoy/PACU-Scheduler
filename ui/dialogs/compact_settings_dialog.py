@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .tool_dialog import ToolDialog
+from ..widgets.common import WrappedCheck
 
 try:  # pragma: no cover - environment-dependent
     from PySide6.QtGui import QGuiApplication as _AppScreen
@@ -38,8 +39,6 @@ class CompactSettingsDialog(ToolDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent, title="Settings")
         self.settings = settings
-
-        from ..legacy import WrappedCheck
 
         body = QVBoxLayout()
         body.setContentsMargins(8, 8, 8, 8)

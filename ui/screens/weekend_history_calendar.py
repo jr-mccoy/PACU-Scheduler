@@ -26,8 +26,9 @@ from PySide6.QtWidgets import (
 
 from scheduler import NurseManager, WeekendHistory
 
+from ..config import DB_NAME
 from ..dialogs.tool_dialog import ToolDialog
-from ..legacy import DB_NAME, confirm, show_info, show_warning
+from ..messages import confirm, show_info, show_warning
 
 
 class WeekendHistoryCalendarScreen(QWidget):

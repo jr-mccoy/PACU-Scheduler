@@ -704,56 +704,6 @@ class NurseScheduler:
 
         return True, True
 
-    def _is_nurse_valid_for_pattern(
-        self,
-        nurse: str,
-        weekend: pd.Timestamp,
-        variant,
-        pattern: "WeekendPattern",
-    ) -> bool:
-        """
-        Test whether basic hard rules allow `nurse` to work the given `pattern`
-        on `weekend`.
-    
-        Rotation repetition is evaluated elsewhere; this only checks PRN,
-        availability, and backward gap constraints.
-        """
-        # PRN staff never work weekends
-        if self.nurse_manager.is_prn_nurse(nurse):
-            return False
-    
-        # Must be available for all three days (NaN = unavailable)
-        weekend_dates = self._weekend_dates(weekend)
-        if not all(d in self.availability.index for d in weekend_dates):
-            return False
-    
-        try:
-            avail_ok = (
-                self.availability.loc[weekend_dates, nurse]
-                .map(lambda v: (not pd.isna(v)) and bool(v))
-                .all()
-            )
-            if not avail_ok:
-                return False
-        except KeyError:
-            return False
-    
-        # Backward gap: use nurse_weekend_lists (Fridays-only), not last_assignment
-        prev_friday, _ = variant._get_neighboring_fridays(nurse, weekend)
-        if prev_friday is not None:
-            if (weekend - prev_friday).days <= self.config.weekend_gap_days:
-                return False
-    
-        return True
-        
-    def _is_nurse_valid_for_fsf(self, nurse, weekend, variant):
-        """Return True iff <nurse> can take the FSF pattern on <weekend>."""
-        return self._is_nurse_valid_for_pattern(nurse, weekend, variant, WeekendPattern.FSF)
-
-    def _is_nurse_valid_for_sfs(self, nurse, weekend, variant):
-        """Return True iff <nurse> can take the SFS pattern on <weekend>."""
-        return self._is_nurse_valid_for_pattern(nurse, weekend, variant, WeekendPattern.SFS)
-
     # =====================================================================
     # NURSE PAIR VALIDATION METHODS
     # =====================================================================
@@ -953,6 +903,7 @@ class NurseScheduler:
             _runtime._DBG_FILE_VARIANTS.truncate()
         _dbg_variants("=== generate_all_weekend_variants debug ===")
 
+        self.rotation_violation_history = defaultdict(list)
         self._rotation_violations = []
         self._rotation_enforced = True
 
@@ -979,6 +930,7 @@ class NurseScheduler:
                     _dbg_variants(f"  ERROR: no variants left after {friday.date()}")
                     return []
 
+            self._collect_rotation_violations(variants)
             _dbg_variants(f"\nFinal total variants: {len(variants)}")
             return variants
 
@@ -1003,14 +955,15 @@ class NurseScheduler:
         next_vars: list[ScheduleVariant] = []
         fixed = pre_weekend_assignments.get(friday, {})
 
-        # Strict pass
         if not allow_rotation_violations:
-            next_vars = self._generate_strict_variants(variants, friday, fixed, 
+            # Strict pass only. No silent per-weekend fallback to the relaxed
+            # branch: callers that want repeats must pass
+            # allow_rotation_violations=True (the STRICT_THEN_RELAXED flow does
+            # this after the confirm_rotation_callback gate approves it).
+            next_vars = self._generate_strict_variants(variants, friday, fixed,
                                                      pre_weekend_assignments)
             _dbg_variants(f"  after strict pass: {len(next_vars)} variants")
-
-        # Repeat-allowed pass
-        if allow_rotation_violations or not next_vars:
+        else:
             next_vars = self._generate_relaxed_variants(variants, friday, fixed,
                                                       pre_weekend_assignments, next_vars)
             _dbg_variants(f"  after repeat-allowed pass: {len(next_vars)} variants")
@@ -1048,19 +1001,37 @@ class NurseScheduler:
                 nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
             )
             for fsf, sfs in pairs:
-                # Track violations for reporting
-                self._track_rotation_violations(var, friday, fsf, sfs)
                 clone = var.clone()
+                # assign_weekend records any rotation repeat on the clone
+                # itself, so violations stay attributable to the branch that
+                # actually contains them.
                 clone.assign_weekend(friday, fsf, sfs)
                 next_vars.append(clone)
         return next_vars
 
-    def _track_rotation_violations(self, var, friday, fsf, sfs):
-        """Track rotation violations for reporting purposes."""
-        for nurse, new_pat in ((fsf, WeekendPattern.FSF), (sfs, WeekendPattern.SFS)):
-            if var.state.last_pattern.get(nurse) == new_pat:
+    def _collect_rotation_violations(self, variants) -> None:
+        """
+        Rebuild scheduler-level rotation-violation reporting from the
+        surviving variants' per-branch records.
+
+        Each distinct (weekend, nurse, pattern) is counted once, no matter how
+        many surviving branches share it — unlike the old per-(parent × pair)
+        tracking, pruned branches contribute nothing and shared ancestry does
+        not inflate the counts.
+        """
+        self.rotation_violation_history = defaultdict(list)
+        self._rotation_violations = []
+        seen: set[tuple] = set()
+        for var in variants:
+            for friday, nurse, pattern_value in getattr(var, "rotation_violations", []):
+                key = (friday, nurse, pattern_value)
+                if key in seen:
+                    continue
+                seen.add(key)
                 self.rotation_violation_history[nurse].append(friday)
-                self._rotation_violations.append((friday.isoformat(), nurse, new_pat.value))
+                self._rotation_violations.append(
+                    (friday.isoformat(), nurse, pattern_value)
+                )
 
     # =====================================================================
     # STATE AND UTILITY METHODS

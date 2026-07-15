@@ -222,8 +222,8 @@ def test_violation_manual_override_persists_until_explicit_rebuild(temp_weekend_
     assert history.get_violation_counts()["Alice"] == 1
 
 
-def _build_variant(nurses=("Alice", "Bob")) -> ScheduleVariant:
-    idx = pd.date_range("2026-01-02", periods=5, freq="D")
+def _build_variant(nurses=("Alice", "Bob"), periods=5) -> ScheduleVariant:
+    idx = pd.date_range("2026-01-02", periods=periods, freq="D")
     schedule = pd.DataFrame(index=idx, columns=["main", "backup"], data=None)
     counts_idx = pd.Index(list(nurses))
     state = ScheduleState(
@@ -415,7 +415,10 @@ def test_generation_mode_strict_only(monkeypatch, scheduler_for_modes):
     assert calls == ["strict"]
 
 
-def test_generation_mode_strict_then_relaxed(monkeypatch, scheduler_for_modes):
+def test_generation_mode_strict_never_relaxes_per_weekend(monkeypatch, scheduler_for_modes):
+    """A strict pass that yields nothing must NOT silently fall back to the
+    relaxed branch inside the same call — that fallback made STRICT_ONLY
+    non-strict and left the STRICT_THEN_RELAXED confirmation gate dead."""
     calls = []
     monkeypatch.setattr(
         scheduler_for_modes,
@@ -431,8 +434,48 @@ def test_generation_mode_strict_then_relaxed(monkeypatch, scheduler_for_modes):
     out = scheduler_for_modes._process_weekend_variants(
         pd.Timestamp("2026-01-02"), [_build_variant()], {}, allow_rotation_violations=False
     )
-    assert out == ["relaxed"]
-    assert calls == ["strict", "relaxed"]
+    assert out == []
+    assert calls == ["strict"]
+
+
+def test_strict_then_relaxed_gate_declined_aborts(monkeypatch, scheduler_for_modes):
+    calls = []
+
+    def fake_generate(*, allow_rotation_violations=False):
+        calls.append(allow_rotation_violations)
+        return []
+
+    monkeypatch.setattr(
+        scheduler_for_modes, "generate_all_weekend_variants", fake_generate
+    )
+
+    out = scheduler_for_modes._generate_weekend_variants(
+        confirm_rotation_callback=lambda: False,
+        weekend_variant_mode=NurseScheduler.WeekendVariantMode.STRICT_THEN_RELAXED,
+    )
+    assert out == []
+    # Strict attempt only; the relaxed retry must not run when declined.
+    assert calls == [False]
+
+
+def test_strict_then_relaxed_gate_accepted_retries_relaxed(monkeypatch, scheduler_for_modes):
+    calls = []
+    sentinel = ["relaxed-variant"]
+
+    def fake_generate(*, allow_rotation_violations=False):
+        calls.append(allow_rotation_violations)
+        return sentinel if allow_rotation_violations else []
+
+    monkeypatch.setattr(
+        scheduler_for_modes, "generate_all_weekend_variants", fake_generate
+    )
+
+    out = scheduler_for_modes._generate_weekend_variants(
+        confirm_rotation_callback=lambda: True,
+        weekend_variant_mode=NurseScheduler.WeekendVariantMode.STRICT_THEN_RELAXED,
+    )
+    assert out == sentinel
+    assert calls == [False, True]
 
 
 def test_generation_mode_relaxed_immediately(monkeypatch, scheduler_for_modes):
@@ -453,6 +496,68 @@ def test_generation_mode_relaxed_immediately(monkeypatch, scheduler_for_modes):
     )
     assert out == ["relaxed"]
     assert calls == ["relaxed"]
+
+
+# anchor: def assign_weekend
+
+def test_assign_weekend_records_rotation_repeat_on_variant():
+    friday = pd.Timestamp("2026-01-02")
+    variant = _build_variant()
+    variant.state.last_pattern["Alice"] = WeekendPattern.FSF
+
+    variant.assign_weekend(friday, "Alice", "Bob")  # Alice repeats FSF
+
+    assert variant.rotation_violations == [
+        (friday, "Alice", WeekendPattern.FSF.value)
+    ]
+    assert variant.state.rotation_repeats == 1
+
+
+def test_assign_weekend_no_repeat_records_nothing():
+    variant = _build_variant()
+    variant.state.last_pattern["Alice"] = WeekendPattern.SFS
+
+    variant.assign_weekend(pd.Timestamp("2026-01-02"), "Alice", "Bob")
+
+    assert variant.rotation_violations == []
+    assert variant.state.rotation_repeats == 0
+
+
+def test_clone_isolates_rotation_violations():
+    friday = pd.Timestamp("2026-01-02")
+    parent = _build_variant()
+    parent.state.last_pattern["Alice"] = WeekendPattern.FSF
+
+    child = parent.clone()
+    child.assign_weekend(friday, "Alice", "Bob")
+
+    assert parent.rotation_violations == []
+    assert child.rotation_violations == [
+        (friday, "Alice", WeekendPattern.FSF.value)
+    ]
+
+
+def test_collect_rotation_violations_deduplicates_shared_ancestry(scheduler_for_modes):
+    friday = pd.Timestamp("2026-01-02")
+    parent = _build_variant(periods=10)
+    parent.state.last_pattern["Alice"] = WeekendPattern.FSF
+
+    # Two surviving branches that share the same inherited violation, one of
+    # which adds branch-specific violations later.
+    branch_a = parent.clone()
+    branch_a.assign_weekend(friday, "Alice", "Bob")
+    branch_b = branch_a.clone()
+    next_friday = pd.Timestamp("2026-01-09")
+    branch_b.assign_weekend(next_friday, "Alice", "Bob")
+
+    scheduler_for_modes._collect_rotation_violations([branch_a, branch_b])
+
+    history = scheduler_for_modes.get_rotation_violation_history()
+    # Shared violation counted once despite appearing in both branches.
+    assert history["Alice"].count(friday) == 1
+    assert (next_friday.isoformat(), "Bob", WeekendPattern.SFS.value) in (
+        scheduler_for_modes._rotation_violations
+    )
 
 
 # anchor: _rotation_violation_score

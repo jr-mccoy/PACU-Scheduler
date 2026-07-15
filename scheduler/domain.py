@@ -660,6 +660,12 @@ class ScheduleVariant:
         # Immutable dict supplied by caller – we may share safely
         self.pre_scheduled = pre_scheduled or {}
 
+        # Rotation-pattern repeats introduced on THIS branch of the search
+        # tree, as (weekend_friday, nurse, pattern_value) tuples. Populated by
+        # assign_weekend() and copied on clone(), so every final schedule
+        # carries exactly the violations that belong to it.
+        self.rotation_violations: List[Tuple[pd.Timestamp, str, str]] = []
+
         if console_debug is None:
             env_val = os.getenv("SCHEDULE_VARIANT_DEBUG", "1")
             try:
@@ -883,7 +889,7 @@ class ScheduleVariant:
         copies of all mutable state.  Read-only data (availability, hist,
         nurses, config, nurse_manager) is shared via _skip_copy=True.
         """
-        return ScheduleVariant(
+        new_variant = ScheduleVariant(
             state=self.state.clone(),
             nurses=self.nurses,
             availability=self.availability,
@@ -895,6 +901,8 @@ class ScheduleVariant:
             console_debug=self._console_debug,
             _skip_copy=True,
         )
+        new_variant.rotation_violations = list(self.rotation_violations)
+        return new_variant
    
     def _is_pre_scheduled(self, date: pd.Timestamp, role: str) -> bool:
         """Returns True if the given date/role is pre-scheduled with a non-empty nurse name."""
@@ -946,6 +954,17 @@ class ScheduleVariant:
         """
         weekend_dates = self._get_weekend_dates(weekend_start)
         assignments = self._get_weekend_assignments(fsf_nurse, sfs_nurse)
+
+        # Record pattern repeats against THIS branch before last_pattern is
+        # overwritten, so violations stay attributable per final schedule.
+        for nurse, new_pattern in (
+            (fsf_nurse, WeekendPattern.FSF),
+            (sfs_nurse, WeekendPattern.SFS),
+        ):
+            if self.state.last_pattern.get(nurse) == new_pattern:
+                self.rotation_violations.append(
+                    (weekend_start, nurse, new_pattern.value)
+                )
 
         self._apply_weekend_assignments(weekend_dates, assignments)
         self._update_weekend_tracking(weekend_start, fsf_nurse, sfs_nurse)

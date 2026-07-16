@@ -69,6 +69,13 @@ The algorithm's isolation and state-update guarantees are sound; it is the
 
 ## Part B — Logic errors in the existing code
 
+> **Status update:** B1–B4 below are **resolved**. Strict generation no longer
+> falls back to the relaxed branch inside the same call (B1/B2), rotation
+> violations are recorded per-variant in `ScheduleVariant.assign_weekend` and
+> deduplicated into the scheduler-level history from surviving variants only
+> (B3), and the dead `_is_nurse_valid_for_*` validators were removed (B4).
+> The sections below are preserved as the record of the original findings.
+
 ### B1. `STRICT_ONLY` is not strict; the rotation-violation user-gate is dead *(most serious)*
 
 In `_process_weekend_variants` (`engine.py:1006-1016`) the relaxed pass fires

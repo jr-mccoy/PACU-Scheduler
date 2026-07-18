@@ -1272,10 +1272,15 @@ class NurseScheduler:
                     except Exception as ex:
                         logger.error(f"Worker {fut_map[fut]} failed: {ex}")
         except Exception as e:
-            # Fallback: run serially
+            # Fallback: run serially. Reset any partial results so a
+            # mid-iteration pool failure does not leave duplicate idx entries.
             logger.warning(f"ProcessPool failed ({e}); evaluating serially.")
+            candidate_schedules = []
             for idx, var in enumerate(variants):
-                candidate_schedules.append(_evaluate_variant_worker((idx, var)))
+                try:
+                    candidate_schedules.append(_evaluate_variant_worker((idx, var)))
+                except Exception as ex:
+                    logger.error(f"Serial worker {idx} failed: {ex}")
 
         return candidate_schedules
 
@@ -1300,7 +1305,11 @@ class NurseScheduler:
                     except Exception as ex:
                         logger.error(f"Worker {fut_map[fut]} failed: {ex}")
         except Exception as e:
+            # Reset any partial results so a mid-iteration pool failure does
+            # not leave duplicate idx entries.
             logger.warning(f"ProcessPool failed ({e}); evaluating serially with profiling.")
+            candidate_schedules = []
+            all_worker_metrics = []
             for idx, var in enumerate(variants):
                 try:
                     result = _evaluate_variant_worker_profiled((idx, var))

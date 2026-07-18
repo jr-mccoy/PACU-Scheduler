@@ -1259,6 +1259,7 @@ class ScheduleVariant:
             self.state.schedule.at[date, role] = pick
             counts[pick] += 1
             self.state.last_assignment[pick] = date
+            self._invalidate_weekday_cache()
 
             self._log_assignment_debug(
                 context="weekday_assign",

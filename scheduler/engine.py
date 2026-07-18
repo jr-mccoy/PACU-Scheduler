@@ -155,13 +155,6 @@ class NurseScheduler:
             self.last_assignment[nurse] = last_wk
             self.last_pattern[nurse] = self.weekend_history.get_last_pattern(nurse)
 
-    @staticmethod
-    def _as_friday(d: pd.Timestamp) -> pd.Timestamp:
-        """Return the Friday of the Fri–Sun block containing d."""
-        # Friday == 4 (same convention used across the module)
-        offset = (d.weekday() - NurseScheduler.FRIDAY_WEEKDAY) % 7
-        return d - pd.Timedelta(days=offset)
-
     def _initialize_historical_data(self):
         """Initialize historical assignment tracking."""
         try:
@@ -632,7 +625,11 @@ class NurseScheduler:
         gap_min = self.config.weekend_gap_days
     
         # ── backward gap: use historic last and any prior worked weekend in this schedule ──
-        prev_wk_hist = self.weekend_history.get_last_weekend_before(nurse, weekend)
+        # Normalize the history date to its Friday so the day-diff compares
+        # Friday→Friday, matching _weekend_gap_penalty's treatment of history.
+        prev_wk_hist = self._as_friday(
+            self.weekend_history.get_last_weekend_before(nurse, weekend)
+        )
     
         prev_wk_sched = None
         prior_fridays = [
@@ -935,7 +932,11 @@ class NurseScheduler:
             return variants
 
         except Exception:
-            import traceback
+            # Log unconditionally so a genuine crash is not silently reported as
+            # "no feasible schedule" (the debug sink is off unless NSCHED_DEBUG).
+            logger.error(
+                "generate_all_weekend_variants failed:\n%s", traceback.format_exc()
+            )
             _dbg_variants("EXCEPTION:\n")
             _dbg_variants(traceback.format_exc())
             return []
@@ -1272,10 +1273,15 @@ class NurseScheduler:
                     except Exception as ex:
                         logger.error(f"Worker {fut_map[fut]} failed: {ex}")
         except Exception as e:
-            # Fallback: run serially
+            # Fallback: run serially. Reset any partial results so a
+            # mid-iteration pool failure does not leave duplicate idx entries.
             logger.warning(f"ProcessPool failed ({e}); evaluating serially.")
+            candidate_schedules = []
             for idx, var in enumerate(variants):
-                candidate_schedules.append(_evaluate_variant_worker((idx, var)))
+                try:
+                    candidate_schedules.append(_evaluate_variant_worker((idx, var)))
+                except Exception as ex:
+                    logger.error(f"Serial worker {idx} failed: {ex}")
 
         return candidate_schedules
 
@@ -1300,7 +1306,11 @@ class NurseScheduler:
                     except Exception as ex:
                         logger.error(f"Worker {fut_map[fut]} failed: {ex}")
         except Exception as e:
+            # Reset any partial results so a mid-iteration pool failure does
+            # not leave duplicate idx entries.
             logger.warning(f"ProcessPool failed ({e}); evaluating serially with profiling.")
+            candidate_schedules = []
+            all_worker_metrics = []
             for idx, var in enumerate(variants):
                 try:
                     result = _evaluate_variant_worker_profiled((idx, var))

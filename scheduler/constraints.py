@@ -85,7 +85,13 @@ def validate_weekday_relative_to_weekend(
     """Shared weekday-weekend guard used by normal weekday assignment."""
     weekday = date.weekday()
     if is_in_pre_weekend_window(nurse, date):
-        return weekday == 0
+        # Only Monday is allowed leading into a worked weekend.
+        if weekday != 0:
+            return False
+        # A Monday that also falls in the post-weekend window still owes the
+        # 2-day post-weekend gap, so fall through to the post-weekend check
+        # rather than returning early (this only arises with back-to-back
+        # weekends for the same nurse).
     if is_in_post_weekend_window(nurse, date):
         return validate_post_weekend_assignment(weekday=weekday, role=role, config=config)
     return True

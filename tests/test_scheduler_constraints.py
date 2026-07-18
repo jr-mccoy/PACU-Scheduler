@@ -55,3 +55,45 @@ def test_validate_weekday_relative_to_weekend_gap_allows_tuesday_pre_window():
         is_in_post_weekend_window=lambda *_: False,
     )
     assert ok is True
+
+
+def test_normal_monday_pre_window_only_is_allowed():
+    dt = pd.Timestamp("2026-01-05")  # Monday
+    ok = validate_weekday_relative_to_weekend(
+        nurse="Alice",
+        date=dt,
+        role="main",
+        config=_cfg(),
+        is_in_pre_weekend_window=lambda *_: True,
+        is_in_post_weekend_window=lambda *_: False,
+    )
+    assert ok is True
+
+
+def test_normal_monday_in_both_windows_is_blocked():
+    # A Monday sitting between two worked weekends (pre-window of the next,
+    # post-window of the previous) still owes the 2-day post-weekend gap and
+    # must not be auto-assigned.
+    dt = pd.Timestamp("2026-01-05")  # Monday
+    ok = validate_weekday_relative_to_weekend(
+        nurse="Alice",
+        date=dt,
+        role="main",
+        config=_cfg(),
+        is_in_pre_weekend_window=lambda *_: True,
+        is_in_post_weekend_window=lambda *_: True,
+    )
+    assert ok is False
+
+
+def test_normal_monday_post_window_only_is_blocked():
+    dt = pd.Timestamp("2026-01-05")  # Monday
+    ok = validate_weekday_relative_to_weekend(
+        nurse="Alice",
+        date=dt,
+        role="main",
+        config=_cfg(),
+        is_in_pre_weekend_window=lambda *_: False,
+        is_in_post_weekend_window=lambda *_: True,
+    )
+    assert ok is False

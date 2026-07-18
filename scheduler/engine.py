@@ -155,13 +155,6 @@ class NurseScheduler:
             self.last_assignment[nurse] = last_wk
             self.last_pattern[nurse] = self.weekend_history.get_last_pattern(nurse)
 
-    @staticmethod
-    def _as_friday(d: pd.Timestamp) -> pd.Timestamp:
-        """Return the Friday of the Fri–Sun block containing d."""
-        # Friday == 4 (same convention used across the module)
-        offset = (d.weekday() - NurseScheduler.FRIDAY_WEEKDAY) % 7
-        return d - pd.Timedelta(days=offset)
-
     def _initialize_historical_data(self):
         """Initialize historical assignment tracking."""
         try:

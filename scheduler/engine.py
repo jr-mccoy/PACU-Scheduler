@@ -932,7 +932,11 @@ class NurseScheduler:
             return variants
 
         except Exception:
-            import traceback
+            # Log unconditionally so a genuine crash is not silently reported as
+            # "no feasible schedule" (the debug sink is off unless NSCHED_DEBUG).
+            logger.error(
+                "generate_all_weekend_variants failed:\n%s", traceback.format_exc()
+            )
             _dbg_variants("EXCEPTION:\n")
             _dbg_variants(traceback.format_exc())
             return []

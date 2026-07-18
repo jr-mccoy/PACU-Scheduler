@@ -632,7 +632,11 @@ class NurseScheduler:
         gap_min = self.config.weekend_gap_days
     
         # ── backward gap: use historic last and any prior worked weekend in this schedule ──
-        prev_wk_hist = self.weekend_history.get_last_weekend_before(nurse, weekend)
+        # Normalize the history date to its Friday so the day-diff compares
+        # Friday→Friday, matching _weekend_gap_penalty's treatment of history.
+        prev_wk_hist = self._as_friday(
+            self.weekend_history.get_last_weekend_before(nurse, weekend)
+        )
     
         prev_wk_sched = None
         prior_fridays = [

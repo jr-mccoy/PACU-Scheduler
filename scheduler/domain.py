@@ -143,6 +143,7 @@ class SchedulerConfig:
                  scoring_weights: dict[str, float] | None = None,
                  # NEW:
                  allow_one_day_weekday_gap: bool = False,
+                 max_plateau_depth: int = 10,
                  **extra):
  
         if allow_one_day_weekday_gap is None:
@@ -151,6 +152,9 @@ class SchedulerConfig:
             allow_one_day_weekday_gap = bool(allow_one_day_weekday_gap)
 
         self.allow_one_day_weekday_gap               = allow_one_day_weekday_gap
+        # Neutral-move (plateau) allowance for local search; tune to trade
+        # exploration depth against compute (best-so-far is always retained).
+        self.max_plateau_depth                         = max(0, int(max_plateau_depth))
         self.weekend_gap_days                          = weekend_gap_days
         self.main_score_factor                         = main_score_factor
         self.backup_score_factor                       = backup_score_factor
@@ -432,7 +436,11 @@ class BestStateTracker:
         self._iteration_quality: Optional[ScheduleQuality] = None
 
         self._plateau_depth = 0
-        self._max_plateau_depth = 10
+        # Plateau allowance is a tunable knob (SchedulerConfig.max_plateau_depth);
+        # fall back to 10 if the variant carries no config.
+        self._max_plateau_depth = getattr(
+            getattr(variant, "config", None), "max_plateau_depth", 10
+        )
 
         self._improvements = 0
         self._neutrals = 0
@@ -2104,6 +2112,12 @@ class ScheduleVariant:
             initial_quality = tracker.begin_iteration("[Rebalance]")
 
         improved = False
+
+        # Give this phase its full neutral-move (plateau) allowance instead of
+        # inheriting an exhausted counter from an earlier phase that shared
+        # this tracker. Best-so-far is always retained, so a fresh allowance
+        # only ever helps the search cross plateaus toward a better schedule.
+        tracker.reset_plateau()
 
         if early_stop_spread:
             s_b, s_m, _ = self._spread_components()

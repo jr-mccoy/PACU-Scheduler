@@ -188,6 +188,14 @@ was intended.
   first of these carries the same cache-staleness flaw as bug #1. Consider
   removing them.
 
+**Follow-up (2026-07-24):** all three robustness observations above are now
+addressed — variant branching is beam-capped via
+`SchedulerConfig.max_weekend_variants` (default 500, 0 = unlimited) with
+deterministic pruning after each weekend; pre-window worked days (weekend
+history plus the per-day `schedule_history` table) are seeded into every
+state snapshot and enforced by `_has_sufficient_spacing` at the window edge;
+and the five dead methods were removed.
+
 ---
 
 ## Verification notes

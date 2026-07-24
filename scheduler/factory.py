@@ -156,6 +156,12 @@ def build_scheduler_service(db_name: str = "nurse_schedule.db") -> SchedulerServ
 
 def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
     """Translate any settings-like object into a scheduler configuration."""
+    try:
+        max_weekend_variants = settings.get("max_weekend_variants")
+    except KeyError:
+        # Settings persisted before this knob existed fall back to the
+        # SchedulerConfig default.
+        max_weekend_variants = None
     return SchedulerConfig(
         weekend_gap_days=settings.get("weekend_gap_days"),
         main_score_factor=settings.get("main_score_factor"),
@@ -176,6 +182,7 @@ def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
         ),
         allow_one_day_weekday_gap=settings.get("allow_one_day_weekday_gap"),
         scoring_weights=settings.get("scoring_weights"),
+        max_weekend_variants=max_weekend_variants,
     )
 
 

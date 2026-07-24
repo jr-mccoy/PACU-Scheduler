@@ -23,6 +23,7 @@ class SharedSettings:
         "allow_post_weekend_thursday_main": True,
         "allow_post_weekend_thursday_backup": True,
         "allow_one_day_weekday_gap": False,
+        "max_weekend_variants": 500,
         "scoring_weights": {
             "rotation_rep": 0.30,
             "gaps":         0.20,

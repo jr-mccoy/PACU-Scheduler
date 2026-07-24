@@ -45,6 +45,9 @@ class AppSettings:
         # (Mon–Wed / Tue–Thu when NOT in a given nurse's pre/post-weekend period)
         "allow_one_day_weekday_gap": False,
 
+        # Beam cap on weekend variant branching (0 = unlimited)
+        "max_weekend_variants": 500,
+
         # Canonical scorer weights
         "scoring_weights": {
             "rotation_rep": 0.30,

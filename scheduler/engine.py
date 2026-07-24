@@ -918,6 +918,8 @@ class NurseScheduler:
                 pre_scheduled_slots,
             )
             variants = [initial]
+            max_variants = int(getattr(self.config, "max_weekend_variants", 0) or 0)
+            pruned_any = False
 
             for friday in weekends:
                 variants = self._process_weekend_variants(
@@ -925,7 +927,17 @@ class NurseScheduler:
                 )
                 if not variants:
                     _dbg_variants(f"  ERROR: no variants left after {friday.date()}")
+                    if pruned_any:
+                        logger.warning(
+                            "No feasible variants left after %s, but earlier weekends "
+                            "were pruned to max_weekend_variants=%d. Raising that limit "
+                            "may recover a feasible schedule.",
+                            friday.date(), max_variants,
+                        )
                     return []
+                if max_variants and len(variants) > max_variants:
+                    variants = self._prune_weekend_variants(variants, max_variants, friday)
+                    pruned_any = True
 
             self._collect_rotation_violations(variants)
             _dbg_variants(f"\nFinal total variants: {len(variants)}")
@@ -941,7 +953,45 @@ class NurseScheduler:
             _dbg_variants(traceback.format_exc())
             return []
 
-    def _process_weekend_variants(self, friday, variants, pre_weekend_assignments, 
+    def _prune_weekend_variants(self, variants, max_variants, friday):
+        """
+        Trim the variant beam to ``max_variants`` after one weekend's branching.
+
+        Growth is roughly (valid pairs)^(weekends) and each survivor later runs
+        the full clone → assign → gap-fill → rebalance pipeline, so an
+        unbounded beam can stall a whole generation run. Variants are kept by
+        a cheap weekend-only preference: fewest rotation repeats introduced on
+        the branch, then most even spread of weekends across nurses (history
+        included), then the largest minimum Friday-to-Friday gap. Sorting is
+        stable, so ties keep their original deterministic order.
+        """
+        def prune_key(variant):
+            lists = variant.state.nurse_weekend_lists
+            counts = [len(lists.get(n, ())) for n in self.nurses]
+            imbalance = (max(counts) - min(counts)) if counts else 0
+            min_gap = None
+            for fridays in lists.values():
+                for prev, nxt in zip(fridays, fridays[1:]):
+                    gap = (nxt - prev).days
+                    if min_gap is None or gap < min_gap:
+                        min_gap = gap
+            return (
+                len(variant.rotation_violations),
+                imbalance,
+                -(min_gap if min_gap is not None else 10**6),
+            )
+
+        logger.warning(
+            "Weekend %s produced %d variants; pruning beam to best %d "
+            "(max_weekend_variants).",
+            friday.date(), len(variants), max_variants,
+        )
+        _dbg_variants(
+            f"  pruning {len(variants)} variants to {max_variants} after {friday.date()}"
+        )
+        return sorted(variants, key=prune_key)[:max_variants]
+
+    def _process_weekend_variants(self, friday, variants, pre_weekend_assignments,
                                 allow_rotation_violations):
         """Process variants for a specific weekend."""
         _dbg_variants(f"\n--- Weekend {friday.date()} ---")
@@ -1054,8 +1104,49 @@ class NurseScheduler:
             self.last_assignment,
             self.last_pattern,
             self.weekend_tracking,
-            nurse_weekend_lists=weekend_lists
+            nurse_weekend_lists=weekend_lists,
+            pre_window_worked=self._collect_pre_window_worked_days(),
         )
+
+    def _collect_pre_window_worked_days(self) -> dict[str, set[pd.Timestamp]]:
+        """
+        Collect the days each nurse worked in the ``min_days_between_assignments``
+        days immediately before ``start_date``.
+
+        The in-window spacing check can only see schedule cells inside the
+        window, so without this a shift worked the day before ``start_date``
+        (a weekday shift from the persisted per-day history, or the tail of a
+        weekend) is invisible to ``min_days_between_assignments``.
+        """
+        lookback = int(getattr(self.config, "min_days_between_assignments", 0) or 0)
+        if lookback <= 0:
+            return {}
+        window_start = self.start_date - timedelta(days=lookback)
+        window_end = self.start_date - timedelta(days=1)
+
+        worked: dict[str, set[pd.Timestamp]] = {n: set() for n in self.nurses}
+
+        # Weekend history: FSF/SFS nurses both work Fri, Sat and Sun.
+        for nurse in self.nurses:
+            for friday in self.weekend_history.get_weekends(nurse):
+                for offset in range(3):
+                    day = friday + timedelta(days=offset)
+                    if window_start <= day <= window_end:
+                        worked[nurse].add(day)
+
+        # Per-day schedule history covers weekday shifts as well.
+        if getattr(self, "assignment_history", None):
+            try:
+                records = self.assignment_history.get_history(window_start, window_end)
+            except Exception:
+                records = []
+            for date_str, main, backup in records:
+                day = DateUtils.normalize_date(date_str)
+                for nurse in (main, backup):
+                    if nurse in worked:
+                        worked[nurse].add(day)
+
+        return {n: days for n, days in worked.items() if days}
 
     @staticmethod
     def is_empty(value) -> bool:

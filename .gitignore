@@ -2,3 +2,19 @@ __pycache__/
 *.pyc
 assignment_debug_*.csv
 assignment_debug_*.jsonl
+
+# Local scheduling database — contains real staff names and availability.
+# The schema is created on first run from scheduler/schema.sql; never commit
+# a populated database to this repository.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Generated schedule exports
+*.pdf
+
+# Environments
+.venv/
+venv/
+

@@ -2,12 +2,12 @@
 
 ## Source Snapshot Used
 
-This document was extracted from the **first commit in this repository history**:
-
-- Commit: `cf5628aa4af1f3d360d9954851e24d5bc3727e75`
-- File at that commit: `NCSSQL57.py`
-- Retrieval command used:
-  - `git show cf5628a:NCSSQL57.py > /tmp/NCSSQL57_original.py`
+This document records the scheduling rules as they existed in the original
+single-file implementation, before it was decomposed into the `scheduler/`,
+`ui/`, and `cli/` packages. It is retained as an architectural decision record:
+the behaviour described here is the baseline the current engine is expected to
+preserve, and the characterization tests in
+`tests/test_scheduler_characterization.py` pin it down in code.
 
 The rules below are written in plain English and grouped into:
 

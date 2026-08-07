@@ -8,9 +8,9 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 import pytest
-import NCSSQL57 as scheduler_module
+from scheduler import debug as scheduler_module
 
-from NCSSQL57 import (
+from scheduler import (
     BestStateTracker,
     Comparison,
     NurseScheduler,

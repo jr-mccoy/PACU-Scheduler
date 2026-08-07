@@ -7,6 +7,7 @@ import datetime
 import logging
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -17,45 +18,20 @@ from .history_services import WeekendHistoryService, ViolationHistoryService
 logger = logging.getLogger(__name__)
 
 
-def _ensure_violation_table(db_name: str) -> None:
+_SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+
+def ensure_schema(db_name: str) -> None:
     """
-    Create the tables that store rotation-violation counts, violation dates,
-    and last/expected weekend patterns if they do not yet exist.
+    Create every table and index the application expects, if missing.
+
+    The statements in ``schema.sql`` are all ``IF NOT EXISTS``, so this is
+    idempotent and safe to call on each repository construction. Running it up
+    front is what lets a fresh checkout bootstrap an empty database instead of
+    relying on a pre-populated file being checked into the repository.
     """
     with sqlite3.connect(db_name) as conn:
-        # Counts table with all columns required by readers/writers
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rotation_violation_stats (
-                nurse_id            INTEGER PRIMARY KEY,
-                violation_count     INTEGER NOT NULL DEFAULT 0,
-                last_violation_date TEXT,
-                consec_violations   INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (nurse_id) REFERENCES nurses (nurse_id)
-            )
-        """)
-
-        # Violation dates table (unique nurse/date pairs)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rotation_violation_dates (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                nurse_id         INTEGER NOT NULL,
-                violation_date   TEXT NOT NULL,
-                pattern          TEXT NOT NULL,
-                previous_pattern TEXT NOT NULL,
-                FOREIGN KEY (nurse_id) REFERENCES nurses (nurse_id),
-                UNIQUE(nurse_id, violation_date)
-            )
-        """)
-
-        # Last-pattern storage for each nurse
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS weekend_rotation_history (
-                nurse_id              INTEGER PRIMARY KEY,
-                last_pattern          TEXT,
-                expected_next_pattern TEXT,
-                FOREIGN KEY (nurse_id) REFERENCES nurses (nurse_id)
-            )
-        """)
+        conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 class DatabaseMixin:
@@ -63,7 +39,8 @@ class DatabaseMixin:
     
     def __init__(self, db_name: str = 'nurse_schedule.db'):
         self.db_name = db_name
-    
+        ensure_schema(db_name)
+
     @contextmanager
     def get_db_connection(self):
         """Context manager for database connections with error handling."""
@@ -614,7 +591,7 @@ class DBColumns:
 class WeekendHistory:
     def __init__(self, db_name: str = "nurse_schedule.db"):
         self.db_name = db_name
-        _ensure_violation_table(self.db_name)
+        ensure_schema(self.db_name)
         self._assignments = self._load_assignments()
         self._last_patterns = self._load_last_patterns()
         self.weekend_service = WeekendHistoryService(self)

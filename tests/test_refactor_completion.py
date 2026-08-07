@@ -37,11 +37,6 @@ def test_legacy_modules_define_no_concrete_classes():
     assert _top_level_classes(ROOT / "ui" / "legacy.py") == []
 
 
-def test_root_compatibility_files_define_no_concrete_classes():
-    for filename in ("NCSSQL55.py", "NCSSQL57.py", "NCSSQLGUIFINALIST57.py"):
-        assert _top_level_classes(ROOT / filename) == []
-
-
 def test_production_modules_do_not_import_legacy_implementations():
     offenders: list[str] = []
     for package in (ROOT / "scheduler", ROOT / "ui", ROOT / "cli"):

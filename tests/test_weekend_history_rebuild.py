@@ -1,13 +1,13 @@
 """Regression tests for the WeekendHistory canonical/derived rebuild contract.
 
-These cover the bug classes documented in ``code-review.md`` lines 183-298:
+These cover the weekend derived-state bug classes:
 
 * editing an old weekend does not overwrite the real latest pattern
 * removing a weekend restores the correct prior pattern
 * restore() round-trip rebuilds both assignments and derived state
 
-The tests intentionally avoid importing the ``NCSSQL57`` compatibility shim so
-they can run in isolation from the GUI surface.
+The tests import directly from ``scheduler`` so they run in isolation from the
+GUI surface.
 """
 
 from __future__ import annotations

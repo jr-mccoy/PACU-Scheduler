@@ -92,13 +92,13 @@ def test_export_variant_pdf_produces_valid_multi_page_pdf(tmp_path: Path):
 
 def test_legacy_method_delegates_to_module_function():
     """The thin ``NurseScheduler._draw_week_rows`` shim must use the new path."""
-    from NCSSQL57 import NurseScheduler  # noqa: WPS433 - intentional shim use
+    from scheduler import NurseScheduler
 
     src = NurseScheduler._draw_week_rows.__code__
     assert "_draw_week_rows_fn" in src.co_names
 
 
 def test_default_font_sizes_match_legacy_constants():
-    from NCSSQL57 import NurseScheduler
+    from scheduler import NurseScheduler
 
     assert dict(DEFAULT_PDF_FONT_SIZES) == NurseScheduler.PDF_FONT_SIZES

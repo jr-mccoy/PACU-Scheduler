@@ -66,6 +66,7 @@ from .repositories import (
     NurseManager,
     PreScheduler,
     WeekendHistory,
+    ensure_schema,
 )
 from .runtime import is_empty
 from .settings import SharedSettings
@@ -125,6 +126,7 @@ __all__ = [
     "build_scheduler_service",
     "configure_assignment_debug_logger",
     "configure_pair_variant_debug",
+    "ensure_schema",
     "inhibit_sleep",
     "is_empty",
     "log",

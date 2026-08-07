@@ -384,16 +384,6 @@ class NurseManager(DatabaseMixin):
         )
         self.refresh_cache()
 
-#    def get_non_prn_nurses(self) -> List[str]:
-#        """Get list of non-PRN nurses."""
-#        results = self.execute_query('SELECT name FROM nurses WHERE is_prn=0 AND is_active=1')
-#        return [row[0] for row in results]
-
-#    def get_prn_nurses(self) -> List[str]:
-#        """Get list of PRN nurses."""
-#        results = self.execute_query('SELECT name FROM nurses WHERE is_prn=1 AND is_active=1')
-#        return [row[0] for row in results]
-
     def remove_nurse(self, name: str, hard_delete: bool = False) -> None:
         """
         Deactivate a nurse by default (soft delete). If hard_delete=True,
@@ -405,11 +395,6 @@ class NurseManager(DatabaseMixin):
         # Soft-delete
         self.execute_update('UPDATE nurses SET is_active=0 WHERE name=?', (name,))
         self._nurses.pop(name, None)
-
-#    def get_nurses(self) -> List[str]:
-#        """Get all nurse names (active only)."""
-#        results = self.execute_query('SELECT name FROM nurses WHERE is_active=1')
-#        return [row[0] for row in results]
 
     def set_prn_status(self, name: str, is_prn: bool) -> None:
         """Update PRN status for a nurse."""

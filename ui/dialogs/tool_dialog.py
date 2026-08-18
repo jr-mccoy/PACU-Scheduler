@@ -48,18 +48,14 @@ class ToolDialog(QWidget):
 
         self.is_android = _is_android_platform()
         if not self.is_android:
-            self.setWindowFlags(
-                Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint
-            )
+            self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint)
             self.setWindowModality(Qt.WindowModal)
         if title:
             self.setWindowTitle(title)
 
         self._scrim = QWidget(self, objectName="scrim")
         self._scrim.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._scrim.setStyleSheet(
-            "QWidget#scrim { background:rgba(0,0,0,0.18); }"
-        )
+        self._scrim.setStyleSheet("QWidget#scrim { background:rgba(0,0,0,0.18); }")
 
         accent = "#EFA8C0"
         if parent is not None:

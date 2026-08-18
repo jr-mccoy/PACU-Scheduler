@@ -34,9 +34,7 @@ class RotationViolationDialog(ToolDialog):
         self.nurses = summary["nurse"].tolist()
         self.stats = summary
 
-        self._accent = (
-            accent or getattr(parent, "settings", {}).get("accent_color", "#5C8DBC")
-        )
+        self._accent = accent or getattr(parent, "settings", {}).get("accent_color", "#5C8DBC")
         self._row_chk = []
 
         root = QVBoxLayout(self._body)
@@ -69,9 +67,7 @@ class RotationViolationDialog(ToolDialog):
         self.list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.list.setSpacing(0)
         self.list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.list.setStyleSheet(
-            "QListWidget::item:selected { background: transparent; }"
-        )
+        self.list.setStyleSheet("QListWidget::item:selected { background: transparent; }")
 
         try:
             from PySide6.QtWidgets import QScroller
@@ -146,9 +142,7 @@ class RotationViolationDialog(ToolDialog):
     def _wire_signals(self):
         self.allow_chk.toggled.connect(self.list.setEnabled)
         self.list.setEnabled(False)
-        self.select_all_btn.clicked.connect(
-            lambda: [cb.setChecked(True) for cb in self._row_chk]
-        )
+        self.select_all_btn.clicked.connect(lambda: [cb.setChecked(True) for cb in self._row_chk])
 
     def _toggle_row(self, item):
         idx = self.list.row(item)
@@ -159,17 +153,15 @@ class RotationViolationDialog(ToolDialog):
 
     def _apply_accent(self):
         self.select_all_btn.setStyleSheet(
-
-                "QPushButton {"
-                f"background:{self._accent};"
-                "color:#fff;"
-                "border-radius:8px;"
-                "padding:6px 12px;"
-                "}"
-                "QPushButton:pressed {"
-                "opacity:0.8;"
-                "}"
-
+            "QPushButton {"
+            f"background:{self._accent};"
+            "color:#fff;"
+            "border-radius:8px;"
+            "padding:6px 12px;"
+            "}"
+            "QPushButton:pressed {"
+            "opacity:0.8;"
+            "}"
         )
 
     def refresh_accent(self, accent=None):
@@ -184,11 +176,7 @@ class RotationViolationDialog(ToolDialog):
     def get_values(self):
         if not self.allow_chk.isChecked():
             return (False, [])
-        allowed = [
-            self.nurses[i]
-            for i, cb in enumerate(self._row_chk)
-            if cb.isChecked()
-        ]
+        allowed = [self.nurses[i] for i, cb in enumerate(self._row_chk) if cb.isChecked()]
         return (True, allowed)
 
 

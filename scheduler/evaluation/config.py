@@ -23,6 +23,7 @@ class WorkerTuningConfig:
     full_period_per_attempt_nodes: int = 1500000
     full_period_target_spread: tuple[int, int] = (1, 1)
 
+
 WORKER_TUNING = WorkerTuningConfig()
 
 __all__ = ["WorkerTuningConfig", "WORKER_TUNING"]

@@ -243,9 +243,7 @@ class MultiDatePicker(QWidget):
         btn.setIcon(themed_icon(png, self._THEME))
         btn.setIconSize(QSize(44, 44))
         btn.setStyleSheet("border:none;background:transparent;")
-        btn.clicked.connect(
-            self.cal.showPreviousMonth if prev else self.cal.showNextMonth
-        )
+        btn.clicked.connect(self.cal.showPreviousMonth if prev else self.cal.showNextMonth)
         btn.clicked.connect(self._refresh_month)
         layout.addWidget(btn)
         return btn

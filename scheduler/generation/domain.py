@@ -40,9 +40,7 @@ class CandidateDomainBuilder:
             diag_map.clear()
 
         get_eligible = (
-            ctx.get_eligible_nurses_for_day_gap
-            if gap_mode
-            else ctx.get_eligible_nurses_for_day
+            ctx.get_eligible_nurses_for_day_gap if gap_mode else ctx.get_eligible_nurses_for_day
         )
         context_label = "gap_eligible_domain" if gap_mode else "eligible_domain"
 
@@ -81,9 +79,7 @@ class CandidateDomainBuilder:
             if candidates:
                 used_relaxed = True
                 if ctx.console_debug and not gap_mode:
-                    ctx.debug_print(
-                        f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}"
-                    )
+                    ctx.debug_print(f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}")
 
         if relaxed_candidates:
             seen: set[str] = set(candidates)
@@ -91,9 +87,7 @@ class CandidateDomainBuilder:
 
         if not candidates:
             if ctx.console_debug and not gap_mode:
-                ctx.debug_print(
-                    f"[ScheduleVariant] [Domain] empty {date.date()} role={role}"
-                )
+                ctx.debug_print(f"[ScheduleVariant] [Domain] empty {date.date()} role={role}")
             if ctx.assignment_debug_logger.enabled:
                 ctx.log_assignment_debug(
                     context=context_label,

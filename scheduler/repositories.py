@@ -36,7 +36,7 @@ def ensure_schema(db_name: str) -> None:
 class DatabaseMixin:
     """Mixin class to provide common database operations."""
 
-    def __init__(self, db_name: str = 'nurse_schedule.db'):
+    def __init__(self, db_name: str = "nurse_schedule.db"):
         self.db_name = db_name
         ensure_schema(db_name)
 
@@ -48,7 +48,7 @@ class DatabaseMixin:
             conn = sqlite3.connect(self.db_name)
             try:
                 # Enforce foreign keys so future writes don't create orphans
-                conn.execute('PRAGMA foreign_keys = ON')
+                conn.execute("PRAGMA foreign_keys = ON")
             except Exception:
                 # Older SQLite builds can be quirky—fail open rather than crash
                 pass
@@ -117,37 +117,37 @@ class AssignmentHistory(DatabaseMixin):
     """Manages nurse assignment history with database persistence and caching."""
 
     # SQL queries as class constants
-    LOAD_HISTORY_QUERY = '''
+    LOAD_HISTORY_QUERY = """
         SELECT sh.date, nm.name, nb.name
         FROM schedule_history sh
         LEFT JOIN nurses nm ON sh.main_nurse_id=nm.nurse_id
         LEFT JOIN nurses nb ON sh.backup_nurse_id=nb.nurse_id
         WHERE sh.date >= ?
-    '''
+    """
 
-    GET_HISTORY_BASE_QUERY = '''
+    GET_HISTORY_BASE_QUERY = """
         SELECT sh.date, nm.name, nb.name
         FROM schedule_history sh
         LEFT JOIN nurses nm ON sh.main_nurse_id = nm.nurse_id
         LEFT JOIN nurses nb ON sh.backup_nurse_id = nb.nurse_id
-    '''
+    """
 
-    UPDATE_HISTORY_QUERY = '''
+    UPDATE_HISTORY_QUERY = """
         INSERT OR REPLACE INTO schedule_history (date, main_nurse_id, backup_nurse_id)
-        VALUES (?, 
+        VALUES (?,
                 (SELECT nurse_id FROM nurses WHERE name=?),
                 (SELECT nurse_id FROM nurses WHERE name=?))
-    '''
+    """
 
-    GET_RECORD_QUERY = '''
+    GET_RECORD_QUERY = """
         SELECT nm.name, nb.name
         FROM schedule_history sh
         LEFT JOIN nurses nm ON sh.main_nurse_id=nm.nurse_id
         LEFT JOIN nurses nb ON sh.backup_nurse_id=nb.nurse_id
         WHERE sh.date=?
-    '''
+    """
 
-    def __init__(self, db_name: str = 'nurse_schedule.db', history_duration_months: int = 6):
+    def __init__(self, db_name: str = "nurse_schedule.db", history_duration_months: int = 6):
         super().__init__(db_name)
         self.history_duration_months = history_duration_months
         self._history = self._load_history()
@@ -162,7 +162,7 @@ class AssignmentHistory(DatabaseMixin):
         """Load assignment history from the database."""
         history = {}
         cutoff_date = self._get_cutoff_date()
-        cutoff_date_str = cutoff_date.strftime('%Y-%m-%d')
+        cutoff_date_str = cutoff_date.strftime("%Y-%m-%d")
 
         results = self.execute_query(self.LOAD_HISTORY_QUERY, (cutoff_date_str,))
 
@@ -179,16 +179,18 @@ class AssignmentHistory(DatabaseMixin):
     def get_all_history(self) -> list[tuple[str, str | None, str | None]]:
         """Return all history records as a list of tuples."""
         return [
-            (date.strftime('%Y-%m-%d'), data["main"], data["backup"])
+            (date.strftime("%Y-%m-%d"), data["main"], data["backup"])
             for date, data in sorted(self._history.items())
         ]
 
-    def get_history(self, start_date=None, end_date=None) -> list[tuple[str, str | None, str | None]]:
+    def get_history(
+        self, start_date=None, end_date=None
+    ) -> list[tuple[str, str | None, str | None]]:
         """
-        Retrieve assignment history records within an optional date range. 
+        Retrieve assignment history records within an optional date range.
         Args:
             start_date: Optional start date (inclusive). If None, no lower bound.
-            end_date: Optional end date (inclusive). If None, no upper bound.    
+            end_date: Optional end date (inclusive). If None, no upper bound.
         Returns:
             List of tuples containing (date_str, main_nurse, backup_nurse).
         """
@@ -197,12 +199,12 @@ class AssignmentHistory(DatabaseMixin):
         params = []
 
         if start_date:
-            start = DateUtils.normalize_date(start_date).strftime('%Y-%m-%d')
+            start = DateUtils.normalize_date(start_date).strftime("%Y-%m-%d")
             conditions.append("sh.date >= ?")
             params.append(start)
 
         if end_date:
-            end = DateUtils.normalize_date(end_date).strftime('%Y-%m-%d')
+            end = DateUtils.normalize_date(end_date).strftime("%Y-%m-%d")
             conditions.append("sh.date <= ?")
             params.append(end)
 
@@ -235,7 +237,7 @@ class AssignmentHistory(DatabaseMixin):
     def update_history(self, date_input, main_nurse: str | None, backup_nurse: str | None) -> None:
         """Insert or update an assignment record."""
         normalized_date = DateUtils.normalize_date(date_input)
-        date_str = normalized_date.strftime('%Y-%m-%d')
+        date_str = normalized_date.strftime("%Y-%m-%d")
 
         self.execute_update(self.UPDATE_HISTORY_QUERY, (date_str, main_nurse, backup_nurse))
 
@@ -245,16 +247,16 @@ class AssignmentHistory(DatabaseMixin):
     def get_record(self, date_input) -> tuple[str | None, str | None] | None:
         """Retrieve a specific assignment record."""
         normalized_date = DateUtils.normalize_date(date_input)
-        date_str = normalized_date.strftime('%Y-%m-%d')
+        date_str = normalized_date.strftime("%Y-%m-%d")
 
         return self.execute_single_query(self.GET_RECORD_QUERY, (date_str,))
 
     def delete_record(self, date_input) -> None:
         """Delete a specific assignment record."""
         normalized_date = DateUtils.normalize_date(date_input)
-        date_str = normalized_date.strftime('%Y-%m-%d')
+        date_str = normalized_date.strftime("%Y-%m-%d")
 
-        self.execute_update('DELETE FROM schedule_history WHERE date=?', (date_str,))
+        self.execute_update("DELETE FROM schedule_history WHERE date=?", (date_str,))
 
         # Update in-memory cache
         self._history.pop(normalized_date, None)
@@ -262,15 +264,12 @@ class AssignmentHistory(DatabaseMixin):
     def prune_old_records(self) -> None:
         """Remove records older than the cutoff date."""
         cutoff_date = self._get_cutoff_date()
-        cutoff_date_str = cutoff_date.strftime('%Y-%m-%d')
+        cutoff_date_str = cutoff_date.strftime("%Y-%m-%d")
 
         self.execute_update("DELETE FROM schedule_history WHERE date < ?", (cutoff_date_str,))
 
         # Update in-memory cache
-        self._history = {
-            date: data for date, data in self._history.items()
-            if date >= cutoff_date
-        }
+        self._history = {date: data for date, data in self._history.items() if date >= cutoff_date}
 
 
 class NurseManager(DatabaseMixin):
@@ -279,12 +278,12 @@ class NurseManager(DatabaseMixin):
     # SQL queries as class constants
     LOAD_NURSES_QUERY = "SELECT nurse_id, name, is_prn, is_late_shift FROM nurses WHERE is_active=1"
     LOAD_UNAVAILABLE_DATES_QUERY = "SELECT nurse_id, date FROM unavailable_dates"
-    GET_NURSE_UNAVAILABLE_DATES_QUERY = '''
-        SELECT date FROM unavailable_dates 
+    GET_NURSE_UNAVAILABLE_DATES_QUERY = """
+        SELECT date FROM unavailable_dates
         WHERE nurse_id=(SELECT nurse_id FROM nurses WHERE name=?)
-    '''
+    """
 
-    def __init__(self, db_name: str = 'nurse_schedule.db'):
+    def __init__(self, db_name: str = "nurse_schedule.db"):
         super().__init__(db_name)
         self._ensure_is_active_column()
         self._nurses = self._load_nurses()
@@ -302,7 +301,7 @@ class NurseManager(DatabaseMixin):
                 "nurse_id": nurse_id,
                 "is_prn": bool(is_prn),
                 "is_late_shift": bool(is_late_shift),
-                "unavailable_dates": set()
+                "unavailable_dates": set(),
             }
             nurse_ids[nurse_id] = name
 
@@ -333,24 +332,23 @@ class NurseManager(DatabaseMixin):
     def get_non_prn_nurses(self) -> list[str]:
         """Get list of non-PRN nurses in a stable, deterministic order."""
         results = self.execute_query(
-            'SELECT name FROM nurses WHERE is_prn=0 AND is_active=1 ORDER BY name COLLATE NOCASE'
+            "SELECT name FROM nurses WHERE is_prn=0 AND is_active=1 ORDER BY name COLLATE NOCASE"
         )
         return [row[0] for row in results]
 
     def get_prn_nurses(self) -> list[str]:
         """Get list of PRN nurses in a stable, deterministic order."""
         results = self.execute_query(
-            'SELECT name FROM nurses WHERE is_prn=1 AND is_active=1 ORDER BY name COLLATE NOCASE'
+            "SELECT name FROM nurses WHERE is_prn=1 AND is_active=1 ORDER BY name COLLATE NOCASE"
         )
         return [row[0] for row in results]
 
     def get_nurses(self) -> list[str]:
         """Get all active nurses in a stable, deterministic order."""
         results = self.execute_query(
-            'SELECT name FROM nurses WHERE is_active=1 ORDER BY name COLLATE NOCASE'
+            "SELECT name FROM nurses WHERE is_active=1 ORDER BY name COLLATE NOCASE"
         )
         return [row[0] for row in results]
-
 
     @property
     def nurses(self) -> dict[str, dict[str, Any]]:
@@ -373,13 +371,13 @@ class NurseManager(DatabaseMixin):
         """Add or reactivate a nurse. If the nurse exists, mark active and update flags."""
         # Insert if new; ignore if exists
         self.execute_update(
-            'INSERT OR IGNORE INTO nurses (name, is_prn, is_late_shift) VALUES (?, ?, ?)',
-            (name, is_prn, is_late_shift)
+            "INSERT OR IGNORE INTO nurses (name, is_prn, is_late_shift) VALUES (?, ?, ?)",
+            (name, is_prn, is_late_shift),
         )
         # Ensure active + sync flags (works for both new and existing rows)
         self.execute_update(
-            'UPDATE nurses SET is_active=1, is_prn=?, is_late_shift=? WHERE name=?',
-            (is_prn, is_late_shift, name)
+            "UPDATE nurses SET is_active=1, is_prn=?, is_late_shift=? WHERE name=?",
+            (is_prn, is_late_shift, name),
         )
         self.refresh_cache()
 
@@ -392,18 +390,18 @@ class NurseManager(DatabaseMixin):
             self._hard_delete_nurse_and_cleanup(name)
             return
         # Soft-delete
-        self.execute_update('UPDATE nurses SET is_active=0 WHERE name=?', (name,))
+        self.execute_update("UPDATE nurses SET is_active=0 WHERE name=?", (name,))
         self._nurses.pop(name, None)
 
     def set_prn_status(self, name: str, is_prn: bool) -> None:
         """Update PRN status for a nurse."""
-        self.execute_update('UPDATE nurses SET is_prn=? WHERE name=?', (is_prn, name))
+        self.execute_update("UPDATE nurses SET is_prn=? WHERE name=?", (is_prn, name))
         if name in self._nurses:
             self._nurses[name]["is_prn"] = is_prn
 
     def set_late_shift_status(self, name: str, is_late_shift: bool) -> None:
         """Update late shift status for a nurse."""
-        self.execute_update('UPDATE nurses SET is_late_shift=? WHERE name=?', (is_late_shift, name))
+        self.execute_update("UPDATE nurses SET is_late_shift=? WHERE name=?", (is_late_shift, name))
         if name in self._nurses:
             self._nurses[name]["is_late_shift"] = is_late_shift
 
@@ -435,16 +433,16 @@ class NurseManager(DatabaseMixin):
         with self.get_db_connection() as conn:
             for date_obj in dates_to_add:
                 conn.execute(
-                    '''INSERT OR IGNORE INTO unavailable_dates (nurse_id, date)
-                       VALUES ((SELECT nurse_id FROM nurses WHERE name=?), ?)''',
-                    (nurse_name, date_obj.date().strftime('%Y-%m-%d'))
+                    """INSERT OR IGNORE INTO unavailable_dates (nurse_id, date)
+                       VALUES ((SELECT nurse_id FROM nurses WHERE name=?), ?)""",
+                    (nurse_name, date_obj.date().strftime("%Y-%m-%d")),
                 )
 
             for date_obj in dates_to_remove:
                 conn.execute(
-                    '''DELETE FROM unavailable_dates
-                       WHERE nurse_id=(SELECT nurse_id FROM nurses WHERE name=?) AND date=?''',
-                    (nurse_name, date_obj.date().strftime('%Y-%m-%d'))
+                    """DELETE FROM unavailable_dates
+                       WHERE nurse_id=(SELECT nurse_id FROM nurses WHERE name=?) AND date=?""",
+                    (nurse_name, date_obj.date().strftime("%Y-%m-%d")),
                 )
 
             conn.commit()
@@ -464,36 +462,42 @@ class NurseManager(DatabaseMixin):
     # --- New helpers for soft-delete / cleanup --------------------------------
     def activate_nurse(self, name: str) -> None:
         """Reactivate a previously deactivated nurse."""
-        self.execute_update('UPDATE nurses SET is_active=1 WHERE name=?', (name,))
+        self.execute_update("UPDATE nurses SET is_active=1 WHERE name=?", (name,))
         self.refresh_cache()
 
     def deactivate_nurse(self, name: str) -> None:
         """Deactivate a nurse (soft delete)."""
-        self.execute_update('UPDATE nurses SET is_active=0 WHERE name=?', (name,))
+        self.execute_update("UPDATE nurses SET is_active=0 WHERE name=?", (name,))
         self._nurses.pop(name, None)
 
     def _hard_delete_nurse_and_cleanup(self, name: str) -> None:
         """Hard-delete a nurse and clean up or null references in related tables."""
         with self.get_db_connection() as conn:
-            cur = conn.execute('SELECT nurse_id FROM nurses WHERE name=?', (name,))
+            cur = conn.execute("SELECT nurse_id FROM nurses WHERE name=?", (name,))
             row = cur.fetchone()
             if not row:
                 return
             nurse_id = row[0]
 
             # Null out schedule_history references
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE schedule_history
                 SET main_nurse_id = CASE WHEN main_nurse_id = ? THEN NULL ELSE main_nurse_id END,
                     backup_nurse_id = CASE WHEN backup_nurse_id = ? THEN NULL ELSE backup_nurse_id END
-            """, (nurse_id, nurse_id))
+            """,
+                (nurse_id, nurse_id),
+            )
 
             # Null out weekend_assignments references (if table exists)
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE weekend_assignments
                 SET fsf_nurse_id = CASE WHEN fsf_nurse_id = ? THEN NULL ELSE fsf_nurse_id END,
                     sfs_nurse_id = CASE WHEN sfs_nurse_id = ? THEN NULL ELSE sfs_nurse_id END
-            """, (nurse_id, nurse_id))
+            """,
+                (nurse_id, nurse_id),
+            )
 
             # Remove availability + derived violation tables
             conn.execute("DELETE FROM unavailable_dates WHERE nurse_id = ?", (nurse_id,))
@@ -533,17 +537,25 @@ class NurseManager(DatabaseMixin):
                 WHERE sfs_nurse_id IS NOT NULL
                   AND sfs_nurse_id NOT IN (SELECT nurse_id FROM nurses)
             """)
-            conn.execute("DELETE FROM unavailable_dates WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)")
-            conn.execute("DELETE FROM rotation_violation_dates WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)")
-            conn.execute("DELETE FROM rotation_violation_stats WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)")
-            conn.execute("DELETE FROM weekend_rotation_history WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)")
+            conn.execute(
+                "DELETE FROM unavailable_dates WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)"
+            )
+            conn.execute(
+                "DELETE FROM rotation_violation_dates WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)"
+            )
+            conn.execute(
+                "DELETE FROM rotation_violation_stats WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)"
+            )
+            conn.execute(
+                "DELETE FROM weekend_rotation_history WHERE nurse_id NOT IN (SELECT nurse_id FROM nurses)"
+            )
             conn.commit()
 
     def _ensure_is_active_column(self) -> None:
         """Add is_active column to nurses if missing."""
         with self.get_db_connection() as conn:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(nurses)").fetchall()]
-            if 'is_active' not in cols:
+            if "is_active" not in cols:
                 conn.execute("ALTER TABLE nurses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
                 conn.commit()
 
@@ -591,12 +603,12 @@ class WeekendHistory:
         """Load weekend assignments from the database with normalized timestamps."""
         assignments = {}
         with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.execute(f'''
+            cursor = conn.execute(f"""
                 SELECT {DBColumns.WEEKEND_START}, nf.{DBColumns.NAME}, ns.{DBColumns.NAME}
                 FROM {DBTables.WEEKEND_ASSIGNMENTS}
                 LEFT JOIN {DBTables.NURSES} nf ON {DBColumns.FSF_NURSE_ID} = nf.{DBColumns.NURSE_ID}
                 LEFT JOIN {DBTables.NURSES} ns ON {DBColumns.SFS_NURSE_ID} = ns.{DBColumns.NURSE_ID}
-            ''')
+            """)
             for weekend_start, fsf, sfs in cursor.fetchall():
                 normalized_date = self._normalize_date(weekend_start)
                 assignments[normalized_date] = (fsf, sfs)
@@ -606,11 +618,11 @@ class WeekendHistory:
         """Load last patterns for all nurses from database."""
         patterns: dict[str, WeekendPattern | None] = {}
         with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.execute(f'''
+            cursor = conn.execute(f"""
                 SELECT n.{DBColumns.NAME}, wrh.{DBColumns.LAST_PATTERN}
                 FROM {DBTables.WEEKEND_ROTATION_HISTORY} wrh
                 JOIN {DBTables.NURSES} n ON wrh.{DBColumns.NURSE_ID} = n.{DBColumns.NURSE_ID}
-            ''')
+            """)
             for nurse, pattern_str in cursor.fetchall():
                 patterns[nurse] = self._parse_weekend_pattern(pattern_str)
         return patterns
@@ -629,17 +641,20 @@ class WeekendHistory:
         """Get violation dates for a nurse or all nurses."""
         with sqlite3.connect(self.db_name) as conn:
             if nurse:
-                cursor = conn.execute(f"""
-                    SELECT n.{DBColumns.NAME}, vd.{DBColumns.VIOLATION_DATE}, 
+                cursor = conn.execute(
+                    f"""
+                    SELECT n.{DBColumns.NAME}, vd.{DBColumns.VIOLATION_DATE},
                            vd.{DBColumns.PATTERN}, vd.{DBColumns.PREVIOUS_PATTERN}
                     FROM {DBTables.ROTATION_VIOLATION_DATES} vd
                     JOIN {DBTables.NURSES} n ON vd.{DBColumns.NURSE_ID} = n.{DBColumns.NURSE_ID}
                     WHERE n.{DBColumns.NAME} = ?
                     ORDER BY vd.{DBColumns.VIOLATION_DATE} ASC
-                """, (nurse,))
+                """,
+                    (nurse,),
+                )
             else:
                 cursor = conn.execute(f"""
-                    SELECT n.{DBColumns.NAME}, vd.{DBColumns.VIOLATION_DATE}, 
+                    SELECT n.{DBColumns.NAME}, vd.{DBColumns.VIOLATION_DATE},
                            vd.{DBColumns.PATTERN}, vd.{DBColumns.PREVIOUS_PATTERN}
                     FROM {DBTables.ROTATION_VIOLATION_DATES} vd
                     JOIN {DBTables.NURSES} n ON vd.{DBColumns.NURSE_ID} = n.{DBColumns.NURSE_ID}
@@ -647,9 +662,12 @@ class WeekendHistory:
                 """)
             return cursor.fetchall()
 
-    def _calculate_consecutive_violations(self, last_violation_date: pd.Timestamp | None,
-                                        current_violation_date: pd.Timestamp,
-                                        current_streak: int) -> int:
+    def _calculate_consecutive_violations(
+        self,
+        last_violation_date: pd.Timestamp | None,
+        current_violation_date: pd.Timestamp,
+        current_streak: int,
+    ) -> int:
         """Calculate consecutive violation count."""
         if last_violation_date is None:
             return 1
@@ -658,9 +676,7 @@ class WeekendHistory:
 
     def _build_nurse_sequences(self) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
         """Build chronological sequences of assignments for each nurse."""
-        return self._build_nurse_sequences_from_assignments(
-            sorted(self._assignments.items())
-        )
+        return self._build_nurse_sequences_from_assignments(sorted(self._assignments.items()))
 
     def _build_nurse_sequences_from_assignments(
         self,
@@ -677,7 +693,9 @@ class WeekendHistory:
 
         return seq_per_nurse
 
-    def _process_nurse_violations(self, nurse: str, sequence: list[tuple[pd.Timestamp, WeekendPattern]]) -> tuple[list, int, pd.Timestamp | None, int]:
+    def _process_nurse_violations(
+        self, nurse: str, sequence: list[tuple[pd.Timestamp, WeekendPattern]]
+    ) -> tuple[list, int, pd.Timestamp | None, int]:
         """Process violations for a single nurse's sequence."""
         violation_dates = []
         violation_count = 0
@@ -686,7 +704,7 @@ class WeekendHistory:
         prev_violation_date = None
 
         for i in range(1, len(sequence)):
-            prev_date, prev_pat = sequence[i-1]
+            prev_date, prev_pat = sequence[i - 1]
             curr_date, curr_pat = sequence[i]
 
             if prev_pat == curr_pat:  # Violation detected
@@ -708,8 +726,9 @@ class WeekendHistory:
     def _write_violation_dates_to_db(self, conn, nurse: str, violation_dates: list):
         """Write violation dates to database."""
         for vdate, vpat, vprev in violation_dates:
-            date_str = vdate.strftime('%Y-%m-%d')
-            conn.execute(f"""
+            date_str = vdate.strftime("%Y-%m-%d")
+            conn.execute(
+                f"""
                 INSERT OR IGNORE INTO {DBTables.ROTATION_VIOLATION_DATES}
                 ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_DATE},
                  {DBColumns.PATTERN}, {DBColumns.PREVIOUS_PATTERN})
@@ -717,23 +736,34 @@ class WeekendHistory:
                     (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME} = ?),
                     ?, ?, ?
                 )
-            """, (nurse, date_str, vpat.value, vprev.value))
+            """,
+                (nurse, date_str, vpat.value, vprev.value),
+            )
 
-    def _update_nurse_violation_stats(self, conn, nurse: str, violation_count: int,
-                                    last_violation_date: pd.Timestamp | None, streak: int):
+    def _update_nurse_violation_stats(
+        self,
+        conn,
+        nurse: str,
+        violation_count: int,
+        last_violation_date: pd.Timestamp | None,
+        streak: int,
+    ):
         """Update violation stats for a nurse."""
         last_date_str = last_violation_date.strftime("%Y-%m-%d") if last_violation_date else None
 
-        conn.execute(f"""
+        conn.execute(
+            f"""
             INSERT INTO {DBTables.ROTATION_VIOLATION_STATS}
-                  ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_COUNT}, 
+                  ({DBColumns.NURSE_ID}, {DBColumns.VIOLATION_COUNT},
                    {DBColumns.LAST_VIOLATION_DATE}, {DBColumns.CONSEC_VIOLATIONS})
             VALUES ((SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?), ?, ?, ?)
             ON CONFLICT({DBColumns.NURSE_ID}) DO UPDATE
             SET {DBColumns.VIOLATION_COUNT} = excluded.{DBColumns.VIOLATION_COUNT},
                 {DBColumns.LAST_VIOLATION_DATE} = excluded.{DBColumns.LAST_VIOLATION_DATE},
                 {DBColumns.CONSEC_VIOLATIONS} = excluded.{DBColumns.CONSEC_VIOLATIONS}
-        """, (nurse, violation_count, last_date_str, streak))
+        """,
+            (nurse, violation_count, last_date_str, streak),
+        )
 
     def _rebuild_rotation_history(
         self,
@@ -769,7 +799,9 @@ class WeekendHistory:
             ) = self._process_nurse_violations(nurse, sequence)
 
             self._write_violation_dates_to_db(conn, nurse, violation_dates)
-            self._update_nurse_violation_stats(conn, nurse, violation_count, last_violation_date, streak)
+            self._update_nurse_violation_stats(
+                conn, nurse, violation_count, last_violation_date, streak
+            )
 
     def _rebuild_last_patterns(self) -> None:
         """Reload in-memory last patterns from weekend rotation history table."""
@@ -788,8 +820,9 @@ class WeekendHistory:
         """Write pattern to database."""
         expected_next = WeekendPattern.FSF if new_pat == WeekendPattern.SFS else WeekendPattern.SFS
 
-        conn.execute(f"""
-            INSERT INTO {DBTables.WEEKEND_ROTATION_HISTORY} 
+        conn.execute(
+            f"""
+            INSERT INTO {DBTables.WEEKEND_ROTATION_HISTORY}
             ({DBColumns.NURSE_ID}, {DBColumns.LAST_PATTERN}, {DBColumns.EXPECTED_NEXT_PATTERN})
             VALUES (
                 (SELECT {DBColumns.NURSE_ID} FROM {DBTables.NURSES} WHERE {DBColumns.NAME}=?),
@@ -798,7 +831,9 @@ class WeekendHistory:
             ON CONFLICT({DBColumns.NURSE_ID}) DO UPDATE
             SET {DBColumns.LAST_PATTERN}=excluded.{DBColumns.LAST_PATTERN},
                 {DBColumns.EXPECTED_NEXT_PATTERN}=excluded.{DBColumns.EXPECTED_NEXT_PATTERN}
-        """, (nurse, new_pat.value, expected_next.value))
+        """,
+            (nurse, new_pat.value, expected_next.value),
+        )
 
     # Violation Statistics Methods
     def get_violation_summary(self, as_of=None):
@@ -807,7 +842,8 @@ class WeekendHistory:
             as_of = pd.Timestamp.today().normalize()
 
         with sqlite3.connect(self.db_name) as conn:
-            stats = pd.read_sql(f"""
+            stats = pd.read_sql(
+                f"""
                 SELECT n.{DBColumns.NAME} as nurse,
                        COALESCE(vs.{DBColumns.VIOLATION_COUNT}, 0) as total_viol,
                        vs.{DBColumns.LAST_VIOLATION_DATE},
@@ -815,9 +851,14 @@ class WeekendHistory:
                 FROM {DBTables.NURSES} n
                 LEFT JOIN {DBTables.ROTATION_VIOLATION_STATS} vs
                   ON vs.{DBColumns.NURSE_ID} = n.{DBColumns.NURSE_ID}
-            """, conn, parse_dates=[DBColumns.LAST_VIOLATION_DATE])
+            """,
+                conn,
+                parse_dates=[DBColumns.LAST_VIOLATION_DATE],
+            )
 
-        stats = stats.fillna({"total_viol": 0, DBColumns.LAST_VIOLATION_DATE: pd.NaT, "consec_viol": 0})
+        stats = stats.fillna(
+            {"total_viol": 0, DBColumns.LAST_VIOLATION_DATE: pd.NaT, "consec_viol": 0}
+        )
 
         def calculate_clean_run_weeks(row):
             """Calculate clean run weeks for a nurse."""
@@ -829,8 +870,7 @@ class WeekendHistory:
             future = [wk for wk in all_wks if wk > last and wk <= as_of]
 
             viol_dates = {
-                DateUtils.normalize_date(r[1])
-                for r in self.get_violation_dates(row["nurse"])
+                DateUtils.normalize_date(r[1]) for r in self.get_violation_dates(row["nurse"])
             }
 
             clean_weeks = 0
@@ -843,8 +883,8 @@ class WeekendHistory:
 
         stats["clean_run_weeks"] = stats.apply(calculate_clean_run_weeks, axis=1).astype(int)
         stats["days_since_last"] = (
-            as_of - stats[DBColumns.LAST_VIOLATION_DATE]
-        ).dt.days.fillna(999).astype(int)
+            (as_of - stats[DBColumns.LAST_VIOLATION_DATE]).dt.days.fillna(999).astype(int)
+        )
 
         return stats
 
@@ -868,8 +908,7 @@ class WeekendHistory:
     def get_assignments(self) -> list[tuple[pd.Timestamp, str | None, str | None]]:
         """Get all assignments sorted by date."""
         return sorted(
-            [(date, fsf, sfs) for date, (fsf, sfs) in self._assignments.items()],
-            key=lambda x: x[0]
+            [(date, fsf, sfs) for date, (fsf, sfs) in self._assignments.items()], key=lambda x: x[0]
         )
 
     def get_last_pattern(self, nurse: str) -> WeekendPattern | None:
@@ -879,7 +918,8 @@ class WeekendHistory:
     def get_weekends(self, nurse: str) -> list[pd.Timestamp]:
         """Get all weekend assignments for a nurse."""
         return [
-            weekend_start for weekend_start, (fsf, sfs) in self._assignments.items()
+            weekend_start
+            for weekend_start, (fsf, sfs) in self._assignments.items()
             if nurse in (fsf, sfs)
         ]
 
@@ -919,7 +959,7 @@ class WeekendHistory:
 
 
 class PreScheduler:
-    def __init__(self, db_name='nurse_schedule.db'):
+    def __init__(self, db_name="nurse_schedule.db"):
         self.db_name = db_name
         self._assignments = self._load_assignments()
 
@@ -930,7 +970,6 @@ class PreScheduler:
         pandas.Timestamp normalised to 00:00.
         """
         return DateUtils.normalize_date(date_input)
-
 
     def _load_assignments(self) -> dict[pd.Timestamp, dict]:
         """
@@ -956,48 +995,46 @@ class PreScheduler:
         return assignments
 
     def get_assignments_in_range(
-        self,
-        start_date,
-        end_date
+        self, start_date, end_date
     ) -> dict[pd.Timestamp, dict[str, str | None]]:
         """
         Inclusive filter on the in-memory dictionary.  The two boundary
         arguments can be str / datetime / Timestamp.
         """
         start = self._normalize_date(start_date)
-        end   = self._normalize_date(end_date)
+        end = self._normalize_date(end_date)
 
-        return {
-            ts: info
-            for ts, info in self._assignments.items()
-            if start <= ts <= end
-        }
+        return {ts: info for ts, info in self._assignments.items() if start <= ts <= end}
 
     def add_assignment(self, date_str, main_nurse, backup_nurse, note=""):
         with sqlite3.connect(self.db_name) as conn:
-            conn.execute('''
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO pre_scheduled_assignments (date, main_nurse_id, backup_nurse_id, note)
-                VALUES (?, 
+                VALUES (?,
                         (SELECT nurse_id FROM nurses WHERE name=?),
                         (SELECT nurse_id FROM nurses WHERE name=?),
                         ?)
-            ''', (date_str, main_nurse, backup_nurse, note))
-        self._assignments=self._load_assignments()
+            """,
+                (date_str, main_nurse, backup_nurse, note),
+            )
+        self._assignments = self._load_assignments()
 
     def remove_assignment(self, date_str):
         with sqlite3.connect(self.db_name) as conn:
-            conn.execute('DELETE FROM pre_scheduled_assignments WHERE date=?', (date_str,))
-        self._assignments=self._load_assignments()
+            conn.execute("DELETE FROM pre_scheduled_assignments WHERE date=?", (date_str,))
+        self._assignments = self._load_assignments()
 
     def get_assignments(self):
         with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.execute('''
+            cursor = conn.execute("""
                 SELECT date, nm.name, nb.name, note
                 FROM pre_scheduled_assignments
                 LEFT JOIN nurses nm ON main_nurse_id=nm.nurse_id
                 LEFT JOIN nurses nb ON backup_nurse_id=nb.nurse_id
-            ''')
+            """)
             return cursor.fetchall()
+
 
 __all__ = [
     "DatabaseMixin",

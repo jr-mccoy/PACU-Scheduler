@@ -14,7 +14,6 @@ class AppSettings:
         "accent_color": "#5C8DBC",
         "show_gif": True,
         "calendar_grid": True,
-
         # Core scheduling
         "weekend_gap_days": 28,
         "min_days_between_assignments": 2,
@@ -23,39 +22,33 @@ class AppSettings:
         "availability_penalty": 10,
         "history_window_days": 30,
         "history_duration_months": 6,
-
         # Analysis / Debug
         "measure_phase_times": True,
         "analyse_initial_weekday_gaps": True,
         "gap_report_file": "weekday_gap_report.txt",
         "debug_variant_logging": "off",
         "assignment_debug_enabled": True,
-
         # Post-weekend weekday relaxations
         "allow_post_weekend_wednesday_main": False,
         "allow_post_weekend_wednesday_backup": True,
         "allow_post_weekend_thursday_main": True,
         "allow_post_weekend_thursday_backup": True,
-
         # Hail Mary midweek spacing exception toggles (legacy, still supported)
         "allow_midweek_pair_backup_only": False,
         "allow_midweek_pair_mixed": False,
-
         # NEW: master toggle for one-day weekday gap fallback
         # (Mon–Wed / Tue–Thu when NOT in a given nurse's pre/post-weekend period)
         "allow_one_day_weekday_gap": False,
-
         # Beam cap on weekend variant branching (0 = unlimited)
         "max_weekend_variants": 500,
-
         # Canonical scorer weights
         "scoring_weights": {
             "rotation_rep": 0.30,
-            "gaps":         0.20,
-            "rot_viol":     0.15,
-            "weekend_gap":  0.15,
-            "balance":      0.10,
-            "long_term":    0.10,
+            "gaps": 0.20,
+            "rot_viol": 0.15,
+            "weekend_gap": 0.15,
+            "balance": 0.10,
+            "long_term": 0.10,
         },
     }
 
@@ -105,5 +98,6 @@ class AppSettings:
         d = self.DEFAULTS.copy()
         d.update(self._settings)
         return d
+
 
 __all__ = ["AppSettings"]

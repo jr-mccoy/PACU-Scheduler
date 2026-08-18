@@ -18,13 +18,14 @@ except ImportError:  # pragma: no cover - direct module execution
 if TYPE_CHECKING:
     from .style import UiStyle
 
+
 def shade_color(hex_rgb: str, factor: float) -> str:
     """Scale an RGB hex color and clamp every component to 0..255."""
     if not isinstance(hex_rgb, str) or not hex_rgb.startswith("#") or len(hex_rgb) != 7:
         return hex_rgb
     value = hex_rgb[1:]
     try:
-        channels = [int(value[index:index + 2], 16) for index in (0, 2, 4)]
+        channels = [int(value[index : index + 2], 16) for index in (0, 2, 4)]
     except ValueError:
         return hex_rgb
     scaled = [max(0, min(255, int(channel * factor))) for channel in channels]
@@ -56,8 +57,9 @@ def _shade(hex_rgb: str, k: float) -> str:
     return shade_color(hex_rgb, k)
 
 
-def _apply_header(cal: QCalendarWidget, *, accent="#5C8DBC",
-                  fg_white="#FFFFFF", sat_sun="#E53935") -> None:
+def _apply_header(
+    cal: QCalendarWidget, *, accent="#5C8DBC", fg_white="#FFFFFF", sat_sun="#E53935"
+) -> None:
     """
     Style the built-in header strip using the supplied accent.
     Keeps week-numbers hidden and Sunday/Saturday red.
@@ -69,21 +71,19 @@ def _apply_header(cal: QCalendarWidget, *, accent="#5C8DBC",
     if view:
         hh: QHeaderView = view.horizontalHeader()
         pal = hh.palette()
-        pal.setColor(QPalette.Base,   QColor(accent))
+        pal.setColor(QPalette.Base, QColor(accent))
         pal.setColor(QPalette.Window, QColor(accent))
-        pal.setColor(QPalette.Text,   QColor(fg_white))
+        pal.setColor(QPalette.Text, QColor(fg_white))
         hh.setPalette(pal)
         hh.setStyleSheet(
-
-                "QHeaderView::section {"
-                f"background:{accent};"
-                f"color:{fg_white};"
-                "font-weight:600;"
-                "font-size:16px;"
-                "font-family:Roboto;"
-                "border:none;"
-                "}"
-
+            "QHeaderView::section {"
+            f"background:{accent};"
+            f"color:{fg_white};"
+            "font-weight:600;"
+            "font-size:16px;"
+            "font-family:Roboto;"
+            "border:none;"
+            "}"
         )
         for i in range(hh.count()):
             hh.setSectionResizeMode(i, QHeaderView.Stretch)
@@ -140,7 +140,7 @@ def apply_theme_to_calendar(cal: QCalendarWidget, theme: str, accent: str) -> No
                 background:#F5F3F0;
             }}
         """)
-    else:      # pink
+    else:  # pink
         cal.setStyleSheet(f"""
             QCalendarWidget {{
                 background:#F7D7DF;  color:#4A4A4A;
@@ -163,8 +163,9 @@ def apply_theme_to_calendar(cal: QCalendarWidget, theme: str, accent: str) -> No
     _apply_header(cal, accent=accent, fg_white="#FFFFFF", sat_sun="#E53935")
 
 
-def _apply_pink_header(cal: QCalendarWidget, *, accent="#FF4F79",
-                       fg_white="#FFFFFF", sat_sun="#E53935") -> None:
+def _apply_pink_header(
+    cal: QCalendarWidget, *, accent="#FF4F79", fg_white="#FFFFFF", sat_sun="#E53935"
+) -> None:
     """
     Style the built-in QCalendarWidget: pink/blue header, no week numbers.
     Safe to call multiple times.
@@ -177,21 +178,19 @@ def _apply_pink_header(cal: QCalendarWidget, *, accent="#FF4F79",
         # horizontal header (days of week)
         hh: QHeaderView = view.horizontalHeader()
         pal = hh.palette()
-        pal.setColor(QPalette.Base,   QColor(accent))
+        pal.setColor(QPalette.Base, QColor(accent))
         pal.setColor(QPalette.Window, QColor(accent))
-        pal.setColor(QPalette.Text,   QColor(fg_white))
+        pal.setColor(QPalette.Text, QColor(fg_white))
         hh.setPalette(pal)
         hh.setStyleSheet(
-
-                "QHeaderView::section {"
-                f"background:{accent};"
-                f"color:{fg_white};"
-                "font-weight:600;"
-                "font-size:16px;"
-                "font-family:Roboto;"
-                "border:none;"
-                "}"
-
+            "QHeaderView::section {"
+            f"background:{accent};"
+            f"color:{fg_white};"
+            "font-weight:600;"
+            "font-size:16px;"
+            "font-family:Roboto;"
+            "border:none;"
+            "}"
         )
         for i in range(hh.count()):
             hh.setSectionResizeMode(i, QHeaderView.Stretch)
@@ -218,6 +217,7 @@ def _fix_selection_contrast(widget: QWidget, accent: str) -> None:
     pal.setColor(QPalette.HighlightedText, Qt.white)
     widget.setPalette(pal)
 
+
 GRID_COLOR = QColor(CAL_BORDER)
 _GRID = QColor(CAL_BORDER)
 
@@ -229,6 +229,7 @@ def __getattr__(name: str):
 
         return UiStyle
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CAL_BORDER",

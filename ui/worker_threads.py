@@ -122,9 +122,7 @@ class ScheduleProgressWorker(QThread):
 
             from scheduler import build_scheduler_from_settings
 
-            sched = build_scheduler_from_settings(
-                self._start, self._end, nm, wh, ps, self.settings
-            )
+            sched = build_scheduler_from_settings(self._start, self._end, nm, wh, ps, self.settings)
 
             sched.set_allow_rotation_violations(self.allow_rotation_violations)
             sched.set_nurses_allowed_rotation_violation(
@@ -180,16 +178,8 @@ class ScheduleProgressWorker(QThread):
                         df = var.state.schedule.copy()
                         counts = {}
                         for n in getattr(var, "nurses", []):
-                            m = (
-                                int((df["main"] == n).sum())
-                                if "main" in df.columns
-                                else 0
-                            )
-                            b = (
-                                int((df["backup"] == n).sum())
-                                if "backup" in df.columns
-                                else 0
-                            )
+                            m = int((df["main"] == n).sum()) if "main" in df.columns else 0
+                            b = int((df["backup"] == n).sum()) if "backup" in df.columns else 0
                             counts[n] = {"main": m, "backup": b, "total": m + b}
                         mains = list(counts[n]["main"] for n in counts) or [0]
                         backs = list(counts[n]["backup"] for n in counts) or [0]
@@ -197,12 +187,8 @@ class ScheduleProgressWorker(QThread):
                             "gaps": int(df[["main", "backup"]].isna().sum().sum())
                             if not df.empty
                             else 0,
-                            "balance_main": int(max(mains) - min(mains))
-                            if len(mains) > 1
-                            else 0,
-                            "balance_backup": int(max(backs) - min(backs))
-                            if len(backs) > 1
-                            else 0,
+                            "balance_main": int(max(mains) - min(mains)) if len(mains) > 1 else 0,
+                            "balance_backup": int(max(backs) - min(backs)) if len(backs) > 1 else 0,
                             "rotation_rep": int(getattr(var.state, "rotation_repeats", 0)),
                         }
                         candidate_schedules.append((i, stats, counts, df))

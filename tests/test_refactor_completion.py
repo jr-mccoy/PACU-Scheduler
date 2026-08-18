@@ -26,9 +26,7 @@ def test_backend_types_are_owned_by_focused_modules():
         scheduler.SharedSettings: "scheduler.settings",
         scheduler.PerformanceReport: "scheduler.profiling",
     }
-    assert {
-        cls: cls.__module__ for cls in expected_owners
-    } == expected_owners
+    assert {cls: cls.__module__ for cls in expected_owners} == expected_owners
 
 
 def test_legacy_modules_define_no_concrete_classes():

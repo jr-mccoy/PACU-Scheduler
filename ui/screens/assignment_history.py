@@ -36,8 +36,8 @@ class AssignmentHistoryScreen(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.ah     = AssignmentHistory(DB_NAME)
-        self.nm     = NurseManager(DB_NAME)
+        self.ah = AssignmentHistory(DB_NAME)
+        self.nm = NurseManager(DB_NAME)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -66,10 +66,13 @@ class AssignmentHistoryScreen(QWidget):
         layout.addWidget(self.table, 1)
 
         # buttons
-        btn_row = QHBoxLayout(); btn_row.setSpacing(12)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
         self._btn_add = QPushButton("Add")
-        self._btn_mod = QPushButton("Modify"); self._btn_mod.setProperty("role","special")
-        self._btn_del = QPushButton("Remove"); self._btn_del.setProperty("role","destructive")
+        self._btn_mod = QPushButton("Modify")
+        self._btn_mod.setProperty("role", "special")
+        self._btn_del = QPushButton("Remove")
+        self._btn_del.setProperty("role", "destructive")
         for b in (self._btn_add, self._btn_mod, self._btn_del):
             b.setMinimumHeight(48)
             btn_row.addWidget(b)
@@ -82,7 +85,8 @@ class AssignmentHistoryScreen(QWidget):
         self.btn_sync.clicked.connect(self._on_sync)
         layout.addWidget(self.btn_sync)
 
-        back = QPushButton("Back"); back.setProperty("role","special")
+        back = QPushButton("Back")
+        back.setProperty("role", "special")
         back.setMinimumHeight(48)
         back.clicked.connect(lambda: parent.switch_frame("main"))
         layout.addWidget(back)
@@ -96,43 +100,50 @@ class AssignmentHistoryScreen(QWidget):
 
     def _nurse_combo(self, current: str | None):
         self.nm.refresh_cache()
-        cb = QComboBox(); cb.setFont(QFont("Roboto", 14))
+        cb = QComboBox()
+        cb.setFont(QFont("Roboto", 14))
         cb.addItems([""] + self.nm.get_nurses())
         cb.setCurrentText(current or "")
         return cb
 
     def _assignment_dialog(self, iso_ds, main, bak, save_cb):
         accent = self.parent.settings.get("accent_color")
-        theme  = self.parent.settings.get("theme")
+        theme = self.parent.settings.get("theme")
 
         dlg = ToolDialog(self.parent, "Assignment History")
         dlg.setFixedWidth(410)
 
-        form  = QFormLayout()
-        dummy = QLineEdit(); dummy.setFixedSize(0, 0); form.addRow(dummy)
+        form = QFormLayout()
+        dummy = QLineEdit()
+        dummy.setFixedSize(0, 0)
+        form.addRow(dummy)
 
         if iso_ds:
             form.addRow("Date:", QLabel(iso_ds))
         else:
-            picker = SingleDatePicker(accent=accent,
-                                      initial=QDate.currentDate(),
-                                      theme=theme)
+            picker = SingleDatePicker(accent=accent, initial=QDate.currentDate(), theme=theme)
             form.addRow("Date:", picker)
 
-        cbm = self._nurse_combo(main); form.addRow("Main:",   cbm)
-        cbb = self._nurse_combo(bak);  form.addRow("Backup:", cbb)
+        cbm = self._nurse_combo(main)
+        form.addRow("Main:", cbm)
+        cbb = self._nurse_combo(bak)
+        form.addRow("Backup:", cbb)
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+
         def _save():
             ds = iso_ds or picker.iso()
             save_cb(ds, cbm.currentText(), cbb.currentText())
             dlg.accept()
-        btns.accepted.connect(_save); btns.rejected.connect(dlg.reject)
+
+        btns.accepted.connect(_save)
+        btns.rejected.connect(dlg.reject)
         form.addRow(btns)
 
         dlg.setLayout(form)
-        pr = self.parent.geometry(); dr = dlg.frameGeometry()
-        dlg.move(pr.center().x()-dr.width()//2, pr.center().y()-dr.height()//2)
+        pr = self.parent.geometry()
+        dr = dlg.frameGeometry()
+        dlg.move(pr.center().x() - dr.width() // 2, pr.center().y() - dr.height() // 2)
         dlg.open()
 
     def refresh(self):
@@ -157,12 +168,14 @@ class AssignmentHistoryScreen(QWidget):
 
     def _on_add(self):
         self._assignment_dialog(
-            None, None, None,
+            None,
+            None,
+            None,
             save_cb=lambda ds, m, b: (
                 self.ah.update_history(ds, m or "", b or ""),
                 self.nm.refresh_cache(),
-                self.refresh()
-            )
+                self.refresh(),
+            ),
         )
 
     def _on_modify(self):
@@ -171,19 +184,21 @@ class AssignmentHistoryScreen(QWidget):
             show_warning(self, "No selection", "Select a row first")
             return
         disp = self.table.item(row, 0).text()
-        iso  = datetime.strptime(disp, "%m-%d-%y").date().isoformat()
-        rec  = next((r for r in self.ah.get_history() if r[0] == iso), None)
+        iso = datetime.strptime(disp, "%m-%d-%y").date().isoformat()
+        rec = next((r for r in self.ah.get_history() if r[0] == iso), None)
         if not rec:
             show_warning(self, "Missing", "Could not locate that record")
             return
         _, m, b = rec
         self._assignment_dialog(
-            iso, m, b,
+            iso,
+            m,
+            b,
             save_cb=lambda ds, mm, bb: (
                 self.ah.update_history(ds, mm or "", bb or ""),
                 self.nm.refresh_cache(),
-                self.refresh()
-            )
+                self.refresh(),
+            ),
         )
 
     def _on_remove(self):
@@ -191,14 +206,12 @@ class AssignmentHistoryScreen(QWidget):
         if row < 0:
             return
         disp = self.table.item(row, 0).text()
-        iso  = datetime.strptime(disp, "%m-%d-%y").date().isoformat()
+        iso = datetime.strptime(disp, "%m-%d-%y").date().isoformat()
         confirm(
-            self, "Confirm", f"Remove {disp}?",
-            yes_cb=lambda: (
-                self.ah.delete_record(iso),
-                self.nm.refresh_cache(),
-                self.refresh()
-            )
+            self,
+            "Confirm",
+            f"Remove {disp}?",
+            yes_cb=lambda: (self.ah.delete_record(iso), self.nm.refresh_cache(), self.refresh()),
         )
 
     def _on_sync(self):

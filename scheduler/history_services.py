@@ -166,9 +166,7 @@ class WeekendHistoryService:
                 conn.commit()
             except Exception:
                 conn.rollback()
-                logger.exception(
-                    "WeekendHistoryService override failed: %s", command_name
-                )
+                logger.exception("WeekendHistoryService override failed: %s", command_name)
                 raise
 
     def _load_chronological_assignments(
@@ -247,7 +245,5 @@ class ViolationHistoryService:
                 conn.commit()
             except Exception:
                 conn.rollback()
-                logger.exception(
-                    "ViolationHistoryService set_violation_count failed"
-                )
+                logger.exception("ViolationHistoryService set_violation_count failed")
                 raise

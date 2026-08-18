@@ -20,7 +20,9 @@ def _build_html_for_top_variants(variants, max_variants: int = 5) -> str:
     def _month_sections_for_df(df):
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
-        day_map = {d.date(): (row.get("main", ""), row.get("backup", "")) for d, row in df.iterrows()}
+        day_map = {
+            d.date(): (row.get("main", ""), row.get("backup", "")) for d, row in df.iterrows()
+        }
         start, end = df.index.min().date(), df.index.max().date()
 
         months = []
@@ -35,7 +37,9 @@ def _build_html_for_top_variants(variants, max_variants: int = 5) -> str:
             header = f"<div class='month-title'>{calendar.month_name[mo]} {y}</div>"
             table = [
                 "<table class='cal'><thead><tr>"
-                + "".join(f"<th>{d}</th>" for d in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])
+                + "".join(
+                    f"<th>{d}</th>" for d in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                )
                 + "</tr></thead><tbody>"
             ]
             for week in weeks:
@@ -49,9 +53,13 @@ def _build_html_for_top_variants(variants, max_variants: int = 5) -> str:
                     main_name, backup_name = day_map.get(the_date, ("", ""))
                     cell = [f"<div class='date'>{day}</div>"]
                     if main_name:
-                        cell.append(f"<div class='role main'><span class='badge'>Main</span> {main_name}</div>")
+                        cell.append(
+                            f"<div class='role main'><span class='badge'>Main</span> {main_name}</div>"
+                        )
                     if backup_name:
-                        cell.append(f"<div class='role backup'><span class='badge'>Backup</span> {backup_name}</div>")
+                        cell.append(
+                            f"<div class='role backup'><span class='badge'>Backup</span> {backup_name}</div>"
+                        )
                     tds.append("<td>" + "".join(cell) + "</td>")
                 table.append("<tr>" + "".join(tds) + "</tr>")
             table.append("</tbody></table>")
@@ -122,14 +130,16 @@ def _build_html_for_top_variants(variants, max_variants: int = 5) -> str:
     <button onclick="window.print()">Print / Save as PDF</button>
   </div>
 </header>
-{''.join(sections)}
+{"".join(sections)}
 <script>{js}</script>
 </body>
 </html>
 """
 
 
-def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_history, start_date, history_window: int = 4):
+def _prepare_variant_debug_payload(
+    candidate_schedules, scheduler, weekend_history, start_date, history_window: int = 4
+):
     """Build a JSON-friendly snapshot describing the ranked schedule variants."""
     try:
         import numpy as _np  # type: ignore
@@ -248,11 +258,19 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
             "balance_backup": _sanitize_number(stats.get("balance_backup")),
         }
         if stats.get("balance_main") is not None and stats.get("balance_backup") is not None:
-            gap_metrics["balance_total"] = _sanitize_number((stats.get("balance_main") or 0) + (stats.get("balance_backup") or 0))
+            gap_metrics["balance_total"] = _sanitize_number(
+                (stats.get("balance_main") or 0) + (stats.get("balance_backup") or 0)
+            )
 
-        if scheduler and hasattr(scheduler, "_rotation_violation_score") and viol_counts is not None:
+        if (
+            scheduler
+            and hasattr(scheduler, "_rotation_violation_score")
+            and viol_counts is not None
+        ):
             try:
-                gap_metrics["rotation_violation_score"] = float(scheduler._rotation_violation_score(counts, viol_counts))
+                gap_metrics["rotation_violation_score"] = float(
+                    scheduler._rotation_violation_score(counts, viol_counts)
+                )
             except Exception:
                 pass
         if scheduler and hasattr(scheduler, "_weekend_gap_penalty") and sched_df is not None:
@@ -267,7 +285,10 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
                 pass
 
         stats_serializable = {k: _sanitize_number(v) for k, v in stats.items()}
-        counts_serializable = {nurse: {role: _sanitize_number(val) for role, val in roles.items()} for nurse, roles in counts.items()}
+        counts_serializable = {
+            nurse: {role: _sanitize_number(val) for role, val in roles.items()}
+            for nurse, roles in counts.items()
+        }
 
         weekend_assignments = []
         per_nurse_variant_dates: dict[str, set[pd.Timestamp]] = defaultdict(set)
@@ -281,7 +302,9 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
                 iso_date = _iso(ts)
                 main_val = None if _is_empty(row.get("main")) else str(row.get("main"))
                 backup_val = None if _is_empty(row.get("backup")) else str(row.get("backup"))
-                assignment_rows.append((ts, {"date": iso_date, "main": main_val, "backup": backup_val}))
+                assignment_rows.append(
+                    (ts, {"date": iso_date, "main": main_val, "backup": backup_val})
+                )
                 for nurse in (row.get("main"), row.get("backup")):
                     if nurse is None or _is_empty(nurse) or ts is None:
                         continue
@@ -307,14 +330,20 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
                 history_dates = coerced[-history_window:] if history_window else coerced
 
             variant_dates = sorted(per_nurse_variant_dates.get(nurse, set()))
-            combined = [(ts, "history") for ts in history_dates] + [(ts, "variant") for ts in variant_dates]
+            combined = [(ts, "history") for ts in history_dates] + [
+                (ts, "variant") for ts in variant_dates
+            ]
             combined.sort(key=lambda tpl: tpl[0])
 
             combined_entries = []
             prev_ts = None
             for ts, source in combined:
-                delta = int((ts - prev_ts).days) if (prev_ts is not None and ts is not None) else None
-                combined_entries.append({"date": _iso(ts), "source": source, "days_since_prior": delta})
+                delta = (
+                    int((ts - prev_ts).days) if (prev_ts is not None and ts is not None) else None
+                )
+                combined_entries.append(
+                    {"date": _iso(ts), "source": source, "days_since_prior": delta}
+                )
                 prev_ts = ts
 
             spacing_diag[nurse] = {
@@ -342,7 +371,10 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
             rh = scheduler.get_rotation_violation_history() or {}
         except Exception:
             rh = {}
-        rotation_history = {nurse: [_iso(_coerce_timestamp(ts)) for ts in (dates or [])] for nurse, dates in rh.items()}
+        rotation_history = {
+            nurse: [_iso(_coerce_timestamp(ts)) for ts in (dates or [])]
+            for nurse, dates in rh.items()
+        }
 
     scoring_weights = {}
     if scheduler and getattr(scheduler, "config", None) is not None:

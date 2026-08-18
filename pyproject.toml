@@ -51,6 +51,10 @@ select = [
 ignore = [
     "E501",  # line length is reported by the formatter, not the linter
     "B008",  # function call in argument default — used deliberately for Qt defaults
+    # `class X(str, Enum)` is deliberate: swapping in `StrEnum` would change what
+    # f-strings and str() produce for these members, and those values are written
+    # to the database and compared against stored strings.
+    "UP042",
 ]
 
 [tool.ruff.lint.per-file-ignores]

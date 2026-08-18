@@ -91,26 +91,17 @@ def _main_backup_empty_mask(
     return mapper(is_empty) if callable(mapper) else sub.applymap(is_empty)
 
 
-def _count_main_backup_empties(
-    schedule_df: pd.DataFrame, *, weekdays_only: bool = False
-) -> int:
+def _count_main_backup_empties(schedule_df: pd.DataFrame, *, weekdays_only: bool = False) -> int:
     """Count empty ``main``/``backup`` cells using ``is_empty`` semantics."""
     return int(_main_backup_empty_mask(schedule_df, weekdays_only=weekdays_only).to_numpy().sum())
 
+
 PERFORMANCE_PROFILING_REQUESTED = _env_flag("NSCHED_PROFILE", False)
-PERFORMANCE_PROFILE_JSON_DEFAULT = os.environ.get(
-    "NSCHED_PROFILE_JSON", "performance_metrics.json"
-)
+PERFORMANCE_PROFILE_JSON_DEFAULT = os.environ.get("NSCHED_PROFILE_JSON", "performance_metrics.json")
 
 _DBG_MODE = os.environ.get("NSCHED_DEBUG", "").lower()
-_DBG_FILE_PAIRS = (
-    _open_dbg("debug_pairs.txt") if _DBG_MODE in {"pairs", "all"} else None
-)
-_DBG_FILE_VARIANTS = (
-    _open_dbg("debug_variants.txt")
-    if _DBG_MODE in {"variants", "all"}
-    else None
-)
+_DBG_FILE_PAIRS = _open_dbg("debug_pairs.txt") if _DBG_MODE in {"pairs", "all"} else None
+_DBG_FILE_VARIANTS = _open_dbg("debug_variants.txt") if _DBG_MODE in {"variants", "all"} else None
 for _fh in (_DBG_FILE_PAIRS, _DBG_FILE_VARIANTS):
     if _fh:
         atexit.register(_fh.close)

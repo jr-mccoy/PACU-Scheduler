@@ -40,16 +40,16 @@ class AdvancedWeekendStatsScreen(QWidget):
     """Interactive, theme-aware statistics screen for weekend violations."""
 
     # ---- fonts & sizing ---------------------------------------------------
-    BUTTON_HEIGHT     = 40
-    BUTTON_MIN_WIDTH  = 150
-    MIN_COL_WIDTH     = 80        # guarantees no header truncation
+    BUTTON_HEIGHT = 40
+    BUTTON_MIN_WIDTH = 150
+    MIN_COL_WIDTH = 80  # guarantees no header truncation
 
-    BUTTON_FONT  = QFont("Roboto", 13, QFont.Bold)
-    LABEL_FONT   = QFont("Roboto", 13)
+    BUTTON_FONT = QFont("Roboto", 13, QFont.Bold)
+    LABEL_FONT = QFont("Roboto", 13)
     SECTION_FONT = QFont("Roboto", 16, QFont.Bold)
-    TABLE_FONT   = QFont("Roboto", 12)
-    HEADER_FONT  = QFont("Roboto", 13, QFont.Bold)
-    TITLE_FONT   = QFont("Roboto", 20, QFont.Bold)
+    TABLE_FONT = QFont("Roboto", 12)
+    HEADER_FONT = QFont("Roboto", 13, QFont.Bold)
+    TITLE_FONT = QFont("Roboto", 20, QFont.Bold)
 
     HEADER_KEYS = [
         "Nurse",
@@ -64,12 +64,12 @@ class AdvancedWeekendStatsScreen(QWidget):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.parent         = parent
-        self.backend        = parent.backend
-        self._stats_date    = pd.Timestamp.today().strftime("%Y-%m-%d")
+        self.parent = parent
+        self.backend = parent.backend
+        self._stats_date = pd.Timestamp.today().strftime("%Y-%m-%d")
         self._current_nurse: str | None = None
-        self._press_time    = None
-        self._press_row     = None
+        self._press_time = None
+        self._press_row = None
 
         self._build_ui()
         self.show_stats()
@@ -146,9 +146,7 @@ class AdvancedWeekendStatsScreen(QWidget):
 
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        self.table.horizontalScrollBar().valueChanged.connect(
-            self._sync_header_scroll
-        )
+        self.table.horizontalScrollBar().valueChanged.connect(self._sync_header_scroll)
 
         root.addWidget(self.table, 1)
         root.setStretchFactor(self.table, 1)
@@ -197,8 +195,8 @@ class AdvancedWeekendStatsScreen(QWidget):
         self.btn_save_cnt = self._make_button("Save Count")
         self.btn_save_cnt.clicked.connect(self.save_count)
 
-        edit_grid.addWidget(lbl_vc,            0, 0, Qt.AlignRight)
-        edit_grid.addWidget(self.spn_violation,0, 1)
+        edit_grid.addWidget(lbl_vc, 0, 0, Qt.AlignRight)
+        edit_grid.addWidget(self.spn_violation, 0, 1)
         edit_grid.addWidget(self.btn_save_cnt, 0, 2)
 
         lbl_lp = QLabel("Last Pattern:")
@@ -211,13 +209,11 @@ class AdvancedWeekendStatsScreen(QWidget):
         self.btn_save_pat = self._make_button("Save Last Pattern")
         self.btn_save_pat.clicked.connect(self.save_pattern)
 
-        edit_grid.addWidget(lbl_lp,            1, 0, Qt.AlignRight)
-        edit_grid.addWidget(self.cmb_pattern,  1, 1)
+        edit_grid.addWidget(lbl_lp, 1, 0, Qt.AlignRight)
+        edit_grid.addWidget(self.cmb_pattern, 1, 1)
         edit_grid.addWidget(self.btn_save_pat, 1, 2)
 
-        edit_grid.addItem(
-            QSpacerItem(1, 6, QSizePolicy.Minimum, QSizePolicy.Fixed), 2, 0
-        )
+        edit_grid.addItem(QSpacerItem(1, 6, QSizePolicy.Minimum, QSizePolicy.Fixed), 2, 0)
 
         self.btn_back = self._make_button("Back")
         self.btn_back.setFont(QFont("Roboto", 18, QFont.Bold))
@@ -317,27 +313,27 @@ class AdvancedWeekendStatsScreen(QWidget):
         self.apply_theme_update()
 
     def apply_theme_update(self) -> None:
-        theme  = self.parent.settings.get("theme")
+        theme = self.parent.settings.get("theme")
         accent = self.parent.settings.get("accent_color")
 
         if theme == "dark":
             table_bg, table_fg = "#252A32", "#E8EAF0"
-            alt_bg,    grid    = "#2A3038", "#3A404B"
-            sel_bg,    sel_fg  = accent,   "#FFFFFF"
+            alt_bg, grid = "#2A3038", "#3A404B"
+            sel_bg, sel_fg = accent, "#FFFFFF"
             header_bg, header_fg = "#3A404B", "#E8EAF0"
-            btn_base,  btn_press = "#3A404B", "#2D3238"
+            btn_base, btn_press = "#3A404B", "#2D3238"
         elif theme == "light":
             table_bg, table_fg = "#FFFFFF", "#2C2A27"
-            alt_bg,    grid    = "#FDFCFA", "#E1DDD6"
-            sel_bg,    sel_fg  = accent,   "#FFFFFF"
+            alt_bg, grid = "#FDFCFA", "#E1DDD6"
+            sel_bg, sel_fg = accent, "#FFFFFF"
             header_bg, header_fg = "#F5F3F0", "#2C2A27"
-            btn_base,  btn_press = "#F5F3F0", "#E1DDD6"
+            btn_base, btn_press = "#F5F3F0", "#E1DDD6"
         else:  # pink theme
             table_bg, table_fg = "#F7D7DF", "#4A4A4A"
-            alt_bg,    grid    = "#FDEDEE", "#E9A9B8"
-            sel_bg,    sel_fg  = "#FF85A1", "#FFFFFF"
+            alt_bg, grid = "#FDEDEE", "#E9A9B8"
+            sel_bg, sel_fg = "#FF85A1", "#FFFFFF"
             header_bg, header_fg = "#F9D1D9", "#4A4A4A"
-            btn_base,  btn_press = "#F9D1D9", "#F6C3CE"
+            btn_base, btn_press = "#F9D1D9", "#F6C3CE"
 
         self.table.setStyleSheet(f"""
             QTableWidget {{
@@ -367,15 +363,18 @@ class AdvancedWeekendStatsScreen(QWidget):
             btn_press,
         )
         for btn in [
-            self.btn_change_date, self.btn_rebuild, self.btn_save_cnt,
-            self.btn_save_pat,   self.btn_back
+            self.btn_change_date,
+            self.btn_rebuild,
+            self.btn_save_cnt,
+            self.btn_save_pat,
+            self.btn_back,
         ]:
             btn.setStyleSheet(btn_css)
 
     def _sort_by_column(self, col: int) -> None:
         hdr = self.table.horizontalHeader()
         current = hdr.sortIndicatorSection()
-        order   = hdr.sortIndicatorOrder()
+        order = hdr.sortIndicatorOrder()
         if current == col:
             order = Qt.AscendingOrder if order == Qt.DescendingOrder else Qt.DescendingOrder
         else:
@@ -387,7 +386,7 @@ class AdvancedWeekendStatsScreen(QWidget):
         if obj is self.table:
             if event.type() == QEvent.MouseButtonPress and event.buttons() & Qt.LeftButton:
                 self._press_time = time.time()
-                self._press_row  = self.table.indexAt(event.pos()).row()
+                self._press_row = self.table.indexAt(event.pos()).row()
             elif event.type() == QEvent.MouseButtonRelease and self._press_time is not None:
                 if time.time() - self._press_time > 0.7 and self._press_row >= 0:
                     nurse = self.table.item(self._press_row, 0).text()
@@ -412,7 +411,11 @@ class AdvancedWeekendStatsScreen(QWidget):
         self.refresh_edit_fields()
 
     def _update_selected_nurse_label(self):
-        txt = f"Selected Nurse: {self._current_nurse}" if self._current_nurse else "Selected Nurse: None"
+        txt = (
+            f"Selected Nurse: {self._current_nurse}"
+            if self._current_nurse
+            else "Selected Nurse: None"
+        )
         self.lbl_selected_nurse.setText(txt)
 
     def _restore_selection(self):
@@ -489,7 +492,11 @@ class AdvancedWeekendStatsScreen(QWidget):
     def rebuild_history(self):
         def _start_rebuild():
             self.progress = QProgressDialog(
-                "Rebuilding violation history…", None, 0, 0, self,
+                "Rebuilding violation history…",
+                None,
+                0,
+                0,
+                self,
                 windowTitle="Please Wait",
                 windowModality=Qt.WindowModal,
             )

@@ -34,20 +34,20 @@ class ScheduleGenerationScreen(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        lay = QVBoxLayout(self); lay.setContentsMargins(16, 16, 16, 16); lay.setSpacing(12)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(12)
 
         accent = parent.settings.get("accent_color")
-        theme  = parent.settings.get("theme")
+        theme = parent.settings.get("theme")
 
         # start / end pickers -------------------------------------------------
-        for label_txt, attr in [("Start Date", "_start_cal"),
-                                ("End Date",   "_end_cal")]:
+        for label_txt, attr in [("Start Date", "_start_cal"), ("End Date", "_end_cal")]:
             lbl = QLabel(label_txt, alignment=Qt.AlignCenter)
-            lbl.setFont(UiStyle.TITLE_FONT); lay.addWidget(lbl)
+            lbl.setFont(UiStyle.TITLE_FONT)
+            lay.addWidget(lbl)
 
-            picker = SingleDatePicker(accent=accent,
-                                      initial=QDate.currentDate(),
-                                      theme=theme)
+            picker = SingleDatePicker(accent=accent, initial=QDate.currentDate(), theme=theme)
             lay.addWidget(picker)
             setattr(self, attr, picker)
 
@@ -66,23 +66,23 @@ class ScheduleGenerationScreen(QWidget):
         # placeholders
         self.wh = self.ah = self.backup = None
         self._progress = None
-        self.worker    = None
+        self.worker = None
         self._variant_dialog = None
 
     def _on_generate(self):
         s_iso = self._start_cal.iso()
         e_iso = self._end_cal.iso()
         start = datetime.strptime(s_iso, "%Y-%m-%d").date()
-        end   = datetime.strptime(e_iso, "%Y-%m-%d").date()
+        end = datetime.strptime(e_iso, "%Y-%m-%d").date()
         if end < start:
             show_warning(self, "Error", "End date is before start date")
             return
 
         # backup histories ---------------------------------------------------
         self.wh, self.ah = WeekendHistory(DB_NAME), AssignmentHistory(DB_NAME)
-        self.backup      = self.wh.backup()
+        self.backup = self.wh.backup()
 
-        theme  = self.parent.settings.get("theme")
+        theme = self.parent.settings.get("theme")
         accent = self.parent.settings.get("accent_color")
 
         dlg = RotationViolationDialog(self, self.parent.backend, accent=accent, theme=theme)
@@ -103,11 +103,17 @@ class ScheduleGenerationScreen(QWidget):
             self._progress.setValue(0)
             self._progress.setFixedSize(320, 120)
             if theme == "dark":
-                dlg_bg   = "#2D3238"; text = "#E8EAF0"; bar_bg = "#3A404B"
+                dlg_bg = "#2D3238"
+                text = "#E8EAF0"
+                bar_bg = "#3A404B"
             elif theme == "light":
-                dlg_bg   = "#F8F6F3"; text = "#2C2A27"; bar_bg = "#FFFFFF"
+                dlg_bg = "#F8F6F3"
+                text = "#2C2A27"
+                bar_bg = "#FFFFFF"
             else:  # pink
-                dlg_bg   = "#F28AAC"; text = "#FFFFFF"; bar_bg = "#FFFFFF"
+                dlg_bg = "#F28AAC"
+                text = "#FFFFFF"
+                bar_bg = "#FFFFFF"
             self._progress.setStyleSheet(f"""
                 QProgressDialog {{
                     background-color:{dlg_bg};
@@ -129,10 +135,11 @@ class ScheduleGenerationScreen(QWidget):
 
             # Launch worker with allow/nurses_allowed
             self.worker = ScheduleProgressWorker(
-                start, end,
+                start,
+                end,
                 allow_rotation_violations=allow,
                 nurses_allowed_rotation_violation=nurses_allowed,
-                settings=self.parent.settings
+                settings=self.parent.settings,
             )
             self.worker.progress.connect(self._on_progress)
             self.worker.error.connect(self._on_worker_error)
@@ -157,8 +164,8 @@ class ScheduleGenerationScreen(QWidget):
 
     def apply_theme_update(self) -> None:
         """Apply theme and accent to calendar pickers when theme changes."""
-        theme     = self.parent.settings.get("theme")
-        accent    = self.parent.settings.get("accent_color")
+        theme = self.parent.settings.get("theme")
+        accent = self.parent.settings.get("accent_color")
 
         for picker in self.findChildren(MultiDatePicker):
             picker.set_theme(theme, accent)
@@ -175,8 +182,9 @@ class ScheduleGenerationScreen(QWidget):
         # Guard: no feasible candidates
         if not variants:
             show_info(
-                self, "No feasible schedules",
-                "No valid schedules were generated for this date range and constraints."
+                self,
+                "No feasible schedules",
+                "No valid schedules were generated for this date range and constraints.",
             )
             if self.wh and self.backup:
                 self.wh.restore(self.backup)
@@ -186,18 +194,16 @@ class ScheduleGenerationScreen(QWidget):
         try:
             out_dir = _save_outputs_for_variants(variants, scheduler, top_n=min(5, len(variants)))
             show_info(
-                self, "Schedules exported",
+                self,
+                "Schedules exported",
                 f"Saved calendar HTML and PDFs to:\n{out_dir}\n\n"
-                "Open them manually to review. You can still use the in-app review now."
+                "Open them manually to review. You can still use the in-app review now.",
             )
         except Exception as e:
             show_warning(self, "Export failed", f"Could not save schedules:\n{e}")
 
         # Proceed to the normal review dialog
-        self._variant_dialog = VariantReviewDialog(
-            self.parent,
-            variants, wh, self.ah, self.backup
-        )
+        self._variant_dialog = VariantReviewDialog(self.parent, variants, wh, self.ah, self.backup)
         self._variant_dialog.rejected.connect(lambda: self.wh.restore(self.backup))
         self._variant_dialog.open()
 

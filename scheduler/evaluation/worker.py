@@ -112,7 +112,9 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                 main_counts = var.state.main_assignment_counts.values
                 back_counts = var.state.backup_assignment_counts.values
                 balance_main = int(main_counts.max() - main_counts.min()) if len(main_counts) else 0
-                balance_backup = int(back_counts.max() - back_counts.min()) if len(back_counts) else 0
+                balance_backup = (
+                    int(back_counts.max() - back_counts.min()) if len(back_counts) else 0
+                )
                 rotation_rep = int(var.state.rotation_repeats)
 
             stats = {
@@ -183,6 +185,7 @@ def _evaluate_variant_worker_profiled(args):
     Returns ``(idx, stats, nurse_counts, schedule_df, worker_metrics)``.
     """
     return _evaluate_variant_core(args, with_profiling=True)
+
 
 __all__ = [
     "_evaluate_variant_core",

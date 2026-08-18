@@ -193,7 +193,9 @@ class WindowRefillOptimizer:
                 new_tuple = ctx.spread_components()
                 sub2 = ctx.state.schedule.loc[days, ["main", "backup"]]
                 mapper2 = getattr(sub2, "map", None)
-                new_mask = mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
+                new_mask = (
+                    mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
+                )
                 new_gaps = int(new_mask.to_numpy().sum())
 
                 if (ctx.lexi_better(new_tuple, base_tuple)) and (new_gaps <= base_gaps):
@@ -219,7 +221,9 @@ class WindowRefillOptimizer:
             if comparison == ctx.Comparison.WORSE and not schedule_changed:
                 break
 
-        return self._finalize_tracker(tracker, initial_quality, improved or target_hit, "WindowRefill")
+        return self._finalize_tracker(
+            tracker, initial_quality, improved or target_hit, "WindowRefill"
+        )
 
     def iterative_full_period_refill(
         self,

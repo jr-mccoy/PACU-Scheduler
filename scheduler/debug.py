@@ -116,7 +116,11 @@ class AssignmentDebugLogger:
         record.setdefault("timestamp", datetime.datetime.now().isoformat())
 
         with _LOCK:
-            assert self._json_handle is not None and self._csv_writer is not None and self._csv_handle is not None
+            assert (
+                self._json_handle is not None
+                and self._csv_writer is not None
+                and self._csv_handle is not None
+            )
             self._json_handle.write(json.dumps(record, default=str) + "\n")
 
             row = {field: self._stringify(record.get(field)) for field in self.CSV_FIELDS}
@@ -133,13 +137,15 @@ def log(kind: str, payload: dict):
     """Write one JSON line to <kind>_dump_<timestamp>.log."""
     if not _DEBUG:
         return
-    line  = json.dumps(payload, default=str)
+    line = json.dumps(payload, default=str)
     with _LOCK:
         fname = _LOG_FILE_CACHE.setdefault(kind, f"{kind}_dump_{_ts()}.log")
         with open(fname, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
+
 ASSIGNMENT_DEBUG_LOGGER = AssignmentDebugLogger(enabled=_DEBUG)
+
 
 def configure_pair_variant_debug(mode: str) -> None:
     """Reconfigure pair/variant debug streams without stale aliases."""
@@ -156,6 +162,7 @@ def configure_pair_variant_debug(mode: str) -> None:
     if normalized in {"variants", "all"}:
         _runtime._DBG_FILE_VARIANTS = _runtime._open_dbg("debug_variants.txt")
 
+
 def configure_assignment_debug_logger(enabled: bool) -> None:
     """Reconfigure the shared logger while preserving imported references."""
     global _DEBUG
@@ -164,6 +171,7 @@ def configure_assignment_debug_logger(enabled: bool) -> None:
     ASSIGNMENT_DEBUG_LOGGER.close()
     ASSIGNMENT_DEBUG_LOGGER.__dict__.clear()
     ASSIGNMENT_DEBUG_LOGGER.__dict__.update(replacement.__dict__)
+
 
 __all__ = [
     "AssignmentDebugLogger",

@@ -51,7 +51,7 @@ class CLIHelper:
     @staticmethod
     def clear_screen() -> None:
         try:
-            os.system('cls' if os.name == 'nt' else 'clear')
+            os.system("cls" if os.name == "nt" else "clear")
         except Exception:
             try:
                 print("\033c", end="")  # ANSI escape code to clear screen
@@ -131,7 +131,7 @@ class VisualCalendarUI:
 
     def __init__(self, nurse_manager: Any) -> None:
         """
-        Initialize the Visual Calendar UI.    
+        Initialize the Visual Calendar UI.
         :param nurse_manager: The nurse manager instance that holds nurse data.
         """
         self.nurse_manager = nurse_manager
@@ -203,7 +203,7 @@ class VisualCalendarUI:
         with sqlite3.connect(self.nurse_manager.db_name) as conn:
             cur = conn.cursor()
             for sched_date, row in self.schedule.iterrows():
-                date_str = pd.to_datetime(sched_date).strftime('%Y-%m-%d')
+                date_str = pd.to_datetime(sched_date).strftime("%Y-%m-%d")
                 main_nurse = row["main"] if not NurseScheduler.is_empty(row["main"]) else ""
                 backup_nurse = row["backup"] if not NurseScheduler.is_empty(row["backup"]) else ""
                 cur.execute(
@@ -233,13 +233,13 @@ class VisualCalendarUI:
             choice = input("Enter choice: ").strip()
             command = choice.upper()
 
-            if command == 'N':
+            if command == "N":
                 self._next_month()
-            elif command == 'P':
+            elif command == "P":
                 self._previous_month()
-            elif command == 'D':
+            elif command == "D":
                 return self.selected_dates
-            elif command == 'C':
+            elif command == "C":
                 return initial_selected
             else:
                 self._process_day_entries(choice)
@@ -291,7 +291,7 @@ class VisualCalendarUI:
 
     def edit_unavailable_dates(self, nurse_name: str) -> set[str]:
         """
-        Edit unavailable dates for a given nurse.    
+        Edit unavailable dates for a given nurse.
         :param nurse_name: The name of the nurse.
         :return: The updated set of unavailable date strings.
         """
@@ -301,14 +301,16 @@ class VisualCalendarUI:
         }
         return self.display_calendar(nurse_name)
 
+
 class InputValidator:
     """Utility class for validating user inputs."""
+
     @staticmethod
     def validate_date(date_str: str) -> date | None:
         """
-        Validate a date string in YYYY-MM-DD format.        
+        Validate a date string in YYYY-MM-DD format.
         Args:
-            date_str: String containing the date                
+            date_str: String containing the date
         Returns:
             date object if valid, None otherwise
         """
@@ -321,9 +323,9 @@ class InputValidator:
     @staticmethod
     def validate_nurse_name(name: str) -> bool:
         """
-        Validate that a nurse name is not empty.        
+        Validate that a nurse name is not empty.
         Args:
-            name: Nurse name to validate            
+            name: Nurse name to validate
         Returns:
             True if valid, False otherwise
         """
@@ -341,7 +343,9 @@ class InputValidator:
             try:
                 value = int(input(prompt).strip())
                 if valid_range is not None and value not in valid_range:
-                    print(f"Error: Please enter a number in the range {valid_range.start} to {valid_range.stop - 1}.")
+                    print(
+                        f"Error: Please enter a number in the range {valid_range.start} to {valid_range.stop - 1}."
+                    )
                     continue
                 return value
             except ValueError:
@@ -350,15 +354,15 @@ class InputValidator:
     @staticmethod
     def confirm_action(prompt: str = "Continue?", default: str = "n") -> bool:
         """
-        Ask user to confirm an action.        
+        Ask user to confirm an action.
         Args:
             prompt: Question to ask the user
-            default: Default response if user just presses Enter            
+            default: Default response if user just presses Enter
         Returns:
             True if user confirms, False otherwise
         """
-        valid_yes = ['y', 'yes']
-        valid_no = ['n', 'no']
+        valid_yes = ["y", "yes"]
+        valid_no = ["n", "no"]
         default = default.lower()
         if default in valid_yes:
             options = "[Y/n]"
@@ -379,11 +383,12 @@ class InputValidator:
 
 
 class NurseSchedulerUI:
-    """  
-    User Interface for the Nurse Scheduler System.  
-    Manages menus and interactions with the underlying nurse scheduling logic.  
     """
-    def __init__(self, db_name: str = 'nurse_schedule.db'):
+    User Interface for the Nurse Scheduler System.
+    Manages menus and interactions with the underlying nurse scheduling logic.
+    """
+
+    def __init__(self, db_name: str = "nurse_schedule.db"):
         logger.info(f"Initializing NurseSchedulerUI with database: {db_name}")
         try:
             # Load the same settings the GUI uses
@@ -401,14 +406,12 @@ class NurseSchedulerUI:
             print(f"Error initializing system: {e}")
             raise
 
-
     # ============================================================================
     # UTILITY AND HELPER METHODS
     # ============================================================================
 
     @staticmethod
-    def _long_term_score(nurse_counts: dict[str, dict[str, int]],
-                         overage: dict[str, int]) -> int:
+    def _long_term_score(nurse_counts: dict[str, dict[str, int]], overage: dict[str, int]) -> int:
         """
         Penalty that prefers variants which *reduce* prior over-use.
         We compute, for every nurse:
@@ -481,7 +484,9 @@ class NurseSchedulerUI:
         for i, nurse in enumerate(nurses, 1):
             print(f"{i}. {nurse}")
 
-        choice = input(f"\nEnter number or name{' (leave blank for none)' if allow_none else ''}: ").strip()
+        choice = input(
+            f"\nEnter number or name{' (leave blank for none)' if allow_none else ''}: "
+        ).strip()
 
         if not choice and allow_none:
             return ""
@@ -514,11 +519,7 @@ class NurseSchedulerUI:
             data = []
             for nurse_name, violation_date, pattern, prev_pattern in violations:
                 date_obj = pd.to_datetime(violation_date).date()
-                data.append((
-                    nurse_name,
-                    date_obj.isoformat(),
-                    f"{prev_pattern} → {pattern}"
-                ))
+                data.append((nurse_name, date_obj.isoformat(), f"{prev_pattern} → {pattern}"))
 
             headers = ["Nurse", "Violation Date", "Pattern Repeat"]
             title = "Rotation Violations" + (f" for {nurse}" if nurse else "")
@@ -531,7 +532,8 @@ class NurseSchedulerUI:
     def _handle_rebuild_violation_history(self) -> None:
         """Rebuild violation history from existing weekend assignments."""
         if not InputValidator.confirm_action(
-            "This will rebuild all violation records from weekend history. Continue?", "n"):
+            "This will rebuild all violation records from weekend history. Continue?", "n"
+        ):
             return
 
         def rebuild_history():
@@ -571,7 +573,9 @@ class NurseSchedulerUI:
 
         def add_assignment():
             self.weekend_history_service.add_assignment(weekend_start, fsf_nurse, sfs_nurse)
-            logger.info(f"Added weekend assignment for {weekend_start.date()}: FSF={fsf_nurse}, SFS={sfs_nurse}")
+            logger.info(
+                f"Added weekend assignment for {weekend_start.date()}: FSF={fsf_nurse}, SFS={sfs_nurse}"
+            )
 
         msg = f"Weekend assignment added for {weekend_start.date()}."
         self._safe_execute("add weekend assignment", add_assignment, msg)
@@ -610,7 +614,7 @@ class NurseSchedulerUI:
 
         # Determine selected weekend
         if choice.isdigit() and 1 <= int(choice) <= len(wk_list):
-            friday = wk_list[int(choice)-1][0]
+            friday = wk_list[int(choice) - 1][0]
         else:
             friday = self._normalize_date(choice)
             if friday is None:
@@ -625,8 +629,8 @@ class NurseSchedulerUI:
             return
 
         # Get new nurses
-        new_fsf = (self._get_nurse_name(f"FSF nurse [{current[0] or 'unchanged'}]: ") or current[0])
-        new_sfs = (self._get_nurse_name(f"SFS nurse [{current[1] or 'unchanged'}]: ") or current[1])
+        new_fsf = self._get_nurse_name(f"FSF nurse [{current[0] or 'unchanged'}]: ") or current[0]
+        new_sfs = self._get_nurse_name(f"SFS nurse [{current[1] or 'unchanged'}]: ") or current[1]
 
         # Validate changes
         if new_fsf == new_sfs:
@@ -665,7 +669,7 @@ class NurseSchedulerUI:
 
         # Determine selected weekend
         if choice.isdigit() and 1 <= int(choice) <= len(wk_list):
-            friday = wk_list[int(choice)-1][0]
+            friday = wk_list[int(choice) - 1][0]
         else:
             friday = self._normalize_date(choice)
             if friday is None:
@@ -796,21 +800,22 @@ class NurseSchedulerUI:
 
         def update_status():
             # Get current status
-            if status_type == 'PRN':
+            if status_type == "PRN":
                 current_status = self.nurse_manager.get_prn_status(name)
-            elif status_type == 'Late Shift':
+            elif status_type == "Late Shift":
                 current_status = self.nurse_manager.get_late_shift_status(name)
             else:
                 raise ValueError(f"Unknown status type: {status_type}")
 
             print(f"Current {status_type} status for {name}: {'Yes' if current_status else 'No'}")
-            status = InputValidator.confirm_action(f"Set {name} as {status_type}?",
-                                                  "y" if current_status else "n")
+            status = InputValidator.confirm_action(
+                f"Set {name} as {status_type}?", "y" if current_status else "n"
+            )
 
             # Update status
-            if status_type == 'PRN':
+            if status_type == "PRN":
                 self.nurse_manager.set_prn_status(name, status)
-            elif status_type == 'Late Shift':
+            elif status_type == "Late Shift":
                 self.nurse_manager.set_late_shift_status(name, status)
 
             logger.info(f"Updated {status_type} status for nurse {name} to {status}")
@@ -821,19 +826,19 @@ class NurseSchedulerUI:
 
     def _handle_set_prn_status(self) -> None:
         """Handle setting a nurse's PRN status."""
-        self._handle_set_nurse_status('PRN')
+        self._handle_set_nurse_status("PRN")
 
     def _handle_set_late_shift_status(self) -> None:
         """Handle setting a nurse's Late Shift status."""
-        self._handle_set_nurse_status('Late Shift')
+        self._handle_set_nurse_status("Late Shift")
 
     # ============================================================================
     # ASSIGNMENT HISTORY MANAGEMENT
     # ============================================================================
 
-    def _sync_assignment_history_for_weekend(self, friday: pd.Timestamp,
-                                            fsf_nurse: str | None,
-                                            sfs_nurse: str | None) -> None:
+    def _sync_assignment_history_for_weekend(
+        self, friday: pd.Timestamp, fsf_nurse: str | None, sfs_nurse: str | None
+    ) -> None:
         """Safely update the three schedule_history rows for weekend pattern."""
         friday = DateUtils.normalize_date(friday)
         saturday = friday + timedelta(days=1)
@@ -961,7 +966,9 @@ class NurseSchedulerUI:
     def _apply_sync_changes(self, changes, conflicts):
         """Apply the sync changes based on user confirmation."""
         # Confirm additions
-        if changes and not InputValidator.confirm_action("Add missing assignments to assignment history?", "y"):
+        if changes and not InputValidator.confirm_action(
+            "Add missing assignments to assignment history?", "y"
+        ):
             print("No changes made.")
             return
 
@@ -969,7 +976,8 @@ class NurseSchedulerUI:
         overwrite = False
         if conflicts:
             overwrite = InputValidator.confirm_action(
-                "Overwrite conflicting assignments in assignment history with weekend history values?", "n"
+                "Overwrite conflicting assignments in assignment history with weekend history values?",
+                "n",
             )
             if not overwrite:
                 print("Conflicting assignments were not changed.")
@@ -982,7 +990,9 @@ class NurseSchedulerUI:
         if overwrite:
             for day, main, backup, current in conflicts:
                 self.assignment_history.update_history(day, main, backup)
-                logger.info(f"Overwrote assignment for {day.date()}: Main={main}, Backup={backup} (was Main={current[0]}, Backup={current[1]})")
+                logger.info(
+                    f"Overwrote assignment for {day.date()}: Main={main}, Backup={backup} (was Main={current[0]}, Backup={current[1]})"
+                )
 
         print("Sync complete.")
 
@@ -1001,12 +1011,19 @@ class NurseSchedulerUI:
             "6": ("Manage Weekend History", self.manage_weekend_history_menu),
             "7": ("Manage Assignment History", self.manage_assignment_history_menu),
             "8": ("Advanced Weekend Stats", self.advanced_weekend_stats_menu),
-            "9": ("Sync Assignment History / Weekend History", self._handle_sync_assignment_history_with_weekend),
-            "10": ("Exit         (⁠ಠ⁠_⁠ಠ⁠)⁠>⁠⌐⁠■⁠-⁠■         (⁠⌐⁠■⁠-⁠■⁠)", None)
+            "9": (
+                "Sync Assignment History / Weekend History",
+                self._handle_sync_assignment_history_with_weekend,
+            ),
+            "10": ("Exit         (⁠ಠ⁠_⁠ಠ⁠)⁠>⁠⌐⁠■⁠-⁠■         (⁠⌐⁠■⁠-⁠■⁠)", None),
         }
 
-        self._run_menu_loop("Nurse Scheduler System", menu_options, exit_option="10",
-                           exit_message="Thank you for using the Nurse Scheduler System. Goodbye!")
+        self._run_menu_loop(
+            "Nurse Scheduler System",
+            menu_options,
+            exit_option="10",
+            exit_message="Thank you for using the Nurse Scheduler System. Goodbye!",
+        )
 
     def nurse_management_menu(self) -> None:
         """Display the nurse management menu and handle related operations."""
@@ -1017,7 +1034,7 @@ class NurseSchedulerUI:
             "4": ("View All Unavailable Dates", self._handle_view_all_unavailable_dates),
             "5": ("Set PRN Status", self._handle_set_prn_status),
             "6": ("Set Late Shift Status", self._handle_set_late_shift_status),
-            "7": ("Return to Main Menu", None)
+            "7": ("Return to Main Menu", None),
         }
 
         self._run_menu_loop("Nurse Management", menu_options, exit_option="7")
@@ -1028,7 +1045,7 @@ class NurseSchedulerUI:
             "1": ("Add Pre-scheduled Assignment", self._handle_add_pre_scheduled_assignment),
             "2": ("Remove Pre-scheduled Assignment", self._handle_remove_pre_scheduled_assignment),
             "3": ("View Pre-scheduled Assignments", self._handle_view_pre_scheduled_assignments),
-            "4": ("Return to Main Menu", None)
+            "4": ("Return to Main Menu", None),
         }
 
         self._run_menu_loop("Manual Scheduling", menu_options, exit_option="4")
@@ -1039,7 +1056,7 @@ class NurseSchedulerUI:
             "1": ("Add Weekend Assignment", self._handle_add_weekend_assignment),
             "2": ("Modify Weekend Assignment", self._handle_modify_weekend_assignment),
             "3": ("Delete Weekend Assignment", self._handle_delete_weekend_assignment),
-            "4": ("Return to Main Menu", None)
+            "4": ("Return to Main Menu", None),
         }
 
         self._run_menu_loop("Weekend History Management", menu_options, exit_option="4")
@@ -1051,7 +1068,7 @@ class NurseSchedulerUI:
             "2": ("Add Assignment to History", self._handle_add_assignment_history),
             "3": ("Modify Assignment in History", self._handle_modify_assignment_history),
             "4": ("Delete Assignment from History", self._handle_delete_assignment_history),
-            "5": ("Return to Main Menu", None)
+            "5": ("Return to Main Menu", None),
         }
 
         self._run_menu_loop("Assignment History Management", menu_options, exit_option="5")
@@ -1064,8 +1081,11 @@ class NurseSchedulerUI:
             "3": ("View Last Weekend Pattern", self._handle_view_last_patterns),
             "4": ("Set Violation Count (Manual Override)", self._handle_set_violation_count),
             "5": ("Set Last Pattern", self._handle_set_last_pattern),
-            "6": ("Rebuild Violation History (Recompute from Weekend History)", self._handle_rebuild_violation_history),
-            "7": ("Return to Main Menu", None)
+            "6": (
+                "Rebuild Violation History (Recompute from Weekend History)",
+                self._handle_rebuild_violation_history,
+            ),
+            "7": ("Return to Main Menu", None),
         }
 
         self._run_menu_loop("Advanced Weekend Stats", menu_options, exit_option="7")
@@ -1119,7 +1139,9 @@ class NurseSchedulerUI:
 
         def add_assignment():
             self.pre_scheduler.add_assignment(date_str, main, backup, note)
-            logger.info(f"Added pre-scheduled assignment for {date_str}: Main={main}, Backup={backup}")
+            logger.info(
+                f"Added pre-scheduled assignment for {date_str}: Main={main}, Backup={backup}"
+            )
             return f"Assignment added for {date_str}."
 
         self._safe_execute("add pre-scheduled assignment", add_assignment)
@@ -1127,6 +1149,7 @@ class NurseSchedulerUI:
 
     def _handle_view_pre_scheduled_assignments(self) -> None:
         """Handle viewing pre-scheduled assignments."""
+
         def view_assignments():
             assignments = self.pre_scheduler.get_assignments()
             if not assignments:
@@ -1192,7 +1215,9 @@ class NurseSchedulerUI:
 
             data = []
             for assign_date, main, backup in assignments:
-                date_obj = date.fromisoformat(assign_date) if isinstance(assign_date, str) else assign_date
+                date_obj = (
+                    date.fromisoformat(assign_date) if isinstance(assign_date, str) else assign_date
+                )
                 weekday = calendar.day_name[date_obj.weekday()]
                 data.append((assign_date, weekday, main, backup))
 
@@ -1225,7 +1250,9 @@ class NurseSchedulerUI:
 
         def add_to_history():
             self.assignment_history.update_history(assign_date.isoformat(), main, backup)
-            logger.info(f"Added assignment to history for {assign_date}: Main={main}, Backup={backup}")
+            logger.info(
+                f"Added assignment to history for {assign_date}: Main={main}, Backup={backup}"
+            )
             return f"Assignment added to history for {date_str}."
 
         self._safe_execute("add assignment to history", add_to_history)
@@ -1254,12 +1281,16 @@ class NurseSchedulerUI:
 
             # Get new nurses
             print(f"\nCurrent Main: {current[1]}")
-            main = self._select_nurse_from_list("Select new Main nurse (or press Enter to keep current):", allow_none=True)
+            main = self._select_nurse_from_list(
+                "Select new Main nurse (or press Enter to keep current):", allow_none=True
+            )
             if not main:
                 main = current[1]
 
             print(f"\nCurrent Backup: {current[2]}")
-            backup = self._select_nurse_from_list("Select new Backup nurse (or press Enter to keep current):", allow_none=True)
+            backup = self._select_nurse_from_list(
+                "Select new Backup nurse (or press Enter to keep current):", allow_none=True
+            )
             if not backup:
                 backup = current[2]
 
@@ -1268,7 +1299,9 @@ class NurseSchedulerUI:
                 return None
 
             self.assignment_history.update_history(assign_date.isoformat(), main, backup)
-            logger.info(f"Modified assignment in history for {assign_date}: Main={main}, Backup={backup}")
+            logger.info(
+                f"Modified assignment in history for {assign_date}: Main={main}, Backup={backup}"
+            )
             return f"Assignment modified in history for {date_str}."
 
         self._safe_execute("modify assignment in history", modify_history)
@@ -1289,7 +1322,9 @@ class NurseSchedulerUI:
                 print(f"No assignment found for {assign_date.date()}.")
                 return None
 
-            if not InputValidator.confirm_action(f"Are you sure you want to delete the assignment for {assign_date.date()}?"):
+            if not InputValidator.confirm_action(
+                f"Are you sure you want to delete the assignment for {assign_date.date()}?"
+            ):
                 print("Operation cancelled.")
                 return None
 
@@ -1380,6 +1415,7 @@ class NurseSchedulerUI:
 
     def view_nurses(self) -> None:
         """Display the list of current nurses with their status."""
+
         def get_nurse_data():
             nurses = self.nurse_manager.get_nurses()
             if not nurses:
@@ -1400,6 +1436,7 @@ class NurseSchedulerUI:
 
     def view_weekend_history(self) -> None:
         """Display weekend assignment history."""
+
         def get_weekend_data():
             assignments = self.weekend_history.get_assignments()
             if not assignments:
@@ -1408,14 +1445,13 @@ class NurseSchedulerUI:
 
             data = []
             for weekend_start, fsf, sfs in assignments:
-                weekend_date = weekend_start if isinstance(weekend_start, date) else date.fromisoformat(weekend_start)
+                weekend_date = (
+                    weekend_start
+                    if isinstance(weekend_start, date)
+                    else date.fromisoformat(weekend_start)
+                )
                 weekend_end = weekend_date + timedelta(days=2)
-                data.append((
-                    weekend_date.isoformat(),
-                    weekend_end.isoformat(),
-                    fsf,
-                    sfs
-                ))
+                data.append((weekend_date.isoformat(), weekend_end.isoformat(), fsf, sfs))
 
             headers = ["Start Date", "End Date", "Friday Nurse", "Saturday Nurse"]
             CLIHelper.display_table(data, headers, "Weekend Assignment History")
@@ -1434,8 +1470,10 @@ class NurseSchedulerUI:
         for sched_date, row in schedule.iterrows():
             date_str = pd.to_datetime(sched_date).date().isoformat()
             weekday = calendar.day_name[pd.to_datetime(sched_date).weekday()]
-            main_nurse = row['main'] if not NurseScheduler.is_empty(row['main']) else "NOT ASSIGNED"
-            backup_nurse = row['backup'] if not NurseScheduler.is_empty(row['backup']) else "NOT ASSIGNED"
+            main_nurse = row["main"] if not NurseScheduler.is_empty(row["main"]) else "NOT ASSIGNED"
+            backup_nurse = (
+                row["backup"] if not NurseScheduler.is_empty(row["backup"]) else "NOT ASSIGNED"
+            )
             data.append((date_str, weekday, main_nurse, backup_nurse))
 
         headers = ["Date", "Day", "Main Nurse", "Backup Nurse"]
@@ -1451,11 +1489,21 @@ class NurseSchedulerUI:
         print("=== Create New Schedule ===\n")
 
         if ASSIGNMENT_DEBUG_LOGGER.enabled:
-            json_name = ASSIGNMENT_DEBUG_LOGGER.json_path.name if ASSIGNMENT_DEBUG_LOGGER.json_path else "assignment_debug.jsonl"
-            csv_name = ASSIGNMENT_DEBUG_LOGGER.csv_path.name if ASSIGNMENT_DEBUG_LOGGER.csv_path else "assignment_debug.csv"
+            json_name = (
+                ASSIGNMENT_DEBUG_LOGGER.json_path.name
+                if ASSIGNMENT_DEBUG_LOGGER.json_path
+                else "assignment_debug.jsonl"
+            )
+            csv_name = (
+                ASSIGNMENT_DEBUG_LOGGER.csv_path.name
+                if ASSIGNMENT_DEBUG_LOGGER.csv_path
+                else "assignment_debug.csv"
+            )
             print(f"Assignment diagnostics are being recorded to {json_name} and {csv_name}.\n")
         else:
-            print("Tip: set DEBUG_SCHED=1 before launching to write per-slot diagnostics to assignment_debug_<timestamp>.jsonl/.csv.\n")
+            print(
+                "Tip: set DEBUG_SCHED=1 before launching to write per-slot diagnostics to assignment_debug_<timestamp>.jsonl/.csv.\n"
+            )
 
         try:
             # Basic checks & date range input
@@ -1532,30 +1580,49 @@ class NurseSchedulerUI:
         summary = self.weekend_history.get_violation_summary()
         summary = summary.sort_values(
             by=["total_viol", "consec_viol", "clean_run_weeks", "days_since_last"],
-            ascending=[True, True, False, False]
+            ascending=[True, True, False, False],
         ).reset_index(drop=True)
 
         # Display table
         CLIHelper.display_table(
-            summary[["nurse", "total_viol", "last_violation_date", "consec_viol", "clean_run_weeks", "days_since_last"]].values.tolist(),
+            summary[
+                [
+                    "nurse",
+                    "total_viol",
+                    "last_violation_date",
+                    "consec_viol",
+                    "clean_run_weeks",
+                    "days_since_last",
+                ]
+            ].values.tolist(),
             ["Nurse", "#Viol", "Last Viol", "Viol-Streak", "Clean Runs", "Days Since Last"],
-            "Rotation Violation Summary"
+            "Rotation Violation Summary",
         )
 
-        print("\nWe recommend allowing violations for nurses at the top of this list (least violated, longest clean run).")
+        print(
+            "\nWe recommend allowing violations for nurses at the top of this list (least violated, longest clean run)."
+        )
         print("Enter comma-separated numbers to allow, or leave blank for none, or 'all' for all.")
 
         for i, row in summary.iterrows():
-            print(f"{i+1}. {row['nurse']} (Viol: {row['total_viol']}, Streak: {row['consec_viol']}, Clean: {row['clean_run_weeks']}, Days: {row['days_since_last']})")
+            print(
+                f"{i + 1}. {row['nurse']} (Viol: {row['total_viol']}, Streak: {row['consec_viol']}, Clean: {row['clean_run_weeks']}, Days: {row['days_since_last']})"
+            )
 
-        allow = InputValidator.confirm_action("Allow any rotation violations for this schedule run?", "n")
+        allow = InputValidator.confirm_action(
+            "Allow any rotation violations for this schedule run?", "n"
+        )
 
         if allow:
             sel = input("Enter numbers (comma-separated), or 'all' for all: ").strip()
             if sel.lower() == "all":
                 return summary["nurse"].tolist()
             elif sel:
-                idxs = [int(x)-1 for x in sel.split(",") if x.strip().isdigit() and 0 < int(x) <= len(summary)]
+                idxs = [
+                    int(x) - 1
+                    for x in sel.split(",")
+                    if x.strip().isdigit() and 0 < int(x) <= len(summary)
+                ]
                 return [summary.iloc[i]["nurse"] for i in idxs]
 
         return []
@@ -1563,11 +1630,13 @@ class NurseSchedulerUI:
     def _create_scheduler(self, start_date, end_date):
         """Create and configure the nurse scheduler from the shared GUI settings."""
         return build_scheduler_from_settings(
-            start_date, end_date,
-            self.nurse_manager, self.weekend_history, self.pre_scheduler,
-            self.settings
+            start_date,
+            end_date,
+            self.nurse_manager,
+            self.weekend_history,
+            self.pre_scheduler,
+            self.settings,
         )
-
 
     def _generate_schedule_with_violations(self, scheduler, nurses_allowed):
         """Generate schedule with violation settings."""
@@ -1591,9 +1660,11 @@ class NurseSchedulerUI:
         print("\nTop candidate schedules:")
         for rank, candidate in enumerate(top_schedules, start=1):
             idx, stats, nurse_counts, sched = candidate
-            print(f"\nCandidate {rank}: Gaps={stats['gaps']}, "
-                  f"Balance Main={stats['balance_main']}, "
-                  f"Balance Backup={stats['balance_backup']}")
+            print(
+                f"\nCandidate {rank}: Gaps={stats['gaps']}, "
+                f"Balance Main={stats['balance_main']}, "
+                f"Balance Backup={stats['balance_backup']}"
+            )
 
             print("\nNurse Assignment Counts:")
             print(f"{'Nurse':<20}{'Main':<10}{'Backup':<10}{'Total':<10}")
@@ -1606,7 +1677,7 @@ class NurseSchedulerUI:
         # Expect 1..N
         sel = InputValidator.get_integer_input(
             f"Enter the candidate number to select (1-{len(top_schedules)}): ",
-            valid_range=range(1, len(top_schedules) + 1)
+            valid_range=range(1, len(top_schedules) + 1),
         )
         sel_idx = sel - 1
         final_sched = top_schedules[sel_idx][3]
@@ -1630,17 +1701,25 @@ class NurseSchedulerUI:
 
         for weekend in weekends:
             try:
-                fsf_nurse = schedule.at[weekend, 'main']
+                fsf_nurse = schedule.at[weekend, "main"]
                 saturday = weekend + timedelta(days=1)
-                sfs_nurse = schedule.at[saturday, 'main']
+                sfs_nurse = schedule.at[saturday, "main"]
 
-                if not NurseScheduler.is_empty(fsf_nurse) and not NurseScheduler.is_empty(sfs_nurse) and fsf_nurse != sfs_nurse:
+                if (
+                    not NurseScheduler.is_empty(fsf_nurse)
+                    and not NurseScheduler.is_empty(sfs_nurse)
+                    and fsf_nurse != sfs_nurse
+                ):
                     weekend_date = self._normalize_date(weekend)
-                    self.weekend_history_service.modify_assignment(weekend_date, fsf_nurse, sfs_nurse)
+                    self.weekend_history_service.modify_assignment(
+                        weekend_date, fsf_nurse, sfs_nurse
+                    )
                     updated_count += 1
             except Exception as e:
                 logger.warning(f"Could not update weekend history for {weekend}: {e}")
-                print(f"Warning: Could not update weekend history for weekend starting {weekend}: {e}")
+                print(
+                    f"Warning: Could not update weekend history for weekend starting {weekend}: {e}"
+                )
 
         print(f"Updated {updated_count} weekend assignments in history.")
 
@@ -1651,8 +1730,8 @@ class NurseSchedulerUI:
         for sched_date, row in schedule.iterrows():
             try:
                 date_str_db = pd.to_datetime(sched_date).date().isoformat()
-                main_nurse = row['main'] if not NurseScheduler.is_empty(row['main']) else ""
-                backup_nurse = row['backup'] if not NurseScheduler.is_empty(row['backup']) else ""
+                main_nurse = row["main"] if not NurseScheduler.is_empty(row["main"]) else ""
+                backup_nurse = row["backup"] if not NurseScheduler.is_empty(row["backup"]) else ""
 
                 if main_nurse or backup_nurse:
                     self.assignment_history.update_history(date_str_db, main_nurse, backup_nurse)
@@ -1709,4 +1788,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

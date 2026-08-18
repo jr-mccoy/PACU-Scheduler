@@ -174,8 +174,12 @@ class PerformanceReport:
 
         phase_stats: dict[str, dict[str, float]] = {}
         for phase in sorted(all_phases):
-            durations = [m.phases[phase].duration_sec for m in self.all_metrics if phase in m.phases]
-            mem_deltas = [m.phases[phase].memory_mb_delta for m in self.all_metrics if phase in m.phases]
+            durations = [
+                m.phases[phase].duration_sec for m in self.all_metrics if phase in m.phases
+            ]
+            mem_deltas = [
+                m.phases[phase].memory_mb_delta for m in self.all_metrics if phase in m.phases
+            ]
 
             if durations:
                 phase_stats[phase] = {
@@ -194,14 +198,18 @@ class PerformanceReport:
             )
 
     def _print_resource_summary(self):
-        total_mem_deltas = [sum(p.memory_mb_delta for p in m.phases.values()) for m in self.all_metrics]
+        total_mem_deltas = [
+            sum(p.memory_mb_delta for p in m.phases.values()) for m in self.all_metrics
+        ]
         if total_mem_deltas:
             avg_mem = sum(total_mem_deltas) / len(total_mem_deltas)
             max_mem = max(total_mem_deltas)
             print(f"  Average memory delta per worker: {avg_mem:+.1f} MB")
             print(f"  Max memory delta (single worker): {max_mem:+.1f} MB")
 
-        peak_mems = [max((p.memory_mb_end for p in m.phases.values()), default=0) for m in self.all_metrics]
+        peak_mems = [
+            max((p.memory_mb_end for p in m.phases.values()), default=0) for m in self.all_metrics
+        ]
         if peak_mems:
             print(f"  Peak memory usage (max across workers): {max(peak_mems):.1f} MB")
 
@@ -227,6 +235,7 @@ class PerformanceReport:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         print(f"Exported metrics to {filename}")
+
 
 __all__ = [
     "PhaseMetrics",

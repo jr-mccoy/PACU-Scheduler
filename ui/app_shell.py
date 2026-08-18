@@ -52,8 +52,8 @@ class App(QMainWindow):
         # 2) apply current style *before* building widgets (important for Android) ---
         UiStyle.apply(
             QApplication.instance(),
-            theme=self.settings.get("theme"),          # can be "dark" / "light" / "pink"
-            accent_color=self.settings.get("accent_color")
+            theme=self.settings.get("theme"),  # can be "dark" / "light" / "pink"
+            accent_color=self.settings.get("accent_color"),
         )
 
         # 3) stacked container --------------------------------------------------------
@@ -63,14 +63,14 @@ class App(QMainWindow):
         self.backend = build_scheduler_service(DB_NAME)  # SchedulerService composition
 
         self._pages: list[tuple[str, type[QWidget]]] = [
-            ("main",            MainMenu),
-            ("manage",          NurseManagementScreen),
-            ("prescheduled",    PreScheduledScreen),
+            ("main", MainMenu),
+            ("manage", NurseManagementScreen),
+            ("prescheduled", PreScheduledScreen),
             ("assignment_hist", AssignmentHistoryScreen),
-            ("view_unavail",    ViewAllUnavailableScreen),
+            ("view_unavail", ViewAllUnavailableScreen),
             ("weekend_history", WeekendHistoryCalendarScreen),
-            ("generate",        ScheduleGenerationScreen),
-            ("advanced_stats",  AdvancedWeekendStatsScreen),  # <-- Add this line
+            ("generate", ScheduleGenerationScreen),
+            ("advanced_stats", AdvancedWeekendStatsScreen),  # <-- Add this line
         ]
 
         # 5) instantiate & register each page -----------------------------------------
@@ -137,9 +137,9 @@ class App(QMainWindow):
 
         # ── 1 · pull settings once
         font_size = self.settings.get("font_size")
-        theme     = self.settings.get("theme")
-        accent    = self.settings.get("accent_color")
-        show_gif  = self.settings.get("show_gif")
+        theme = self.settings.get("theme")
+        accent = self.settings.get("accent_color")
+        show_gif = self.settings.get("show_gif")
 
         # ── 2 · global font
         app.setFont(QFont("Roboto", font_size))
@@ -151,16 +151,13 @@ class App(QMainWindow):
         def _fix_selection_contrast(w: QWidget, accent_hex: str) -> None:
             accent_hex = shade_color(accent_hex, 1.0)
             pal = w.palette()
-            pal.setColor(QPalette.Highlight,       QColor(accent_hex))
+            pal.setColor(QPalette.Highlight, QColor(accent_hex))
             pal.setColor(QPalette.HighlightedText, Qt.white)
             w.setPalette(pal)
 
         # ── 4 · AUTO SIZE TABLE/LIST VIEWS ───────────────────────────────
-        table_views = (
-            self.findChildren(QTableWidget) +
-            self.findChildren(QTableView)
-        )
-        list_views  = self.findChildren(QListWidget)
+        table_views = self.findChildren(QTableWidget) + self.findChildren(QTableView)
+        list_views = self.findChildren(QListWidget)
 
         for view in table_views + list_views:
             # keep selections readable
@@ -168,30 +165,30 @@ class App(QMainWindow):
 
             # ----- table-specific tweaks
             if isinstance(view, (QTableWidget, QTableView)):
-                fm         = view.fontMetrics()
-                row_height = fm.height() + 12                 # 3 px top + 3 px bottom
+                fm = view.fontMetrics()
+                row_height = fm.height() + 12  # 3 px top + 3 px bottom
 
                 # vertical header (row numbers / icons)
                 vh = view.verticalHeader()
                 vh.setMinimumSectionSize(row_height)
                 vh.setDefaultSectionSize(row_height)
-                vh.setSectionResizeMode(QHeaderView.Fixed)   # consistent everywhere
+                vh.setSectionResizeMode(QHeaderView.Fixed)  # consistent everywhere
 
                 # horizontal header (column captions)
                 hh = view.horizontalHeader()
-                view.resizeColumnsToContents()               # natural size first
-                hh.setStretchLastSection(True)               # fill remaining space
-                hh.setMinimumSectionSize(40)                 # never collapse too far
+                view.resizeColumnsToContents()  # natural size first
+                hh.setStretchLastSection(True)  # fill remaining space
+                hh.setMinimumSectionSize(40)  # never collapse too far
 
                 # nicer look for tall rows on mobile
                 hh.setFixedHeight(row_height + 2)
 
                 # ── 5 · refresh any open ToolDialogs to new accent/theme
-        accent = app.palette().color(QPalette.Highlight).name()   # <<<
+        accent = app.palette().color(QPalette.Highlight).name()  # <<<
         for dlg in self.findChildren(ToolDialog):
-            dlg.refresh_accent(accent)        # recolour the border
+            dlg.refresh_accent(accent)  # recolour the border
             if hasattr(dlg, "apply_theme_update"):
-                dlg.apply_theme_update()        # ── 6 · calendar pickers (multi + single)
+                dlg.apply_theme_update()  # ── 6 · calendar pickers (multi + single)
         for picker in self.findChildren(MultiDatePicker):
             picker.set_theme(theme, accent)
         for picker in self.findChildren(SingleDatePicker):
@@ -206,5 +203,6 @@ class App(QMainWindow):
             page = getattr(self, name, None)
             if page and hasattr(page, "apply_theme_update"):
                 page.apply_theme_update()
+
 
 __all__ = ["App"]

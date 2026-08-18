@@ -138,8 +138,7 @@ def test_restore_round_trip_rebuilds_assignments_and_derived(weekend_db: Path):
 
     backup = history.backup()
     baseline_patterns = {
-        nurse: history.get_last_pattern(nurse)
-        for nurse in ["Alice", "Bob", "Cara", "Dan"]
+        nurse: history.get_last_pattern(nurse) for nurse in ["Alice", "Bob", "Cara", "Dan"]
     }
     baseline_violations = history.get_violation_counts()
 

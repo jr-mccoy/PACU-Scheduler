@@ -9,12 +9,16 @@ tested without constructing a full scheduler.
 from __future__ import annotations
 
 import calendar
+import logging
 from collections.abc import Mapping
 
 import pandas as pd
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas as _pdf_canvas
+
+logger = logging.getLogger(__name__)
+
 
 DEFAULT_PDF_FONT_SIZES: Mapping[str, int] = {
     "title": 32,
@@ -142,4 +146,4 @@ def export_variant_pdf(
         year = year + 1 if month == 1 else year
 
     c.save()
-    print(f"[analysis] wrote PDF {pdf_path}")
+    logger.info("Wrote PDF %s", pdf_path)

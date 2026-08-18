@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from functools import cached_property
-from itertools import permutations
+from itertools import islice, permutations
+from math import factorial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -143,6 +144,7 @@ class SchedulerConfig:
         allow_one_day_weekday_gap: bool = False,
         max_plateau_depth: int = 10,
         max_weekend_variants: int | None = 500,
+        max_week_permutations: int | None = 200,
         **extra,
     ):
 
@@ -161,6 +163,16 @@ class SchedulerConfig:
         if max_weekend_variants is None:
             max_weekend_variants = 500
         self.max_weekend_variants = max(0, int(max_weekend_variants))
+        # Cap on the slot orderings tried when rebalancing one week. The
+        # rebalance pass permutes a week's modifiable (date, role) slots and
+        # keeps the first ordering that improves the spread; a full week has
+        # ten such slots, so an exhaustive search is 10! = 3,628,800 orderings
+        # and only terminates early when an improvement happens to exist.
+        # Weeks that cannot be improved would otherwise run for hours. 0 means
+        # unlimited (the original exhaustive behaviour).
+        if max_week_permutations is None:
+            max_week_permutations = 200
+        self.max_week_permutations = max(0, int(max_week_permutations))
         self.weekend_gap_days = weekend_gap_days
         self.main_score_factor = main_score_factor
         self.backup_score_factor = backup_score_factor
@@ -680,7 +692,10 @@ class ScheduleVariant:
         self.rotation_violations: list[tuple[pd.Timestamp, str, str]] = []
 
         if console_debug is None:
-            env_val = os.getenv("SCHEDULE_VARIANT_DEBUG", "1")
+            # Opt-in: this traces every candidate slot considered, which is
+            # thousands of lines per variant — useful when debugging the
+            # search, unusable as default output.
+            env_val = os.getenv("SCHEDULE_VARIANT_DEBUG", "0")
             try:
                 self._console_debug = bool(int(env_val))
             except ValueError:
@@ -694,7 +709,6 @@ class ScheduleVariant:
         self.BestStateTracker = BestStateTracker
         self.DEFAULT_POST_WEEKEND_WINDOW = DEFAULT_POST_WEEKEND_WINDOW
         self.DEFAULT_PRE_WEEKEND_WINDOW = DEFAULT_PRE_WEEKEND_WINDOW
-        self.pd = pd
         # NOTE: search helpers (domain_builder, order_generator, window_optimizer)
         # are constructed lazily via @cached_property below so they only hold a
         # reference to this variant through the VariantSearchContext surface,
@@ -2389,8 +2403,14 @@ class ScheduleVariant:
             improved = False
 
             perm_iterator = permutations(slot_tuple) if slot_tuple else [tuple()]
+            perm_limit = getattr(self.config, "max_week_permutations", 0)
+            if perm_limit:
+                perm_iterator = islice(perm_iterator, perm_limit)
+            truncated = False
 
             for idx, order in enumerate(perm_iterator, start=1):
+                if perm_limit and idx == perm_limit:
+                    truncated = True
                 if idx == 1 or idx % 50 == 0:
                     self._debug_print(
                         f"[ScheduleVariant] [WeekPerms] friday={friday_label} perm={idx} mode={mode}"
@@ -2428,6 +2448,18 @@ class ScheduleVariant:
                     f"[ScheduleVariant] [WeekPerms] friday={friday_label} applied mode={mode}"
                 )
                 return True
+
+            if truncated:
+                # Say so rather than letting a capped search read as an
+                # exhaustive one that found nothing.
+                logger.debug(
+                    "[WeekPerms] friday=%s mode=%s: no improvement within the first "
+                    "%d of %d slot orderings (max_week_permutations)",
+                    friday_label,
+                    mode,
+                    perm_limit,
+                    factorial(len(slot_tuple)),
+                )
 
             self._restore_from_backup(week_days, original_state)
             return False

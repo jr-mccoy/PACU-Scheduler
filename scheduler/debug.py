@@ -21,7 +21,10 @@ _reject = _runtime._reject
 _accept = _runtime._accept
 _pair = _runtime._pair
 
-_DEBUG = bool(int(os.getenv("DEBUG_SCHED", "1")))
+# Opt-in: when enabled this writes an assignment_debug_*.jsonl/.csv pair into
+# the working directory for every run, which is a diagnostic aid rather than
+# something an ordinary run should leave behind.
+_DEBUG = bool(int(os.getenv("DEBUG_SCHED", "0")))
 _LOCK = threading.Lock()
 _LOG_FILE_CACHE: dict[str, str] = {}
 
@@ -82,6 +85,30 @@ class AssignmentDebugLogger:
             self._csv_writer.writeheader()
 
         atexit.register(self.close)
+
+    def __getstate__(self) -> dict:
+        """Drop the open file handles so the logger survives pickling.
+
+        ``ScheduleVariant`` holds a reference to this logger, and variants are
+        pickled to worker processes during parallel evaluation. File objects
+        cannot be pickled, so without this the whole variant fails to send and
+        every worker dies with ``cannot pickle '_io.TextIOWrapper' object``.
+
+        Handles are dropped rather than reopened because a worker must not
+        write through them anyway: concurrent writes to a shared handle
+        interleave, and on Windows the second process cannot open the file at
+        all. An unpickled logger therefore arrives disabled, and the parent
+        keeps writing the assignment diagnostics it collected itself.
+        """
+        state = self.__dict__.copy()
+        state["enabled"] = False
+        state["_json_handle"] = None
+        state["_csv_handle"] = None
+        state["_csv_writer"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
 
     def close(self) -> None:
         """Close both debug files."""

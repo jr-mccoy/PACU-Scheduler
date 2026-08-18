@@ -104,7 +104,13 @@ class NurseScheduler:
         pre_scheduler,
         config: SchedulerConfig | None = None,
         history_window_days: int = 30,
+        worker_tuning: WorkerTuningConfig | None = None,
     ):
+
+        # Search budgets for the evaluation phase. Sent to the workers with each
+        # work item rather than read from the module global, so a caller that
+        # tunes them actually reaches the worker processes.
+        self.worker_tuning = worker_tuning if worker_tuning is not None else WORKER_TUNING
 
         # Core date and personnel setup
         self._initialize_core_attributes(
@@ -1452,7 +1458,8 @@ class NurseScheduler:
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 fut_map = {
-                    pool.submit(_evaluate_variant_worker, (i, v)): i for i, v in enumerate(variants)
+                    pool.submit(_evaluate_variant_worker, (i, v, self.worker_tuning)): i
+                    for i, v in enumerate(variants)
                 }
                 for fut in tqdm(
                     as_completed(fut_map),
@@ -1471,7 +1478,9 @@ class NurseScheduler:
             candidate_schedules = []
             for idx, var in enumerate(variants):
                 try:
-                    candidate_schedules.append(_evaluate_variant_worker((idx, var)))
+                    candidate_schedules.append(
+                        _evaluate_variant_worker((idx, var, self.worker_tuning))
+                    )
                 except Exception as ex:
                     logger.error(f"Serial worker {idx} failed: {ex}")
 
@@ -1486,7 +1495,7 @@ class NurseScheduler:
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 fut_map = {
-                    pool.submit(_evaluate_variant_worker_profiled, (i, v)): i
+                    pool.submit(_evaluate_variant_worker_profiled, (i, v, self.worker_tuning)): i
                     for i, v in enumerate(variants)
                 }
                 for fut in tqdm(
@@ -1509,7 +1518,7 @@ class NurseScheduler:
             all_worker_metrics = []
             for idx, var in enumerate(variants):
                 try:
-                    result = _evaluate_variant_worker_profiled((idx, var))
+                    result = _evaluate_variant_worker_profiled((idx, var, self.worker_tuning))
                     idx, stats, nurse_counts, sched_df, metrics = result
                     candidate_schedules.append((idx, stats, nurse_counts, sched_df))
                     all_worker_metrics.append(metrics)
@@ -1584,7 +1593,7 @@ class NurseScheduler:
             self._export_variant_pdf(pdf_name, sched_df, cal)
             pdf_paths.append(pdf_name)
 
-        print(f"[scheduler] wrote {len(pdf_paths)} PDF file(s): {', '.join(pdf_paths)}")
+        logger.info("Wrote %d PDF file(s): %s", len(pdf_paths), ", ".join(pdf_paths))
 
     def _print_timing_summary(self, candidate_schedules):
         """Print timing summary if enabled."""
@@ -1594,10 +1603,10 @@ class NurseScheduler:
             labels = ["clone", "assign weekdays", "gap-fill", "rebalance", "TOTAL"]
             sums = [sum(cs[1].get(p, 0) for cs in candidate_schedules) for p in phases]
 
-            print("\n=== Average phase times per variant (seconds) ===")
-            for lbl, total in zip(labels, sums, strict=True):
-                print(f" {lbl:17}: {total / n:.4f}")
-            print("=================================================\n")
+            summary = ", ".join(
+                f"{lbl}={total / n:.4f}s" for lbl, total in zip(labels, sums, strict=True)
+            )
+            logger.info("Average phase times per variant: %s", summary)
 
 
 __all__ = [

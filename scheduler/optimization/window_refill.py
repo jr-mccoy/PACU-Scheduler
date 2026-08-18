@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
+
 
 if TYPE_CHECKING:
     from ..generation.context import VariantSearchContext
@@ -28,7 +32,13 @@ class WindowRefillOptimizer:
         final_quality = tracker.get_global_best_quality()
         if final_quality and initial_quality:
             improved = final_quality.is_better_than(initial_quality) or improved
-        print(f"[{label}] Final: {initial_quality} -> {final_quality} (improved={bool(improved)})")
+        logger.info(
+            "[%s] Final: %s -> %s (improved=%s)",
+            label,
+            initial_quality,
+            final_quality,
+            bool(improved),
+        )
         return bool(improved)
 
     def backtrack_window(

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import atexit
+import logging
 import os
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
 
 MEASURE_PHASE_TIMES = True
 ANALYSE_INITIAL_WEEKDAY_GAPS = True
@@ -29,7 +33,7 @@ def _open_dbg(path: str, mode: str = "a"):
     try:
         return open(path, mode, encoding="utf-8", newline="\n")
     except OSError as exc:
-        print(f"[debug] unable to open {path!r}: {exc}")
+        logger.warning("Unable to open debug file %r: %s", path, exc)
         return None
 
 

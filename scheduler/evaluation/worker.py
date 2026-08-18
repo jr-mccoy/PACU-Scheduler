@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import contextmanager
 
@@ -9,6 +10,9 @@ from ..domain import BestStateTracker
 from ..profiling import MetricsCollector
 from ..runtime import _count_main_backup_empties, _count_weekday_gaps
 from .config import WORKER_TUNING
+
+logger = logging.getLogger(__name__)
+
 
 MEASURE_PHASE_TIMES = True
 
@@ -22,8 +26,18 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
     once and conditionally collects ``MetricsCollector`` data for callers
     that requested profiling.
     """
-    idx, variant = args
-    tuning = WORKER_TUNING
+    # A third element carries per-run tuning. It is optional so the existing
+    # ``(idx, variant)`` call shape keeps working, and it travels inside the
+    # work item rather than as a module global because worker processes started
+    # with the "spawn" method (the default on macOS and Windows) re-import this
+    # module and would otherwise silently fall back to the defaults.
+    if len(args) == 3:
+        idx, variant, tuning = args
+        if tuning is None:
+            tuning = WORKER_TUNING
+    else:
+        idx, variant = args
+        tuning = WORKER_TUNING
 
     if with_profiling:
         collector = MetricsCollector(worker_id=idx, variant_idx=idx)
@@ -166,7 +180,7 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
     except Exception:
         if with_profiling and collector is not None:
             collector.finalize()
-            print(f"Worker {idx} failed during profiling")
+            logger.error("Worker %d failed during profiling", idx)
         raise
 
 

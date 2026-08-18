@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import bisect
 import datetime
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -42,6 +43,8 @@ from .scoring import (
 
 if TYPE_CHECKING:
     from .engine import NurseScheduler
+
+logger = logging.getLogger(__name__)
 
 DAYS_IN_WEEKEND = 3
 FRIDAY_WEEKDAY = 4
@@ -454,7 +457,7 @@ class BestStateTracker:
         self._global_best = snapshot
         self._global_best_quality = quality
 
-        print(f"[Tracker] Initialized with: {quality}")
+        logger.debug("[Tracker] Initialized with: %s", quality)
         return quality
 
     def begin_iteration(self, phase_name: str = "") -> ScheduleQuality:
@@ -468,7 +471,7 @@ class BestStateTracker:
         self._iteration_quality = quality
 
         if phase_name:
-            print(f"[Tracker] {phase_name}: Begin iteration with {quality}")
+            logger.debug("[Tracker] %s: Begin iteration with %s", phase_name, quality)
 
         return quality
 
@@ -498,12 +501,14 @@ class BestStateTracker:
                 self._global_best = StateSnapshot.capture(self.variant, current_quality)
                 self._global_best_quality = current_quality
                 if phase_name:
-                    print(f"[Tracker] {phase_name}: NEW GLOBAL BEST: {current_quality}")
+                    logger.debug("[Tracker] %s: NEW GLOBAL BEST: %s", phase_name, current_quality)
             else:
                 if phase_name:
-                    print(
-                        f"[Tracker] {phase_name}: Local improvement: "
-                        f"{self._iteration_quality} -> {current_quality}"
+                    logger.debug(
+                        "[Tracker] %s: Local improvement: %s -> %s",
+                        phase_name,
+                        self._iteration_quality,
+                        current_quality,
                     )
 
             return Comparison.BETTER
@@ -513,20 +518,22 @@ class BestStateTracker:
                 self._neutrals += 1
                 self._plateau_depth += 1
                 if phase_name:
-                    print(
-                        f"[Tracker] {phase_name}: Neutral move accepted "
-                        f"(plateau={self._plateau_depth}): {current_quality}"
+                    logger.debug(
+                        "[Tracker] %s: Neutral move accepted (plateau=%d): %s",
+                        phase_name,
+                        self._plateau_depth,
+                        current_quality,
                     )
                 return Comparison.EQUAL
 
             if phase_name:
-                print(f"[Tracker] {phase_name}: Plateau limit reached, reverting")
+                logger.debug("[Tracker] %s: Plateau limit reached, reverting", phase_name)
             self._revert_to_iteration()
             return Comparison.WORSE
 
         self._reversions += 1
         if phase_name:
-            print(f"[Tracker] {phase_name}: No improvement, reverting: {current_quality}")
+            logger.debug("[Tracker] %s: No improvement, reverting: %s", phase_name, current_quality)
         self._revert_to_iteration()
         return Comparison.WORSE
 
@@ -538,10 +545,10 @@ class BestStateTracker:
 
     def restore_global_best(self) -> None:
         if self._global_best is None:
-            print("[Tracker] Warning: No global best to restore")
+            logger.warning("[Tracker] No global best to restore")
             return
 
-        print(f"[Tracker] Restoring global best: {self._global_best_quality}")
+        logger.debug("[Tracker] Restoring global best: %s", self._global_best_quality)
         self._global_best.restore_to(self.variant)
 
     def get_global_best_quality(self) -> ScheduleQuality | None:
@@ -2047,11 +2054,11 @@ class ScheduleVariant:
                 s_b, s_m, _ = self._spread_components()
                 if s_b <= early_stop_spread[0] and s_m <= early_stop_spread[1]:
                     tracker.restore_global_best()
-                    print(f"[Rebalance] Target reached at iter {iteration}")
+                    logger.debug("[Rebalance] Target reached at iter %d", iteration)
                     return True
 
             if not schedule_changed and comparison != Comparison.BETTER:
-                print(f"[Rebalance] No progress at iter {iteration}")
+                logger.debug("[Rebalance] No progress at iter %d", iteration)
                 break
 
         tracker.restore_global_best()
@@ -2060,10 +2067,13 @@ class ScheduleVariant:
         if final_quality and initial_quality:
             improved = final_quality.is_better_than(initial_quality) or improved
 
-        print(
-            f"[Rebalance] Final: {initial_quality} -> {final_quality} (improved={bool(improved)})"
+        logger.info(
+            "[Rebalance] Final: %s -> %s (improved=%s)",
+            initial_quality,
+            final_quality,
+            bool(improved),
         )
-        print(f"[Rebalance] Statistics: {tracker.get_statistics()}")
+        logger.debug("[Rebalance] Statistics: %s", tracker.get_statistics())
 
         return bool(improved)
 
@@ -2511,7 +2521,12 @@ class ScheduleVariant:
         if final_quality and initial_quality:
             improved = final_quality.total_gaps < initial_quality.total_gaps or improved
 
-        print(f"[GapFill] Final: {initial_quality} -> {final_quality} (improved={bool(improved)})")
+        logger.info(
+            "[GapFill] Final: %s -> %s (improved=%s)",
+            initial_quality,
+            final_quality,
+            bool(improved),
+        )
 
         return bool(final_quality and final_quality.total_gaps == 0)
 

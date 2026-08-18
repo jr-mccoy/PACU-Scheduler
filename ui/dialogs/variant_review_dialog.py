@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .tool_dialog import ToolDialog
 from ..messages import show_info
 from ..services.variant_export import export_variants_calendar_html
 from ..theme import themed_icon
+from .tool_dialog import ToolDialog
 
 
 class VariantReviewDialog(ToolDialog):

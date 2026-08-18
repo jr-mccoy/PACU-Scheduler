@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .tool_dialog import ToolDialog
 from ..widgets.common import WrappedCheck
+from .tool_dialog import ToolDialog
 
 try:  # pragma: no cover - environment-dependent
     from PySide6.QtGui import QGuiApplication as _AppScreen

@@ -10,7 +10,7 @@ import os
 import pathlib
 import threading
 from contextlib import suppress
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import runtime as _runtime
 
@@ -23,7 +23,7 @@ _pair = _runtime._pair
 
 _DEBUG = bool(int(os.getenv("DEBUG_SCHED", "1")))
 _LOCK = threading.Lock()
-_LOG_FILE_CACHE: Dict[str, str] = {}
+_LOG_FILE_CACHE: dict[str, str] = {}
 
 
 class AssignmentDebugLogger:
@@ -50,11 +50,11 @@ class AssignmentDebugLogger:
 
     def __init__(self, enabled: bool, *, directory: pathlib.Path | None = None) -> None:
         self.enabled = bool(enabled)
-        self._json_handle: Optional[Any] = None
-        self._csv_handle: Optional[Any] = None
-        self._csv_writer: Optional[csv.DictWriter] = None
-        self.json_path: Optional[pathlib.Path] = None
-        self.csv_path: Optional[pathlib.Path] = None
+        self._json_handle: Any | None = None
+        self._csv_handle: Any | None = None
+        self._csv_writer: csv.DictWriter | None = None
+        self.json_path: pathlib.Path | None = None
+        self.csv_path: pathlib.Path | None = None
 
         if not self.enabled:
             return

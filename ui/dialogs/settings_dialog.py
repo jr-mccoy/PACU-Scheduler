@@ -212,7 +212,7 @@ class SettingsDialog(ToolDialog):
             self.w_balance,
             self.w_longterm,
         ]
-        for i, (lab, sp) in enumerate(zip(labels, spins)):
+        for i, (lab, sp) in enumerate(zip(labels, spins, strict=True)):
             score_layout.addWidget(QLabel(lab), i, 0)
             score_layout.addWidget(sp, i, 1)
         score_group.setLayout(score_layout)

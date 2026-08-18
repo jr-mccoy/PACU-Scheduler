@@ -19,7 +19,6 @@ import logging
 from datetime import timedelta
 from typing import Protocol
 
-
 from .domain import SchedulerConfig
 from .engine import NurseScheduler
 from .repositories import (

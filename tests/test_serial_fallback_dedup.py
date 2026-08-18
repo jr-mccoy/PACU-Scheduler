@@ -9,13 +9,6 @@ duplicate ``idx`` entries and ``_score_and_rank_variants`` crashes on
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from concurrent.futures.process import BrokenProcessPool
 
 import pandas as pd

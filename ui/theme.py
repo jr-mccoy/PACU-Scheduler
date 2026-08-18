@@ -74,7 +74,7 @@ def _apply_header(cal: QCalendarWidget, *, accent="#5C8DBC",
         pal.setColor(QPalette.Text,   QColor(fg_white))
         hh.setPalette(pal)
         hh.setStyleSheet(
-            (
+
                 "QHeaderView::section {"
                 f"background:{accent};"
                 f"color:{fg_white};"
@@ -83,7 +83,7 @@ def _apply_header(cal: QCalendarWidget, *, accent="#5C8DBC",
                 "font-family:Roboto;"
                 "border:none;"
                 "}"
-            )
+
         )
         for i in range(hh.count()):
             hh.setSectionResizeMode(i, QHeaderView.Stretch)
@@ -182,7 +182,7 @@ def _apply_pink_header(cal: QCalendarWidget, *, accent="#FF4F79",
         pal.setColor(QPalette.Text,   QColor(fg_white))
         hh.setPalette(pal)
         hh.setStyleSheet(
-            (
+
                 "QHeaderView::section {"
                 f"background:{accent};"
                 f"color:{fg_white};"
@@ -191,7 +191,7 @@ def _apply_pink_header(cal: QCalendarWidget, *, accent="#FF4F79",
                 "font-family:Roboto;"
                 "border:none;"
                 "}"
-            )
+
         )
         for i in range(hh.count()):
             hh.setSectionResizeMode(i, QHeaderView.Stretch)

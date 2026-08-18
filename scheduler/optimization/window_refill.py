@@ -15,12 +15,12 @@ class WindowRefillOptimizer:
     underscored methods on the variant cannot silently break the optimizer.
     """
 
-    def __init__(self, context: "VariantSearchContext"):
+    def __init__(self, context: VariantSearchContext):
         self.context = context
 
     # Backwards-compatible alias: existing callers used ``optimizer.variant``.
     @property
-    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+    def variant(self) -> VariantSearchContext:  # pragma: no cover - shim
         return self.context
 
     def _finalize_tracker(self, tracker, initial_quality, improved: bool, label: str) -> bool:

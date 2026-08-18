@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -30,7 +30,7 @@ def is_android_platform() -> bool:
     )
 
 
-def _coerce_env_flag(value: Optional[str]) -> Optional[bool]:
+def _coerce_env_flag(value: str | None) -> bool | None:
     """Map common truthy/falsey strings to bool; return None when unknown."""
     if value is None:
         return None
@@ -162,7 +162,8 @@ def _open_external(path: str) -> bool:
     # Fallback for Android: try an intent
     try:
         if is_android_platform():
-            import subprocess, mimetypes
+            import mimetypes
+            import subprocess
             mt, _ = mimetypes.guess_type(path)
             if not mt:
                 # crude guess by extension
@@ -184,19 +185,19 @@ def adjust_dialog_for_android(dialog):
         screen = QApplication.primaryScreen()
         if screen:
             screen_size = screen.size()
-            
+
             # Calculate appropriate size for high-DPI display
             max_width = int(screen_size.width() * 0.92)
             max_height = int(screen_size.height() * 0.85)
-            
+
             # Get current size hint or current size
             current_width = dialog.sizeHint().width() if dialog.sizeHint().isValid() else dialog.width()
             current_height = dialog.sizeHint().height() if dialog.sizeHint().isValid() else dialog.height()
-            
+
             # Constrain to screen limits
             new_width = min(current_width, max_width)
             new_height = min(current_height, max_height)
-            
+
             dialog.resize(new_width, new_height)
 
 __all__ = [

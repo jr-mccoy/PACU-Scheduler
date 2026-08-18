@@ -4,9 +4,8 @@ import pathlib
 import re
 
 from ui import app as app_wrapper
-from ui import app_shell
+from ui import app_shell, worker_threads
 from ui import workers as workers_wrapper
-from ui import worker_threads
 from ui.dialogs import (
     compact_settings_dialog,
     compact_settings_dialog_widget,

@@ -5,6 +5,8 @@ only preserves old import paths and a handful of patchable test/debug knobs.
 """
 
 from .debug import (
+    _DEBUG,
+    _LOG_FILE_CACHE,
     ASSIGNMENT_DEBUG_LOGGER,
     AssignmentDebugLogger,
     _accept,
@@ -17,7 +19,6 @@ from .debug import (
     configure_pair_variant_debug,
     log,
 )
-from .debug import _DEBUG, _LOG_FILE_CACHE
 from .domain import *
 from .domain import __all__ as _domain_all
 from .engine import (

@@ -8,10 +8,11 @@ import os
 import sys
 import traceback
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import timedelta
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -23,21 +24,25 @@ except Exception:  # pragma: no cover - optional in minimal environments
     psutil = None
 
 from . import runtime as _runtime
+from .debug import _dbg_pairs, _dbg_variants, _pair, _reject
 from .domain import (
     BestStateTracker,
+    SchedulerConfig,
     ScheduleState,
     ScheduleVariant,
-    SchedulerConfig,
     WeekendPattern,
 )
 from .evaluation import worker as _worker
 from .evaluation.config import WORKER_TUNING, WorkerTuningConfig
 from .exporters.pdf import (
     draw_week_rows as _draw_week_rows_fn,
+)
+from .exporters.pdf import (
     draw_weekday_header as _draw_weekday_header_fn,
+)
+from .exporters.pdf import (
     export_variant_pdf as _export_variant_pdf_fn,
 )
-from .debug import _dbg_pairs, _dbg_variants, _pair, _reject
 from .platform import allow_sleep, inhibit_sleep
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
@@ -75,12 +80,12 @@ class NurseScheduler:
     Advanced nurse scheduling system with weekend rotation management, 
     constraint satisfaction, and multi-criteria optimization.
     """
-    
+
     # Class constants
     WEEKDAYS = ['Friday', 'Saturday', 'Sunday']
     WEEKEND_DAYS_COUNT = 3
     FRIDAY_WEEKDAY = 4
-    
+
     # PDF layout constants
     PDF_FONT_SIZES = {
         'title': 32,
@@ -88,7 +93,7 @@ class NurseScheduler:
         'dayno': 14,
         'name': 18
     }
-    
+
     def __init__(self,
                  start_date,
                  end_date,
@@ -99,23 +104,23 @@ class NurseScheduler:
                  pre_scheduler,
                  config: SchedulerConfig | None = None,
                  history_window_days: int = 30):
-        
+
         # Core date and personnel setup
         self._initialize_core_attributes(
-            start_date, end_date, nurses, prn_nurses, 
+            start_date, end_date, nurses, prn_nurses,
             nurse_manager, weekend_history, pre_scheduler, config
         )
-        
+
         # Initialize scheduling data structures
         self._initialize_scheduling_data()
-        
+
         # Setup historical data and tracking
         self.history_window_days = history_window_days
         self._initialize_historical_data()
-        
+
         # Initialize nurse assignment tracking
         self._initialize_nurse_tracking()
-        
+
         # Configuration for rotation violations
         self.nurses_allowed_rotation_violation: set[str] = set()
 
@@ -124,16 +129,16 @@ class NurseScheduler:
         """Initialize the core attributes of the scheduler (now with deterministic nurse order)."""
         self.start_date = DateUtils.normalize_date(start_date)
         self.end_date   = DateUtils.normalize_date(end_date)
-    
+
         # Deterministic ordering across processes/runs
         self.nurses      = sorted(list(nurses), key=str.casefold)
         self.prn_nurses  = sorted(list(prn_nurses), key=str.casefold)
-    
+
         self.nurse_manager   = nurse_manager
         self.weekend_history = weekend_history
         self.pre_scheduler   = pre_scheduler
         self.config          = config if config is not None else SchedulerConfig()
-    
+
     def _initialize_scheduling_data(self):
         """Initialize the main scheduling data structures."""
         self.schedule = self._initialize_schedule()
@@ -255,13 +260,13 @@ class NurseScheduler:
             out.append(cur)
             cur += timedelta(days=7)
         return out
-    
-    def _as_friday(self, dt: Optional[pd.Timestamp]) -> Optional[pd.Timestamp]:
+
+    def _as_friday(self, dt: pd.Timestamp | None) -> pd.Timestamp | None:
         """Map any date within a weekend to its Friday (or return None)."""
         if dt is None:
             return None
         return dt - timedelta(days=(dt.weekday() - self.FRIDAY_WEEKDAY) % 7)
-    
+
     def _rotation_violation_score(self, nurse_counts: dict[str, dict[str, int]],
                                  historic_viol: dict[str, int],
                                  sched_df: pd.DataFrame) -> int:
@@ -366,7 +371,7 @@ class NurseScheduler:
                 timeline.append(horizon_friday)
 
             nurse_gaps = []
-            for prev, curr in zip(timeline, timeline[1:]):
+            for prev, curr in pairwise(timeline):
                 if curr < self.start_date:
                     continue
                 gap_days = (curr - prev).days
@@ -390,7 +395,7 @@ class NurseScheduler:
         deficit = sum(max(0, target_gap - gap) for gap in all_gaps)
 
         return int(spread + deficit)
-    
+
     # =====================================================================
     # SCHEDULE INITIALIZATION METHODS
     # =====================================================================
@@ -408,27 +413,27 @@ class NurseScheduler:
     def _initialize_availability(self) -> pd.DataFrame:
         """Initialize nurse availability matrix."""
         availability = pd.DataFrame(True, index=self.schedule.index, columns=self.nurses)
-        
+
         for nurse in self.nurses:
             unavailable_dates = self.nurse_manager.get_unavailable_dates(nurse)
             unavailable_dates = pd.to_datetime(list(unavailable_dates))
             valid_dates = set(unavailable_dates).intersection(set(availability.index))
             availability.loc[list(valid_dates), nurse] = False
-            
+
         return availability
 
     # =====================================================================
     # PRE-SCHEDULING METHODS
     # =====================================================================
 
-    def _collect_pre_scheduled_slots(self) -> Dict[pd.Timestamp, Dict[str, str]]:
+    def _collect_pre_scheduled_slots(self) -> dict[pd.Timestamp, dict[str, str]]:
         """
         Return {date → {"main": name_or_None, "backup": name_or_None}}
         for every pre-scheduled row inside the requested period.
         """
         raw = self.pre_scheduler.get_assignments_in_range(self.start_date, self.end_date)
-        slots: Dict[pd.Timestamp, Dict[str, str]] = {}
-        
+        slots: dict[pd.Timestamp, dict[str, str]] = {}
+
         for day_str, row in raw.items():
             ts = DateUtils.normalize_date(day_str)
             slots[ts] = {
@@ -448,7 +453,7 @@ class NurseScheduler:
         """
         # extend scan to capture the first full weekend after gap_min
         horizon_end = (self.end_date + timedelta(days=self.config.weekend_gap_days + 2)).normalize()
-    
+
         # pull pre-scheduled rows across the extended range
         pre_scheduled = self.pre_scheduler.get_assignments_in_range(self.start_date, horizon_end)
         pre_scheduled_df = pd.DataFrame.from_dict(pre_scheduled, orient='index')
@@ -456,14 +461,14 @@ class NurseScheduler:
             pre_scheduled_df.index = pd.DatetimeIndex(
                 [DateUtils.normalize_date(idx) for idx in pre_scheduled_df.index]
             )
-    
+
         # build Friday keys for both the in-window weekends and the forward horizon
         fridays = self._fridays_in_range(self.start_date, horizon_end)
         weekend_assignments = {
             friday: {WeekendPattern.FSF: None, WeekendPattern.SFS: None}
             for friday in fridays
         }
-    
+
         # direct Friday hints (Fri main → FSF, Fri backup → SFS)
         if not pre_scheduled_df.empty:
             friday_rows = pre_scheduled_df.loc[pre_scheduled_df.index.weekday == self.FRIDAY_WEEKDAY]
@@ -475,37 +480,37 @@ class NurseScheduler:
                         weekend_assignments[friday][WeekendPattern.FSF] = fri_main
                     if fri_backup and not self.is_empty(fri_backup):
                         weekend_assignments[friday][WeekendPattern.SFS] = fri_backup
-    
+
             # infer FSF/SFS when whole-weekend is prefilled but Friday wasn't explicit
             self._infer_weekend_patterns_from_whole_weekend(
                 weekend_assignments, pre_scheduled_df, fridays
             )
-    
+
         return weekend_assignments
-        
-    def _infer_weekend_patterns_from_whole_weekend(self, weekend_assignments, 
+
+    def _infer_weekend_patterns_from_whole_weekend(self, weekend_assignments,
                                                   pre_scheduled_df, fridays):
         """Infer FSF/SFS patterns from whole weekend assignments when not explicitly set."""
         for friday in fridays:
-            if (self.is_empty(weekend_assignments[friday][WeekendPattern.FSF]) and 
+            if (self.is_empty(weekend_assignments[friday][WeekendPattern.FSF]) and
                 self.is_empty(weekend_assignments[friday][WeekendPattern.SFS])):
-                
+
                 weekend_dates = [
-                    friday, 
-                    friday + pd.Timedelta(days=1), 
+                    friday,
+                    friday + pd.Timedelta(days=1),
                     friday + pd.Timedelta(days=2)
                 ]
                 weekend_df = pre_scheduled_df.loc[pre_scheduled_df.index.isin(weekend_dates)]
                 nurse_counts = {}
-                
+
                 for _, row in weekend_df.iterrows():
                     self._count_nurse_assignments(row, nurse_counts)
-                
+
                 # Only assign if a nurse is not assigned to both roles
                 for nurse, counts in nurse_counts.items():
-                    if (counts["main"] + counts["backup"] >= 2 and 
+                    if (counts["main"] + counts["backup"] >= 2 and
                         counts["main"] != counts["backup"]):
-                        pattern = (WeekendPattern.FSF if counts["main"] > counts["backup"] 
+                        pattern = (WeekendPattern.FSF if counts["main"] > counts["backup"]
                                  else WeekendPattern.SFS)
                         weekend_assignments[friday][pattern] = nurse
 
@@ -513,7 +518,7 @@ class NurseScheduler:
         """Count main and backup assignments for nurses in a given row."""
         main_nurse = row.get('main')
         backup_nurse = row.get('backup')
-        
+
         if main_nurse and not self.is_empty(main_nurse):
             nurse_counts.setdefault(main_nurse, {"main": 0, "backup": 0})["main"] += 1
         if backup_nurse and not self.is_empty(backup_nurse):
@@ -541,7 +546,7 @@ class NurseScheduler:
 
         return weekends
 
-    def _weekend_dates(self, friday: pd.Timestamp) -> List[pd.Timestamp]:
+    def _weekend_dates(self, friday: pd.Timestamp) -> list[pd.Timestamp]:
         """Return the three dates of a weekend given its Friday."""
         return [friday, friday + timedelta(days=1), friday + timedelta(days=2)]
 
@@ -564,17 +569,17 @@ class NurseScheduler:
         ]
         next_in_schedule = assigned.index.min() if not assigned.empty else None
         next_in_schedule = self._as_friday(next_in_schedule)
-    
+
         # From pre-scheduled weekends (can be beyond window)
         next_in_pre = self._find_next_pre_scheduled_weekend(
             nurse, current_weekend, all_pre_scheduled_weekends
         )
         next_in_pre = self._as_friday(next_in_pre)
-    
+
         candidates = [d for d in (next_in_schedule, next_in_pre) if d is not None]
         return min(candidates) if candidates else None
-        
-    def _find_next_pre_scheduled_weekend(self, nurse, current_weekend, 
+
+    def _find_next_pre_scheduled_weekend(self, nurse, current_weekend,
                                        all_pre_scheduled_weekends):
         """Find the next pre-scheduled weekend for a nurse."""
         next_in_pre = None
@@ -593,19 +598,19 @@ class NurseScheduler:
         """Check if a nurse is available for all three days of a weekend."""
         if self.nurse_manager.is_prn_nurse(nurse):
             return False
-    
+
         weekend_dates = self._weekend_dates(weekend)
         weekend_dates_in_idx = [d for d in weekend_dates if d in self.availability.index]
         if len(weekend_dates_in_idx) != self.WEEKEND_DAYS_COUNT:
             return False
-    
+
         try:
             vals = self.availability.loc[weekend_dates_in_idx, nurse]
         except KeyError:
             return False
-    
+
         return bool(vals.apply(lambda v: (not pd.isna(v)) and bool(v)).all())
-        
+
     def _check_weekend_gap_constraints(
         self,
         nurse: str,
@@ -622,14 +627,14 @@ class NurseScheduler:
         pre-scheduled weekends) to decide.
         """
         gap_min = self.config.weekend_gap_days
-    
+
         # ── backward gap: use historic last and any prior worked weekend in this schedule ──
         # Normalize the history date to its Friday so the day-diff compares
         # Friday→Friday, matching _weekend_gap_penalty's treatment of history.
         prev_wk_hist = self._as_friday(
             self.weekend_history.get_last_weekend_before(nurse, weekend)
         )
-    
+
         prev_wk_sched = None
         prior_fridays = [
             d for d in schedule.index
@@ -647,18 +652,18 @@ class NurseScheduler:
                         break
             if found:
                 break
-    
+
         # Choose the latest of the two candidates
         if prev_wk_hist is not None and prev_wk_sched is not None:
             prev_wk = max(prev_wk_hist, prev_wk_sched)
         else:
             prev_wk = prev_wk_hist or prev_wk_sched
-    
+
         if prev_wk is not None:
             # Compare Friday→Friday
             if (weekend - prev_wk).days <= gap_min:
                 return False
-    
+
         # ── forward gap: first future worked weekend from schedule or pre-scheduled ──
         next_wk = self._get_next_weekend_assignment(
             nurse, weekend, schedule, all_pre_scheduled_weekends
@@ -668,10 +673,10 @@ class NurseScheduler:
             next_friday = self._as_friday(next_wk)
             if (next_friday - weekend).days <= gap_min:
                 return False
-    
+
         return True
-        
-    def _check_rotation_constraints(self, nurse: str, last_pattern: dict, 
+
+    def _check_rotation_constraints(self, nurse: str, last_pattern: dict,
                                   enforce_rotation: bool,
                                   nurses_allowed_rotation_violation: set[str]) -> tuple[bool, bool]:
         """
@@ -818,7 +823,7 @@ class NurseScheduler:
 
         return valid_fsf, valid_sfs
 
-    def _is_nurse_eligible_for_weekend(self, nurse, weekend_dates_in_idx, 
+    def _is_nurse_eligible_for_weekend(self, nurse, weekend_dates_in_idx,
                                        last_assignment, weekend, schedule,
                                        all_pre_scheduled_weekends):
         """Check basic eligibility for weekend assignment (PRN, availability, gap)."""
@@ -826,28 +831,28 @@ class NurseScheduler:
         if self.nurse_manager.is_prn_nurse(nurse):
             _reject(nurse, "PRN")
             return False
-    
+
         # Must be available for all three days (NaN = unavailable)
         if len(weekend_dates_in_idx) != self.WEEKEND_DAYS_COUNT:
             _reject(nurse, "Unavailable for full weekend")
             return False
-    
+
         try:
             vals = self.availability.loc[weekend_dates_in_idx, nurse]
         except KeyError:
             _reject(nurse, "Unavailable for full weekend")
             return False
-    
+
         if not vals.apply(lambda v: (not pd.isna(v)) and bool(v)).all():
             _reject(nurse, "Unavailable for full weekend")
             return False
-    
+
         # Weekend gap constraints (backward via history/schedule, forward via schedule/pre-scheduled)
         if not self._check_weekend_gap_constraints(
             nurse, weekend, last_assignment, schedule, all_pre_scheduled_weekends
         ):
             return False
-    
+
         return True
     def _ensure_pre_scheduled_nurses_included(self, fsf_pre, sfs_pre, valid_fsf, valid_sfs):
         """Ensure pre-scheduled nurses are included in valid lists."""
@@ -868,7 +873,7 @@ class NurseScheduler:
             pairs = [(f, s) for f in valid_fsf for s in valid_sfs if f != s]
         return pairs
 
-    def _filter_late_shift_pairs(self, pairs, fsf_pre: Optional[str] = None, sfs_pre: Optional[str] = None):
+    def _filter_late_shift_pairs(self, pairs, fsf_pre: str | None = None, sfs_pre: str | None = None):
         """Filter out late/late pairs unless the combination is fully pre-scheduled."""
         result: list[tuple[str, str]] = []
         allow_prescheduled_pair = bool(fsf_pre and sfs_pre)
@@ -890,7 +895,7 @@ class NurseScheduler:
     # VARIANT GENERATION METHODS
     # =====================================================================
 
-    def generate_all_weekend_variants(self, *, allow_rotation_violations: bool = False) -> list["ScheduleVariant"]:
+    def generate_all_weekend_variants(self, *, allow_rotation_violations: bool = False) -> list[ScheduleVariant]:
         """
         Build every feasible schedule variant. Logs branching and state to debug_variants.txt.
         """
@@ -970,7 +975,7 @@ class NurseScheduler:
             imbalance = (max(counts) - min(counts)) if counts else 0
             min_gap = None
             for fridays in lists.values():
-                for prev, nxt in zip(fridays, fridays[1:]):
+                for prev, nxt in pairwise(fridays):
                     gap = (nxt - prev).days
                     if min_gap is None or gap < min_gap:
                         min_gap = gap
@@ -995,7 +1000,7 @@ class NurseScheduler:
         """Process variants for a specific weekend."""
         _dbg_variants(f"\n--- Weekend {friday.date()} ---")
         _dbg_variants(f"  starting variants count: {len(variants)}")
-        
+
         for i, var in enumerate(variants):
             _dbg_variants(
                 f"    VAR#{i} last_assign: {var.state.last_assignment}  "
@@ -1037,7 +1042,7 @@ class NurseScheduler:
                 next_vars.append(clone)
         return next_vars
 
-    def _generate_relaxed_variants(self, variants, friday, fixed, pre_weekend_assignments, 
+    def _generate_relaxed_variants(self, variants, friday, fixed, pre_weekend_assignments,
                                  next_vars):
         """Generate variants with relaxed rotation rules."""
         self._rotation_enforced = False
@@ -1211,8 +1216,8 @@ class NurseScheduler:
                 f.write(weekend_df[['main', 'backup']].to_string())
                 f.write("\n" + "-"*40 + "\n")
 
-    def _export_variant_pdf(self, pdf_path: str, sched_df: "pd.DataFrame",
-                          cal: "calendar.Calendar") -> None:
+    def _export_variant_pdf(self, pdf_path: str, sched_df: pd.DataFrame,
+                          cal: calendar.Calendar) -> None:
         """Delegate to :func:`scheduler.exporters.pdf.export_variant_pdf`."""
         _export_variant_pdf_fn(pdf_path, sched_df, cal, self.PDF_FONT_SIZES)
 
@@ -1238,8 +1243,8 @@ class NurseScheduler:
     @classmethod
     def _normalize_weekend_variant_mode(
         cls,
-        weekend_variant_mode: str | "NurseScheduler.WeekendVariantMode",
-    ) -> "NurseScheduler.WeekendVariantMode":
+        weekend_variant_mode: str | NurseScheduler.WeekendVariantMode,
+    ) -> NurseScheduler.WeekendVariantMode:
         """Normalize weekend variant mode from enum or string input."""
         if isinstance(weekend_variant_mode, cls.WeekendVariantMode):
             return weekend_variant_mode
@@ -1253,10 +1258,10 @@ class NurseScheduler:
             ) from ex
 
     def generate_schedule(self, top_n: int = 10, max_workers: int = 2, *,
-                         confirm_rotation_callback: Optional[Callable[[], bool]] = None,
-                         weekend_variant_mode: str | "NurseScheduler.WeekendVariantMode" = WeekendVariantMode.STRICT_THEN_RELAXED,
-                         profile_performance: Optional[bool] = None,
-                         profile_output_path: Optional[str | os.PathLike[str]] = None) -> list:
+                         confirm_rotation_callback: Callable[[], bool] | None = None,
+                         weekend_variant_mode: str | NurseScheduler.WeekendVariantMode = WeekendVariantMode.STRICT_THEN_RELAXED,
+                         profile_performance: bool | None = None,
+                         profile_output_path: str | os.PathLike[str] | None = None) -> list:
         """Generate schedules and optionally capture detailed performance metrics."""
         sleep_handle = inhibit_sleep()
 
@@ -1269,7 +1274,7 @@ class NurseScheduler:
                 )
                 profiling_enabled = False
 
-            profile_json_path: Optional[str | os.PathLike[str]]
+            profile_json_path: str | os.PathLike[str] | None
             if profile_output_path is None:
                 profile_json_path = PERFORMANCE_PROFILE_JSON_DEFAULT
             else:
@@ -1314,7 +1319,9 @@ class NurseScheduler:
     def _setup_rotation_callback(self, confirm_rotation_callback):
         """Use an explicit caller callback; backend code never prompts for input."""
         if confirm_rotation_callback is None:
-            confirm_rotation_callback = lambda: False
+            def confirm_rotation_callback() -> bool:
+                """Default: never approve a relaxed-rotation retry."""
+                return False
         return confirm_rotation_callback
 
     def _generate_weekend_variants(self, confirm_rotation_callback, weekend_variant_mode):
@@ -1413,7 +1420,7 @@ class NurseScheduler:
         return candidate_schedules, all_worker_metrics
 
     def _report_performance_metrics(self, worker_metrics: list[WorkerMetrics],
-                                    output_path: Optional[str | os.PathLike[str]]) -> None:
+                                    output_path: str | os.PathLike[str] | None) -> None:
         """Print and optionally export performance metrics."""
         if not worker_metrics:
             logger.info("Performance profiling collected no metrics to report.")
@@ -1467,8 +1474,8 @@ class NurseScheduler:
         """Export the best variants as PDF files."""
         cal = calendar.Calendar(firstweekday=6)  # Sunday-first
         pdf_paths = []
-        
-        for rank, (idx, stats, nurse_counts, sched_df) in enumerate(
+
+        for rank, (_idx, _stats, _nurse_counts, sched_df) in enumerate(
                 candidate_schedules[:top_n], start=1):
             pdf_name = f"schedule_variant_{rank}.pdf"
             self._export_variant_pdf(pdf_name, sched_df, cal)
@@ -1483,9 +1490,9 @@ class NurseScheduler:
             phases = ["t_clone", "t_assign", "t_gapfill", "t_rebalance", "t_total"]
             labels = ["clone", "assign weekdays", "gap-fill", "rebalance", "TOTAL"]
             sums = [sum(cs[1].get(p, 0) for cs in candidate_schedules) for p in phases]
-            
+
             print("\n=== Average phase times per variant (seconds) ===")
-            for lbl, total in zip(labels, sums):
+            for lbl, total in zip(labels, sums, strict=True):
                 print(f" {lbl:17}: {total / n:.4f}")
             print("=================================================\n")
 

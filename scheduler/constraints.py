@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 import pandas as pd
 
@@ -22,9 +22,9 @@ def passes_basic_eligibility_checks(
     *,
     nurse: str,
     avail_row: pd.Series,
-    other_nurse: Optional[str],
+    other_nurse: str | None,
     has_late_shift_conflict: bool,
-    diagnostics: Optional[list[str]] = None,
+    diagnostics: list[str] | None = None,
 ) -> bool:
     """Cheap, deterministic filtering before spacing/weekly-window checks."""
     if nurse == other_nurse:

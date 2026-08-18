@@ -7,7 +7,6 @@ from pathlib import Path
 
 import scheduler
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

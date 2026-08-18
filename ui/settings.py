@@ -72,7 +72,7 @@ class AppSettings:
 
     def load(self):
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 self._settings = json.load(f)
         except Exception:
             self._settings = {}

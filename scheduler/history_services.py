@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import TYPE_CHECKING, Iterable, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 class WeekendHistoryService:
     """Command-style writes for canonical weekend history plus derived rebuilds."""
 
-    def __init__(self, history: "WeekendHistory"):
+    def __init__(self, history: WeekendHistory):
         self._history = history
 
     def add_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str) -> None:
@@ -83,7 +84,7 @@ class WeekendHistoryService:
 
     def restore_assignments(
         self,
-        backup_assignments: Iterable[tuple[pd.Timestamp, Optional[str], Optional[str]]],
+        backup_assignments: Iterable[tuple[pd.Timestamp, str | None, str | None]],
     ) -> None:
         normalized_rows = []
         for weekend_start, fsf, sfs in backup_assignments:
@@ -108,7 +109,7 @@ class WeekendHistoryService:
 
         self._run_command("restore", _write)
 
-    def set_last_pattern(self, nurse: str, pattern: "WeekendPattern") -> None:
+    def set_last_pattern(self, nurse: str, pattern: WeekendPattern) -> None:
         """Manual override: pin the last pattern for a nurse.
 
         Does not trigger a canonical-from-assignments rebuild — the override
@@ -173,7 +174,7 @@ class WeekendHistoryService:
     def _load_chronological_assignments(
         self,
         conn: sqlite3.Connection,
-    ) -> list[tuple[pd.Timestamp, tuple[Optional[str], Optional[str]]]]:
+    ) -> list[tuple[pd.Timestamp, tuple[str | None, str | None]]]:
         rows = conn.execute(
             """
             SELECT wa.weekend_start, nf.name, ns.name
@@ -193,7 +194,7 @@ class WeekendHistoryService:
 class ViolationHistoryService:
     """Command-style writes for violation history state."""
 
-    def __init__(self, history: "WeekendHistory"):
+    def __init__(self, history: WeekendHistory):
         self._history = history
 
     def add_assignment(self, weekend_start, fsf_nurse: str, sfs_nurse: str) -> None:

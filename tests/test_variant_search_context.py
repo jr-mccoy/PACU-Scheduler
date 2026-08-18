@@ -8,17 +8,11 @@ internals, and that the eager variant→optimizer back-reference is gone.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
-from scheduler import ScheduleState, ScheduleVariant, SchedulerConfig
+from scheduler import SchedulerConfig, ScheduleState, ScheduleVariant
 from scheduler.generation import (
     CandidateDomainBuilder,
     OrderGenerator,

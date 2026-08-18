@@ -18,7 +18,8 @@ have a stable type to target.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional, Protocol, runtime_checkable
+from collections.abc import Iterable, Mapping
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -29,7 +30,7 @@ class VariantSearchContext(Protocol):
     state: Any
     config: Any
     nurses: list[str]
-    pre_scheduled: Mapping[Any, Mapping[str, Optional[str]]]
+    pre_scheduled: Mapping[Any, Mapping[str, str | None]]
     hist_main: Mapping[str, int]
     hist_backup: Mapping[str, int]
     assignment_debug_logger: Any
@@ -56,12 +57,12 @@ class VariantSearchContext(Protocol):
         context: str,
         phase: str,
         date: Any,
-        role: Optional[str],
-        eligible: Optional[Iterable[str]],
-        diagnostics: Optional[dict[str, list[str]]],
-        final_pick: Optional[str],
-        note: Optional[str] = ...,
-        extra: Optional[dict[str, Any]] = ...,
+        role: str | None,
+        eligible: Iterable[str] | None,
+        diagnostics: dict[str, list[str]] | None,
+        final_pick: str | None,
+        note: str | None = ...,
+        extra: dict[str, Any] | None = ...,
     ) -> None: ...
 
     # ----- Value predicates -----
@@ -74,7 +75,7 @@ class VariantSearchContext(Protocol):
         self,
         date: Any,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = ...,
+        diagnostics: dict[str, list[str]] | None = ...,
         *,
         force_relaxed: bool = ...,
     ) -> list[str]: ...
@@ -83,7 +84,7 @@ class VariantSearchContext(Protocol):
         self,
         date: Any,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = ...,
+        diagnostics: dict[str, list[str]] | None = ...,
         *,
         force_relaxed: bool = ...,
     ) -> list[str]: ...
@@ -92,7 +93,7 @@ class VariantSearchContext(Protocol):
         self,
         date: Any,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = ...,
+        diagnostics: dict[str, list[str]] | None = ...,
         *,
         relaxed_spacing: bool = ...,
     ) -> list[str]: ...
@@ -101,7 +102,7 @@ class VariantSearchContext(Protocol):
         self,
         date: Any,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = ...,
+        diagnostics: dict[str, list[str]] | None = ...,
         *,
         relaxed_spacing: bool = ...,
     ) -> list[str]: ...

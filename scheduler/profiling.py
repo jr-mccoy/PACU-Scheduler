@@ -6,7 +6,6 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 try:
     import psutil  # type: ignore
@@ -42,7 +41,7 @@ class WorkerMetrics:
 
     worker_id: int
     variant_idx: int
-    phases: Dict[str, PhaseMetrics] = field(default_factory=dict)
+    phases: dict[str, PhaseMetrics] = field(default_factory=dict)
     total_duration_sec: float = 0.0
     process_id: int = 0
     cpu_count: int = 0
@@ -61,7 +60,7 @@ class WorkerMetrics:
 class PerformanceProfiler:
     """Context manager for profiling a single phase."""
 
-    def __init__(self, phase_name: str, metrics_collector: "MetricsCollector"):
+    def __init__(self, phase_name: str, metrics_collector: MetricsCollector):
         self.phase_name = phase_name
         self.collector = metrics_collector
         self.start_time = 0.0
@@ -128,7 +127,7 @@ class MetricsCollector:
 class PerformanceReport:
     """Aggregates and reports performance metrics across workers."""
 
-    def __init__(self, all_metrics: List[WorkerMetrics]):
+    def __init__(self, all_metrics: list[WorkerMetrics]):
         self.all_metrics = all_metrics
         self.num_workers = len(all_metrics)
 

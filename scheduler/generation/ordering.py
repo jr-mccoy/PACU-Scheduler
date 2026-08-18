@@ -15,11 +15,11 @@ class OrderGenerator:
     Depends on `VariantSearchContext` instead of `ScheduleVariant` directly.
     """
 
-    def __init__(self, context: "VariantSearchContext"):
+    def __init__(self, context: VariantSearchContext):
         self.context = context
 
     @property
-    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+    def variant(self) -> VariantSearchContext:  # pragma: no cover - shim
         return self.context
 
     def build_full_varlist(self, days, role_order: str = "MB"):

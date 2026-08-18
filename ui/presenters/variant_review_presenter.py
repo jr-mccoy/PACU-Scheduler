@@ -282,7 +282,7 @@ def _prepare_variant_debug_payload(candidate_schedules, scheduler, weekend_histo
                 main_val = None if _is_empty(row.get("main")) else str(row.get("main"))
                 backup_val = None if _is_empty(row.get("backup")) else str(row.get("backup"))
                 assignment_rows.append((ts, {"date": iso_date, "main": main_val, "backup": backup_val}))
-                for role, nurse in (("main", row.get("main")), ("backup", row.get("backup"))):
+                for nurse in (row.get("main"), row.get("backup")):
                     if nurse is None or _is_empty(nurse) or ts is None:
                         continue
                     per_nurse_variant_dates[str(nurse)].add(ts)

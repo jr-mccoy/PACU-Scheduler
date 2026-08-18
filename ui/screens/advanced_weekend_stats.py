@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 import pandas as pd
 from PySide6.QtCore import QDate, QEvent, Qt, QTimer, Slot
@@ -68,7 +67,7 @@ class AdvancedWeekendStatsScreen(QWidget):
         self.parent         = parent
         self.backend        = parent.backend
         self._stats_date    = pd.Timestamp.today().strftime("%Y-%m-%d")
-        self._current_nurse: Optional[str] = None
+        self._current_nurse: str | None = None
         self._press_time    = None
         self._press_row     = None
 

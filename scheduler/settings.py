@@ -39,7 +39,7 @@ class SharedSettings:
         cfg_dir = os.path.join(base, ".nurse_scheduler")
         self.path = os.path.join(cfg_dir, filename)
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 self._settings = json.load(f)
         except Exception:
             self._settings = {}

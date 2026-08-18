@@ -159,7 +159,7 @@ class RotationViolationDialog(ToolDialog):
 
     def _apply_accent(self):
         self.select_all_btn.setStyleSheet(
-            (
+
                 "QPushButton {"
                 f"background:{self._accent};"
                 "color:#fff;"
@@ -169,7 +169,7 @@ class RotationViolationDialog(ToolDialog):
                 "QPushButton:pressed {"
                 "opacity:0.8;"
                 "}"
-            )
+
         )
 
     def refresh_accent(self, accent=None):

@@ -134,19 +134,19 @@ class App(QMainWindow):
         open widget.  Runs only on the GUI thread (safe for Android).
         """
         app = QApplication.instance()
-    
+
         # ── 1 · pull settings once
         font_size = self.settings.get("font_size")
         theme     = self.settings.get("theme")
         accent    = self.settings.get("accent_color")
         show_gif  = self.settings.get("show_gif")
-    
+
         # ── 2 · global font
         app.setFont(QFont("Roboto", font_size))
-    
+
         # ── 3 · palette + QSS
         UiStyle.apply(app, theme=theme, accent_color=accent)
-    
+
         # helper ensures white-on-accent wherever Qt falls back to palette
         def _fix_selection_contrast(w: QWidget, accent_hex: str) -> None:
             accent_hex = shade_color(accent_hex, 1.0)
@@ -154,38 +154,38 @@ class App(QMainWindow):
             pal.setColor(QPalette.Highlight,       QColor(accent_hex))
             pal.setColor(QPalette.HighlightedText, Qt.white)
             w.setPalette(pal)
-    
+
         # ── 4 · AUTO SIZE TABLE/LIST VIEWS ───────────────────────────────
         table_views = (
             self.findChildren(QTableWidget) +
             self.findChildren(QTableView)
         )
         list_views  = self.findChildren(QListWidget)
-    
+
         for view in table_views + list_views:
             # keep selections readable
             _fix_selection_contrast(view, accent)
-    
+
             # ----- table-specific tweaks
             if isinstance(view, (QTableWidget, QTableView)):
                 fm         = view.fontMetrics()
                 row_height = fm.height() + 12                 # 3 px top + 3 px bottom
-    
+
                 # vertical header (row numbers / icons)
                 vh = view.verticalHeader()
                 vh.setMinimumSectionSize(row_height)
                 vh.setDefaultSectionSize(row_height)
                 vh.setSectionResizeMode(QHeaderView.Fixed)   # consistent everywhere
-    
+
                 # horizontal header (column captions)
                 hh = view.horizontalHeader()
                 view.resizeColumnsToContents()               # natural size first
                 hh.setStretchLastSection(True)               # fill remaining space
                 hh.setMinimumSectionSize(40)                 # never collapse too far
-    
+
                 # nicer look for tall rows on mobile
                 hh.setFixedHeight(row_height + 2)
-    
+
                 # ── 5 · refresh any open ToolDialogs to new accent/theme
         accent = app.palette().color(QPalette.Highlight).name()   # <<<
         for dlg in self.findChildren(ToolDialog):
@@ -196,11 +196,11 @@ class App(QMainWindow):
             picker.set_theme(theme, accent)
         for picker in self.findChildren(SingleDatePicker):
             picker.set_theme(theme, accent)
-    
+
         # ── 7 · main-menu GIF toggle
         if hasattr(self, "main"):
             self.main.update_gif(show_gif)
-    
+
         # ── 8 · screen-level theme hooks
         for name, _cls in self._pages:
             page = getattr(self, name, None)

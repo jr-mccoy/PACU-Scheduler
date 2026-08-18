@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import pandas as pd
 
@@ -12,8 +11,8 @@ import pandas as pd
 class AssignmentMutation:
     date: pd.Timestamp
     role: str
-    previous_nurse: Optional[str]
-    next_nurse: Optional[str]
+    previous_nurse: str | None
+    next_nurse: str | None
 
 
 def apply_assignment(

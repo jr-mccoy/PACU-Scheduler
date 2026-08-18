@@ -33,7 +33,6 @@ from .domain import (
 from .evaluation import worker as _worker
 from .evaluation.config import WORKER_TUNING, WorkerTuningConfig
 from .exporters.pdf import (
-    DEFAULT_PDF_FONT_SIZES as _DEFAULT_PDF_FONT_SIZES,
     draw_week_rows as _draw_week_rows_fn,
     draw_weekday_header as _draw_weekday_header_fn,
     export_variant_pdf as _export_variant_pdf_fn,

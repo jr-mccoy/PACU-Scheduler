@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable
 
 import pandas as pd
 

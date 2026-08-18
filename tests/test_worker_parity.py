@@ -9,7 +9,6 @@ out the variant and verify both paths drive the same algorithm.
 from __future__ import annotations
 
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
 import pandas as pd

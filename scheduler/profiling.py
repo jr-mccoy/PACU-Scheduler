@@ -146,20 +146,20 @@ class PerformanceReport:
         min_time = min(m.total_duration_sec for m in self.all_metrics)
         max_time = max(m.total_duration_sec for m in self.all_metrics)
 
-        print(f"\nOverall Summary:")
+        print("\nOverall Summary:")
         print(f"  Workers evaluated: {len(self.all_metrics)}")
         print(f"  Total time (all workers): {total_time:.2f}s")
         print(f"  Average time per worker: {avg_time:.2f}s")
         print(f"  Min/Max worker time: {min_time:.2f}s / {max_time:.2f}s")
         print(f"  CPU cores available: {self.all_metrics[0].cpu_count}")
 
-        print(f"\nPhase Breakdown (averaged across workers):")
+        print("\nPhase Breakdown (averaged across workers):")
         self._print_phase_summary()
 
-        print(f"\nResource Usage:")
+        print("\nResource Usage:")
         self._print_resource_summary()
 
-        print(f"\nPer-Worker Details:")
+        print("\nPer-Worker Details:")
         self._print_worker_details()
 
         print("=" * 80 + "\n")

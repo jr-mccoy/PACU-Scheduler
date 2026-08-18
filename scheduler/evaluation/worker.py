@@ -13,12 +13,6 @@ from .config import WORKER_TUNING
 MEASURE_PHASE_TIMES = True
 
 
-@contextmanager
-def _noop_phase_timer(_phase_name: str):
-    """Phase-timer no-op used when profiling is disabled."""
-    yield
-
-
 def _evaluate_variant_core(args, *, with_profiling: bool):
     """Shared implementation for variant evaluation.
 
@@ -40,13 +34,12 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
             return phase.duration_sec if phase else 0.0
     else:
         collector = None
-        phase_timer = _noop_phase_timer
         t0 = time.perf_counter()
         phase_starts: dict[str, float] = {}
         phase_durations: dict[str, float] = {}
 
         @contextmanager
-        def phase_timer(name: str):  # type: ignore[no-redef]
+        def phase_timer(name: str):
             start = time.perf_counter()
             phase_starts[name] = start
             try:

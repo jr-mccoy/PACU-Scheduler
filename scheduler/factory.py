@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Optional, Protocol, Tuple
+from typing import Protocol
 
-import pandas as pd
 
 from .domain import SchedulerConfig
 from .engine import NurseScheduler

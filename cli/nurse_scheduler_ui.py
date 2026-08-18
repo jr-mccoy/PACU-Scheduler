@@ -30,7 +30,6 @@ from scheduler import (
     NurseManager,
     NurseScheduler,
     PreScheduler,
-    SchedulerConfig,
     SharedSettings,
     WeekendHistory,
     WeekendPattern,
@@ -522,7 +521,7 @@ class NurseSchedulerUI:
                 ))
             
             headers = ["Nurse", "Violation Date", "Pattern Repeat"]
-            title = f"Rotation Violations" + (f" for {nurse}" if nurse else "")
+            title = "Rotation Violations" + (f" for {nurse}" if nurse else "")
             CLIHelper.display_table(data, headers, title)
             return True
         
@@ -545,7 +544,7 @@ class NurseSchedulerUI:
             total_violations = sum(counts.values())
             nurses_with_violations = sum(1 for count in counts.values() if count > 0)
             
-            print(f"\nSummary:")
+            print("\nSummary:")
             print(f"Total violations found: {total_violations}")
             print(f"Nurses with violations: {nurses_with_violations}")
             return True

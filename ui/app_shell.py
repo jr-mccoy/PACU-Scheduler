@@ -124,7 +124,6 @@ class App(QMainWindow):
             # SchedulerService instance kept in self.backend
             # It created self.settings = SharedSettings() at init time.
             # Replace it with a fresh snapshot.
-            from scheduler import SharedSettings
             self.backend.settings = SharedSettings()
         except Exception:
             pass

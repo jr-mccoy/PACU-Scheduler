@@ -17,7 +17,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pandas as pd
-import pytest
 
 from scheduler import ScheduleState, ScheduleVariant, SchedulerConfig
 from scheduler.generation import (

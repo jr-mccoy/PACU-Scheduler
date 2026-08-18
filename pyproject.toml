@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pacu-scheduler"
+version = "1.0.0"
+description = "On-call schedule generator for a post-anesthesia care unit nursing team"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy>=2.0,<3",
+    "pandas>=2.0,<3",
+    "psutil>=5.9,<8",
+    "PySide6>=6.6,<7",
+    "reportlab>=4,<5",
+    "tqdm>=4.66,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
+
+[project.scripts]
+pacu-scheduler = "cli.__main__:main"
+
+[tool.setuptools]
+packages = ["cli", "scheduler", "ui"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = [
+    "error::DeprecationWarning:scheduler.*",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line length is reported by the formatter, not the linter
+    "B008",  # function call in argument default — used deliberately for Qt defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The `legacy` modules are deliberate compatibility facades: they exist only to
+# re-export symbols from the packages that replaced the original monoliths.
+# Their `__all__` lists are composed at import time from the sub-modules'
+# own `__all__`, which a static linter cannot resolve, so every re-export
+# reads as an unused import.
+"scheduler/legacy_core.py" = ["F401", "F403", "F405"]
+"scheduler/ui_legacy.py" = ["F401"]
+"ui/legacy.py" = ["F401"]

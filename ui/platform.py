@@ -162,7 +162,7 @@ def _open_external(path: str) -> bool:
     # Fallback for Android: try an intent
     try:
         if is_android_platform():
-            import subprocess, mimetypes, shlex
+            import subprocess, mimetypes
             mt, _ = mimetypes.guess_type(path)
             if not mt:
                 # crude guess by extension

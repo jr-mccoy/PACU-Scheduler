@@ -1,7 +1,13 @@
 # PACU Scheduler
 
+[![CI](https://github.com/jr-mccoy/pacu-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/jr-mccoy/pacu-scheduler/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A desktop and terminal application that builds on-call schedules for a
 post-anesthesia care unit (PACU) nursing team.
+
+![The scheduler's main menu](docs/images/main-menu.png)
 
 Call scheduling in a small unit is a constraint-satisfaction problem with a
 fairness objective layered on top. Each day needs a **Main** and a **Backup**
@@ -14,6 +20,39 @@ while spreading Main and Backup duty evenly across the team.
 
 This project generates candidate schedules, scores them, and presents the best
 options for a manager to review and approve.
+
+## Try it
+
+The repository ships no database, so there is nothing to schedule on a fresh
+clone. `scripts/demo.py` seeds a throwaway one with a fictional roster,
+weekend history, and time-off requests, runs the real generation pipeline,
+and prints the winning schedule. It takes about a minute:
+
+```bash
+python -m pip install -r requirements.txt
+python scripts/demo.py
+```
+
+```
+Best schedule — Aug 24, 2026 to Sep 20, 2026
+==============================================================
+                      main          backup
+2026-08-24  Blair Nakamura      Casey Odum
+2026-08-25     Devon Ellis   Emerson Vance
+2026-08-26    Jordan Reyes    Avery Brooks
+...
+
+Assignment balance across 8 nurses
+--------------------------------------------------------------
+Nurse                     Main    Backup   Total
+Avery Brooks                 3         4       7
+Blair Nakamura               4         3       7
+Casey Odum                   3         4       7
+...
+```
+
+Every name in the demo is invented; no real staffing data is in this
+repository.
 
 ## How it works
 
@@ -49,6 +88,15 @@ been decomposed into three packages with a one-way dependency flow
 `scheduler/legacy_core.py` and `ui/legacy.py` remain as import-compatibility
 facades; neither contains application logic, and a test enforces that.
 
+## Screens
+
+| | |
+| --- | --- |
+| ![Manage Nurses](docs/images/nurse-management.png) | ![Schedule Generation](docs/images/schedule-generation.png) |
+| Roster management, with PRN and late-shift eligibility | Picking the horizon to schedule |
+
+Regenerate these from the demo seed with `python scripts/screenshots.py`.
+
 ## Setup
 
 Requires Python 3.11+.
@@ -79,14 +127,64 @@ data (which contains real staff names and time-off records) stays local.
 
 ```bash
 python -m pip install -r requirements-dev.txt
-pytest -q
+pytest
+```
+
+Linting and formatting are both `ruff`, configured in `pyproject.toml`:
+
+```bash
+ruff check .
+ruff format --check .
 ```
 
 The GUI tests need a Qt platform plugin. On a headless machine:
 
 ```bash
-QT_QPA_PLATFORM=offscreen pytest -q
+QT_QPA_PLATFORM=offscreen pytest
 ```
+
+On a bare Linux box, PySide6 also needs its native libraries present — it
+links against them at import time, so even the offscreen plugin fails without
+them:
+
+```bash
+sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+```
+
+### Diagnostics
+
+Logging is configured at the entry points and the level comes from an
+environment variable:
+
+```bash
+PACU_LOG_LEVEL=DEBUG python main.py
+```
+
+Two heavier traces are opt-in because they are expensive rather than merely
+verbose. `SCHEDULE_VARIANT_DEBUG=1` prints every candidate slot the search
+considers (thousands of lines per variant), and `DEBUG_SCHED=1` writes an
+`assignment_debug_*.jsonl`/`.csv` pair into the working directory.
+
+### Search budgets
+
+Evaluation cost is dominated by the rebalance and refill passes, and their
+budgets are tunable rather than fixed:
+
+- `SchedulerConfig.max_weekend_variants` — beam cap on weekend branching.
+  Every survivor runs the full evaluation pipeline, so this is the main lever
+  on total run time. Pruning is not feasibility-aware: a cap set too low can
+  discard the branch that would have led to the only workable schedule, and
+  the engine warns when that happens.
+- `SchedulerConfig.max_week_permutations` — cap on the slot orderings tried
+  when rebalancing one week. A full week has ten modifiable slots, so an
+  exhaustive search is 10! orderings.
+- `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
+  gap-fill, rebalance, and refill passes. Hand it to `NurseScheduler` as
+  `worker_tuning=`; it travels with each work item, so it reaches worker
+  processes on every start method. `scripts/demo.py` uses a tightened profile.
+
+The shipped defaults are generous enough that a single variant can take
+minutes; see **Known limitations**.
 
 ## Scheduling policies
 
@@ -121,6 +219,21 @@ for operator control.
   drawn from weekend history and the `schedule_history` table — are seeded into
   each snapshot, so spacing is enforced across the window boundary rather than
   only inside it.
+
+## Known limitations
+
+- **Evaluation is slow.** A single weekend variant takes on the order of tens
+  of seconds, and a realistic horizon produces hundreds of variants. The cost
+  is concentrated in per-cell pandas lookups (`DataFrame.at`) inside the
+  eligibility and spacing checks, which run millions of times per variant.
+  Making the hot path operate on plain dicts or arrays instead is the obvious
+  next optimization.
+- **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
+  the per-attempt time limits are 800 seconds each, multiplied by hundreds of
+  passes. They effectively never bind, so run time is governed by how quickly
+  the search happens to converge.
+- **Weekend generation grows combinatorially.** Rosters much beyond ten nurses
+  or horizons beyond about six weeks push variant counts up sharply.
 
 ## Documentation
 

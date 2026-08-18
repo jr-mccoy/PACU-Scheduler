@@ -22,7 +22,7 @@ dependencies = [
 dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
 
 [project.scripts]
-pacu-scheduler = "cli.__main__:main"
+pacu-scheduler = "cli.__main__:run"
 
 [tool.setuptools]
 packages = ["cli", "scheduler", "ui"]

@@ -1,0 +1,6 @@
+# Revisions that only reformat code. Ignore them when running git blame:
+#   git blame --ignore-revs-file .git-blame-ignore-revs <file>
+# GitHub picks this file up automatically.
+
+# Apply ruff formatting across the codebase
+97cb69f6499f7b4ef9a8e27bc8763e0dabbbf32c

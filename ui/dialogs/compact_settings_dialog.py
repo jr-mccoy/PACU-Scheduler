@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .tool_dialog import ToolDialog
 from ..widgets.common import WrappedCheck
+from .tool_dialog import ToolDialog
 
 try:  # pragma: no cover - environment-dependent
     from PySide6.QtGui import QGuiApplication as _AppScreen
@@ -86,7 +86,7 @@ class CompactSettingsDialog(ToolDialog):
         self.accent_swatch.setFixedSize(28, 28)
         self.accent_swatch.setStyleSheet(
             f"""
-            background: {settings.get('accent_color')};
+            background: {settings.get("accent_color")};
             border: 2px solid #888; border-radius: 6px;
         """
         )
@@ -103,7 +103,7 @@ class CompactSettingsDialog(ToolDialog):
             color = self.accent_edit.text()
             self.accent_swatch.setStyleSheet(
                 f"""
-                background: {color if color.startswith('#') and len(color) == 7 else '#5C8DBC'};
+                background: {color if color.startswith("#") and len(color) == 7 else "#5C8DBC"};
                 border: 2px solid #888; border-radius: 6px;
             """
             )
@@ -159,9 +159,7 @@ class CompactSettingsDialog(ToolDialog):
         self.measure_chk.setChecked(settings.get("measure_phase_times"))
         self.analyse_chk = QCheckBox("Analyse initial gaps")
         self.analyse_chk.setChecked(settings.get("analyse_initial_weekday_gaps"))
-        self.assignment_debug_chk = QCheckBox(
-            "Enable structured assignment debug logging"
-        )
+        self.assignment_debug_chk = QCheckBox("Enable structured assignment debug logging")
         self.assignment_debug_chk.setChecked(settings.get("assignment_debug_enabled"))
         dbg_outer.addWidget(self.measure_chk)
         dbg_outer.addWidget(self.analyse_chk)

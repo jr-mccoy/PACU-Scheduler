@@ -94,7 +94,7 @@ class WeekendHistoryCalendarScreen(QWidget):
         # --- Action buttons row ---
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self._btn_add    = QPushButton("Add")
+        self._btn_add = QPushButton("Add")
         self._btn_add.setFixedHeight(36)
         self._btn_modify = QPushButton("Modify")
         self._btn_modify.setFixedHeight(36)
@@ -138,14 +138,18 @@ class WeekendHistoryCalendarScreen(QWidget):
 
     def _shift_month(self, delta: int):
         m, y = self.month + delta, self.year
-        if m == 0:  m, y = 12, y - 1
-        if m == 13: m, y = 1,  y + 1
+        if m == 0:
+            m, y = 12, y - 1
+        if m == 13:
+            m, y = 1, y + 1
         self.month, self.year = m, y
         self._refresh_all()
 
     def _reload(self):
-        self.assign = {d.date().isoformat(): (fsf or "", sfs or "")
-                       for d, fsf, sfs in self.wh.get_assignments()}
+        self.assign = {
+            d.date().isoformat(): (fsf or "", sfs or "")
+            for d, fsf, sfs in self.wh.get_assignments()
+        }
 
     def _populate_list(self):
         self.list.clear()
@@ -159,7 +163,8 @@ class WeekendHistoryCalendarScreen(QWidget):
             txt = dt.strftime("%a %b %d") + (
                 f" — FSF: {fsf or '-'} | SFS: {sfs or '-'}" if (fsf or sfs) else ""
             )
-            itm = QListWidgetItem(txt); itm.setData(Qt.UserRole, iso)
+            itm = QListWidgetItem(txt)
+            itm.setData(Qt.UserRole, iso)
             self.list.addItem(itm)
 
     def _refresh_all(self):
@@ -188,7 +193,8 @@ class WeekendHistoryCalendarScreen(QWidget):
         self._update_ui()
 
     def _nurse_combo(self, current: str | None):
-        cb = QComboBox(); cb.setFont(QFont("Roboto", 14))
+        cb = QComboBox()
+        cb.setFont(QFont("Roboto", 14))
         cb.addItems([""] + self.nm.get_nurses())
         cb.setCurrentText(current or "")
         return cb
@@ -196,23 +202,33 @@ class WeekendHistoryCalendarScreen(QWidget):
     def _assignment_dialog(self, iso_ds: str, fsf: str, sfs: str, save_cb):
         dlg = ToolDialog(self.parent, "Weekend Assignment")
         dlg.setFixedWidth(410)
-        form  = QFormLayout()
-        dummy = QLineEdit(); dummy.setFixedSize(0, 0); form.addRow(dummy)
+        form = QFormLayout()
+        dummy = QLineEdit()
+        dummy.setFixedSize(0, 0)
+        form.addRow(dummy)
         form.addRow("Date:", QLabel(iso_ds))
-        cbm = self._nurse_combo(fsf); form.addRow("FSF:", cbm)
-        cbb = self._nurse_combo(sfs); form.addRow("SFS:", cbb)
+        cbm = self._nurse_combo(fsf)
+        form.addRow("FSF:", cbm)
+        cbb = self._nurse_combo(sfs)
+        form.addRow("SFS:", cbb)
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+
         def _save():
             if cbm.currentText() == cbb.currentText():
                 show_warning(dlg, "Invalid", "FSF and SFS must be different.")
                 return
             save_cb(cbm.currentText(), cbb.currentText())
-            dlg.accept(); self._refresh_all()
-        btns.accepted.connect(_save); btns.rejected.connect(lambda:(dlg.reject(), self._update_ui()))
-        form.addRow(btns); dlg.setLayout(form)
+            dlg.accept()
+            self._refresh_all()
+
+        btns.accepted.connect(_save)
+        btns.rejected.connect(lambda: (dlg.reject(), self._update_ui()))
+        form.addRow(btns)
+        dlg.setLayout(form)
         QTimer.singleShot(0, dummy.setFocus)
-        pr = self.parent.geometry(); dr = dlg.frameGeometry()
-        dlg.move(pr.center().x()-dr.width()//2, pr.center().y()-dr.height()//2)
+        pr = self.parent.geometry()
+        dr = dlg.frameGeometry()
+        dlg.move(pr.center().x() - dr.width() // 2, pr.center().y() - dr.height() // 2)
         dlg.open()
 
     def _on_add(self):
@@ -222,11 +238,10 @@ class WeekendHistoryCalendarScreen(QWidget):
             return
         iso = item.data(Qt.UserRole)
         self._assignment_dialog(
-            iso, "", "",
-            save_cb=lambda fsf, sfs: (
-                self.wh.add_assignment(iso, fsf, sfs),
-                self._refresh_all()
-            )
+            iso,
+            "",
+            "",
+            save_cb=lambda fsf, sfs: (self.wh.add_assignment(iso, fsf, sfs), self._refresh_all()),
         )
 
     def _on_modify(self):
@@ -237,12 +252,14 @@ class WeekendHistoryCalendarScreen(QWidget):
         iso = item.data(Qt.UserRole)
         fsf, sfs = self.assign.get(iso, ("", ""))
         self._assignment_dialog(
-            iso, fsf, sfs,
+            iso,
+            fsf,
+            sfs,
             save_cb=lambda new_fsf, new_sfs: (
                 self.wh.remove_assignment(iso),
                 self.wh.add_assignment(iso, new_fsf, new_sfs),
-                self._refresh_all()
-            )
+                self._refresh_all(),
+            ),
         )
 
     def _on_remove(self):
@@ -251,12 +268,10 @@ class WeekendHistoryCalendarScreen(QWidget):
             return
         iso = item.data(Qt.UserRole)
         confirm(
-            self, "Confirm",
+            self,
+            "Confirm",
             f"Remove assignment for {iso}?",
-            yes_cb=lambda: (
-                self.wh.remove_assignment(iso),
-                self._refresh_all()
-            )
+            yes_cb=lambda: (self.wh.remove_assignment(iso), self._refresh_all()),
         )
 
     def _on_sync(self):

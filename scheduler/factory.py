@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Optional, Protocol, Tuple
-
-import pandas as pd
+from typing import Protocol
 
 from .domain import SchedulerConfig
 from .engine import NurseScheduler
@@ -168,18 +166,10 @@ def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
         backup_score_factor=settings.get("backup_score_factor"),
         availability_penalty=settings.get("availability_penalty"),
         min_days_between_assignments=settings.get("min_days_between_assignments"),
-        allow_post_weekend_wednesday_main=settings.get(
-            "allow_post_weekend_wednesday_main"
-        ),
-        allow_post_weekend_wednesday_backup=settings.get(
-            "allow_post_weekend_wednesday_backup"
-        ),
-        allow_post_weekend_thursday_main=settings.get(
-            "allow_post_weekend_thursday_main"
-        ),
-        allow_post_weekend_thursday_backup=settings.get(
-            "allow_post_weekend_thursday_backup"
-        ),
+        allow_post_weekend_wednesday_main=settings.get("allow_post_weekend_wednesday_main"),
+        allow_post_weekend_wednesday_backup=settings.get("allow_post_weekend_wednesday_backup"),
+        allow_post_weekend_thursday_main=settings.get("allow_post_weekend_thursday_main"),
+        allow_post_weekend_thursday_backup=settings.get("allow_post_weekend_thursday_backup"),
         allow_one_day_weekday_gap=settings.get("allow_one_day_weekday_gap"),
         scoring_weights=settings.get("scoring_weights"),
         max_weekend_variants=max_weekend_variants,

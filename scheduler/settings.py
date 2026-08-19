@@ -11,6 +11,7 @@ class SharedSettings:
     Read the GUI settings JSON (~/.nurse_scheduler/settings.json) so the CLI
     uses the same configuration. Falls back to known defaults if missing.
     """
+
     DEFAULTS = {
         "weekend_gap_days": 28,
         "min_days_between_assignments": 2,
@@ -26,11 +27,11 @@ class SharedSettings:
         "max_weekend_variants": 500,
         "scoring_weights": {
             "rotation_rep": 0.30,
-            "gaps":         0.20,
-            "rot_viol":     0.15,
-            "weekend_gap":  0.15,
-            "balance":      0.10,
-            "long_term":    0.10,
+            "gaps": 0.20,
+            "rot_viol": 0.15,
+            "weekend_gap": 0.15,
+            "balance": 0.10,
+            "long_term": 0.10,
         },
     }
 
@@ -39,12 +40,13 @@ class SharedSettings:
         cfg_dir = os.path.join(base, ".nurse_scheduler")
         self.path = os.path.join(cfg_dir, filename)
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 self._settings = json.load(f)
         except Exception:
             self._settings = {}
 
     def get(self, key):
         return self._settings.get(key, self.DEFAULTS[key])
+
 
 __all__ = ["SharedSettings"]

@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import sys
 
+from scheduler.logging_config import configure_logging
 from ui import App, UiStyle
 
 
 def main() -> int:
+    configure_logging()
+
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)

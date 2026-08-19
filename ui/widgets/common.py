@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -21,6 +21,7 @@ class WrappedCheck(QWidget):
     A checkbox that wraps its text to multiple lines on narrow screens.
     Exposes isChecked()/setChecked() and toggled(bool) like QCheckBox.
     """
+
     toggled = Signal(bool)
 
     def __init__(self, text: str, checked: bool = False, parent=None):
@@ -72,10 +73,7 @@ class ConfirmOverlay(QWidget):
         """)
         card.setFixedWidth(360)
         card.setFixedHeight(180)
-        card.move(
-            (self.width() - card.width()) // 2,
-            (self.height() - card.height()) // 2
-        )
+        card.move((self.width() - card.width()) // 2, (self.height() - card.height()) // 2)
 
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 12, 12, 12)
@@ -112,8 +110,10 @@ class ConfirmOverlay(QWidget):
 
 class WrapDelegate(QStyledItemDelegate):
     """Enables word-wrap for QListWidget/QTableView items."""
+
     def initStyleOption(self, option: QStyleOptionViewItem, index):
         super().initStyleOption(option, index)
         option.features |= QStyleOptionViewItem.WrapText
+
 
 __all__ = ["WrappedCheck", "ConfirmOverlay", "WrapDelegate"]

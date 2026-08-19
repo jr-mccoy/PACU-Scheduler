@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .context import VariantSearchContext
@@ -14,18 +14,18 @@ class CandidateDomainBuilder:
     domain construction.
     """
 
-    def __init__(self, context: "VariantSearchContext"):
+    def __init__(self, context: VariantSearchContext):
         self.context = context
 
     @property
-    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+    def variant(self) -> VariantSearchContext:  # pragma: no cover - shim
         return self.context
 
     def eligible_domain(
         self,
         date,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         force_relaxed: bool = False,
         gap_mode: bool = False,
@@ -40,9 +40,7 @@ class CandidateDomainBuilder:
             diag_map.clear()
 
         get_eligible = (
-            ctx.get_eligible_nurses_for_day_gap
-            if gap_mode
-            else ctx.get_eligible_nurses_for_day
+            ctx.get_eligible_nurses_for_day_gap if gap_mode else ctx.get_eligible_nurses_for_day
         )
         context_label = "gap_eligible_domain" if gap_mode else "eligible_domain"
 
@@ -57,7 +55,7 @@ class CandidateDomainBuilder:
         relaxed_candidates: list[str] = []
 
         if force_relaxed and ctx.config.allow_one_day_weekday_gap:
-            capture_relaxed: Optional[dict[str, list[str]]] = {} if diag_map is not None else None
+            capture_relaxed: dict[str, list[str]] | None = {} if diag_map is not None else None
             relaxed_candidates = get_eligible(
                 date,
                 role,
@@ -81,9 +79,7 @@ class CandidateDomainBuilder:
             if candidates:
                 used_relaxed = True
                 if ctx.console_debug and not gap_mode:
-                    ctx.debug_print(
-                        f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}"
-                    )
+                    ctx.debug_print(f"[ScheduleVariant] [Domain] relaxed {date.date()} role={role}")
 
         if relaxed_candidates:
             seen: set[str] = set(candidates)
@@ -91,9 +87,7 @@ class CandidateDomainBuilder:
 
         if not candidates:
             if ctx.console_debug and not gap_mode:
-                ctx.debug_print(
-                    f"[ScheduleVariant] [Domain] empty {date.date()} role={role}"
-                )
+                ctx.debug_print(f"[ScheduleVariant] [Domain] empty {date.date()} role={role}")
             if ctx.assignment_debug_logger.enabled:
                 ctx.log_assignment_debug(
                     context=context_label,

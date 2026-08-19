@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -107,9 +106,7 @@ class SettingsDialog(ToolDialog):
         self.measure_chk.setChecked(settings.get("measure_phase_times"))
         self.analyse_chk = QCheckBox("Analyse initial gaps")
         self.analyse_chk.setChecked(settings.get("analyse_initial_weekday_gaps"))
-        self.assignment_debug_chk = QCheckBox(
-            "Enable structured assignment debug logging"
-        )
+        self.assignment_debug_chk = QCheckBox("Enable structured assignment debug logging")
         self.assignment_debug_chk.setChecked(settings.get("assignment_debug_enabled"))
         self.debug_mode_combo = QComboBox()
         self.debug_mode_combo.addItem("Off", "off")
@@ -150,18 +147,12 @@ class SettingsDialog(ToolDialog):
         self.thu_backup = QCheckBox("Allow BACKUP on Thursday")
         self.thu_backup.setChecked(settings.get("allow_post_weekend_thursday_backup"))
 
-        self.hm_backup = QCheckBox(
-            "Allow Mon–Wed / Tue–Thu one-day gap (both BACKUP)"
-        )
+        self.hm_backup = QCheckBox("Allow Mon–Wed / Tue–Thu one-day gap (both BACKUP)")
         self.hm_backup.setChecked(settings.get("allow_midweek_pair_backup_only"))
-        self.hm_mixed = QCheckBox(
-            "Allow Mon–Wed / Tue–Thu one-day gap (MAIN + BACKUP)"
-        )
+        self.hm_mixed = QCheckBox("Allow Mon–Wed / Tue–Thu one-day gap (MAIN + BACKUP)")
         self.hm_mixed.setChecked(settings.get("allow_midweek_pair_mixed"))
 
-        self.one_day_gap = QCheckBox(
-            "Enable one-day weekday gap fallback (Mon–Wed / Tue–Thu)"
-        )
+        self.one_day_gap = QCheckBox("Enable one-day weekday gap fallback (Mon–Wed / Tue–Thu)")
         self.one_day_gap.setChecked(settings.get("allow_one_day_weekday_gap"))
 
         for i, w in enumerate(
@@ -213,7 +204,7 @@ class SettingsDialog(ToolDialog):
             self.w_balance,
             self.w_longterm,
         ]
-        for i, (lab, sp) in enumerate(zip(labels, spins)):
+        for i, (lab, sp) in enumerate(zip(labels, spins, strict=True)):
             score_layout.addWidget(QLabel(lab), i, 0)
             score_layout.addWidget(sp, i, 1)
         score_group.setLayout(score_layout)

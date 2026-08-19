@@ -4,9 +4,8 @@ import pathlib
 import re
 
 from ui import app as app_wrapper
-from ui import app_shell
+from ui import app_shell, worker_threads
 from ui import workers as workers_wrapper
-from ui import worker_threads
 from ui.dialogs import (
     compact_settings_dialog,
     compact_settings_dialog_widget,
@@ -41,15 +40,30 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert workers_wrapper.ScheduleProgressWorker is worker_threads.ScheduleProgressWorker
     assert workers_wrapper.RebuildViolationWorker is worker_threads.RebuildViolationWorker
 
-    assert schedule_generation.ScheduleGenerationScreen is schedule_generation_screen.ScheduleGenerationScreen
+    assert (
+        schedule_generation.ScheduleGenerationScreen
+        is schedule_generation_screen.ScheduleGenerationScreen
+    )
     assert nurse_management.NurseManagementScreen is nurse_management_screen.NurseManagementScreen
-    assert weekend_history_calendar.WeekendHistoryCalendarScreen is weekend_history_calendar_screen.WeekendHistoryCalendarScreen
+    assert (
+        weekend_history_calendar.WeekendHistoryCalendarScreen
+        is weekend_history_calendar_screen.WeekendHistoryCalendarScreen
+    )
 
     assert tool_dialog.ToolDialog is tool_dialog_widget.ToolDialog
     assert settings_dialog.SettingsDialog is settings_dialog_widget.SettingsDialog
-    assert compact_settings_dialog.CompactSettingsDialog is compact_settings_dialog_widget.CompactSettingsDialog
-    assert variant_review_dialog.VariantReviewDialog is variant_review_dialog_widget.VariantReviewDialog
-    assert rotation_violation_dialog.RotationViolationDialog is rotation_violation_dialog_widget.RotationViolationDialog
+    assert (
+        compact_settings_dialog.CompactSettingsDialog
+        is compact_settings_dialog_widget.CompactSettingsDialog
+    )
+    assert (
+        variant_review_dialog.VariantReviewDialog
+        is variant_review_dialog_widget.VariantReviewDialog
+    )
+    assert (
+        rotation_violation_dialog.RotationViolationDialog
+        is rotation_violation_dialog_widget.RotationViolationDialog
+    )
 
     # The migrated dialogs must own the class — ui.legacy re-exports them.
     import ui.legacy as legacy
@@ -67,7 +81,9 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert legacy.AssignmentHistoryScreen is assignment_history.AssignmentHistoryScreen
     assert legacy.ViewAllUnavailableScreen is view_all_unavailable.ViewAllUnavailableScreen
     assert legacy.ScheduleGenerationScreen is schedule_generation.ScheduleGenerationScreen
-    assert legacy.WeekendHistoryCalendarScreen is weekend_history_calendar.WeekendHistoryCalendarScreen
+    assert (
+        legacy.WeekendHistoryCalendarScreen is weekend_history_calendar.WeekendHistoryCalendarScreen
+    )
     assert legacy.AdvancedWeekendStatsScreen is advanced_weekend_stats.AdvancedWeekendStatsScreen
 
     # And the new screen modules must own classes from their own files, not
@@ -77,10 +93,21 @@ def test_ui_wrapper_modules_point_to_concrete_modules():
     assert nurse_management.NurseManagementScreen.__module__ == "ui.screens.nurse_management"
     assert prescheduled.PreScheduledScreen.__module__ == "ui.screens.prescheduled"
     assert assignment_history.AssignmentHistoryScreen.__module__ == "ui.screens.assignment_history"
-    assert view_all_unavailable.ViewAllUnavailableScreen.__module__ == "ui.screens.view_all_unavailable"
-    assert schedule_generation.ScheduleGenerationScreen.__module__ == "ui.screens.schedule_generation"
-    assert weekend_history_calendar.WeekendHistoryCalendarScreen.__module__ == "ui.screens.weekend_history_calendar"
-    assert advanced_weekend_stats.AdvancedWeekendStatsScreen.__module__ == "ui.screens.advanced_weekend_stats"
+    assert (
+        view_all_unavailable.ViewAllUnavailableScreen.__module__
+        == "ui.screens.view_all_unavailable"
+    )
+    assert (
+        schedule_generation.ScheduleGenerationScreen.__module__ == "ui.screens.schedule_generation"
+    )
+    assert (
+        weekend_history_calendar.WeekendHistoryCalendarScreen.__module__
+        == "ui.screens.weekend_history_calendar"
+    )
+    assert (
+        advanced_weekend_stats.AdvancedWeekendStatsScreen.__module__
+        == "ui.screens.advanced_weekend_stats"
+    )
 
 
 def test_ui_modules_do_not_import_scheduler_legacy_core_directly():

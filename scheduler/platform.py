@@ -17,11 +17,10 @@ def inhibit_sleep():
     elif sys.platform.startswith("win"):
         # Windows: SetThreadExecutionState DISPLAY_REQUIRED
         import ctypes
-        ES_CONTINUOUS       = 0x80000000
+
+        ES_CONTINUOUS = 0x80000000
         ES_DISPLAY_REQUIRED = 0x00000002
-        ctypes.windll.kernel32.SetThreadExecutionState(
-            ES_CONTINUOUS | ES_DISPLAY_REQUIRED
-        )
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)
         return None
     else:
         # Linux and others: no‐op (you could integrate a DBus inhibit here)
@@ -37,8 +36,10 @@ def allow_sleep(handle):
             handle.terminate()
     elif sys.platform.startswith("win"):
         import ctypes
+
         ES_CONTINUOUS = 0x80000000
         # drop the DISPLAY_REQUIRED bit
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
 
 __all__ = ["inhibit_sleep", "allow_sleep"]

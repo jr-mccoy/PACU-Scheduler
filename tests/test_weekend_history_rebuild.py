@@ -13,15 +13,10 @@ GUI surface.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from scheduler import WeekendHistory, WeekendPattern  # noqa: E402
 
@@ -143,8 +138,7 @@ def test_restore_round_trip_rebuilds_assignments_and_derived(weekend_db: Path):
 
     backup = history.backup()
     baseline_patterns = {
-        nurse: history.get_last_pattern(nurse)
-        for nurse in ["Alice", "Bob", "Cara", "Dan"]
+        nurse: history.get_last_pattern(nurse) for nurse in ["Alice", "Bob", "Cara", "Dan"]
     }
     baseline_violations = history.get_violation_counts()
 

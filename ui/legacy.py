@@ -47,9 +47,9 @@ from .theme import (
     themed_file,
     themed_icon,
 )
-from .worker_threads import RebuildViolationWorker, ScheduleProgressWorker
 from .widgets.common import ConfirmOverlay, WrapDelegate, WrappedCheck
 from .widgets.date_pickers import MultiDatePicker, MultiDatePickerGrid, SingleDatePicker
 from .widgets.header_views import MultiLineHeaderView, PinkHeaderView, TallHeaderView
+from .worker_threads import RebuildViolationWorker, ScheduleProgressWorker
 
 __all__ = [name for name in globals() if not name.startswith("__")]

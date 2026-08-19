@@ -5,6 +5,8 @@ only preserves old import paths and a handful of patchable test/debug knobs.
 """
 
 from .debug import (
+    _DEBUG,
+    _LOG_FILE_CACHE,
     ASSIGNMENT_DEBUG_LOGGER,
     AssignmentDebugLogger,
     _accept,
@@ -17,7 +19,6 @@ from .debug import (
     configure_pair_variant_debug,
     log,
 )
-from .debug import _DEBUG, _LOG_FILE_CACHE
 from .domain import *
 from .domain import __all__ as _domain_all
 from .engine import (
@@ -53,32 +54,36 @@ from .runtime import (
 )
 from .settings import SharedSettings
 
-__all__ = list(dict.fromkeys([
-    *_domain_all,
-    *_repository_all,
-    *_profiling_all,
-    "SharedSettings",
-    "WorkerTuningConfig",
-    "WORKER_TUNING",
-    "NurseScheduler",
-    "_evaluate_variant_core",
-    "_evaluate_variant_worker",
-    "_evaluate_variant_worker_profiled",
-    "AssignmentDebugLogger",
-    "ASSIGNMENT_DEBUG_LOGGER",
-    "_open_dbg",
-    "_dbg_pairs",
-    "_dbg_variants",
-    "_reject",
-    "_accept",
-    "_pair",
-    "log",
-    "BackendService",
-    "SchedulerService",
-    "build_scheduler_config_from_settings",
-    "build_scheduler_from_settings",
-    "build_scheduler_service",
-    "inhibit_sleep",
-    "allow_sleep",
-    "is_empty",
-]))
+__all__ = list(
+    dict.fromkeys(
+        [
+            *_domain_all,
+            *_repository_all,
+            *_profiling_all,
+            "SharedSettings",
+            "WorkerTuningConfig",
+            "WORKER_TUNING",
+            "NurseScheduler",
+            "_evaluate_variant_core",
+            "_evaluate_variant_worker",
+            "_evaluate_variant_worker_profiled",
+            "AssignmentDebugLogger",
+            "ASSIGNMENT_DEBUG_LOGGER",
+            "_open_dbg",
+            "_dbg_pairs",
+            "_dbg_variants",
+            "_reject",
+            "_accept",
+            "_pair",
+            "log",
+            "BackendService",
+            "SchedulerService",
+            "build_scheduler_config_from_settings",
+            "build_scheduler_from_settings",
+            "build_scheduler_service",
+            "inhibit_sleep",
+            "allow_sleep",
+            "is_empty",
+        ]
+    )
+)

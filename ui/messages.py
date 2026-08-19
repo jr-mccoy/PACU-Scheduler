@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QFont, QPixmap
@@ -47,10 +47,15 @@ def _standard_icon(icon: QStyle.StandardPixmap, size: int = 64) -> QPixmap | Non
     return pix if not pix.isNull() else None
 
 
-def _message_dialog(parent, title: str, message: str, *,
-                    icon: QStyle.StandardPixmap | None = None,
-                    accent: str | None = None,
-                    text_color: str | None = None) -> ToolDialog:
+def _message_dialog(
+    parent,
+    title: str,
+    message: str,
+    *,
+    icon: QStyle.StandardPixmap | None = None,
+    accent: str | None = None,
+    text_color: str | None = None,
+) -> ToolDialog:
     host = _resolve_dialog_parent(parent)
     dlg = ToolDialog(host, title)
     dlg.setFixedSize(340, 220)
@@ -85,26 +90,41 @@ def _message_dialog(parent, title: str, message: str, *,
 
 
 def show_info(parent, title, message):
-    return _message_dialog(parent, title, message,
-                           icon=QStyle.SP_MessageBoxInformation)
+    return _message_dialog(parent, title, message, icon=QStyle.SP_MessageBoxInformation)
 
 
 def show_warning(parent, title, message):
-    return _message_dialog(parent, title, message,
-                           icon=QStyle.SP_MessageBoxWarning,
-                           accent="#F5A623", text_color="#8A6D3B")
+    return _message_dialog(
+        parent,
+        title,
+        message,
+        icon=QStyle.SP_MessageBoxWarning,
+        accent="#F5A623",
+        text_color="#8A6D3B",
+    )
 
 
 def show_error(parent, title, message):
-    return _message_dialog(parent, title, message,
-                           icon=QStyle.SP_MessageBoxCritical,
-                           accent="#E53935", text_color="#B71C1C")
+    return _message_dialog(
+        parent,
+        title,
+        message,
+        icon=QStyle.SP_MessageBoxCritical,
+        accent="#E53935",
+        text_color="#B71C1C",
+    )
 
 
-def confirm(invoker: QWidget, title: str, message: str,
-            yes_cb: Callable[[], None] | None = None,
-            cancel_cb: Callable[[], None] | None = None,
-            *, yes_text: str = "Yes", cancel_text: str = "Cancel") -> ToolDialog:
+def confirm(
+    invoker: QWidget,
+    title: str,
+    message: str,
+    yes_cb: Callable[[], None] | None = None,
+    cancel_cb: Callable[[], None] | None = None,
+    *,
+    yes_text: str = "Yes",
+    cancel_text: str = "Cancel",
+) -> ToolDialog:
     host = _resolve_dialog_parent(invoker)
     dlg = ToolDialog(host, title)
     dlg.setFixedSize(360, 220)
@@ -141,5 +161,6 @@ def confirm(invoker: QWidget, title: str, message: str,
     dlg.setLayout(layout)
     dlg.open()
     return dlg
+
 
 __all__ = ["show_info", "show_warning", "show_error", "confirm"]

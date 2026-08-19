@@ -33,8 +33,7 @@ from ..widgets.date_pickers import MultiDatePicker
 
 
 class ViewAllUnavailableScreen(QWidget):
-
-    _SPAN_RE = re.compile(r'color:\s*#[0-9A-Fa-f]{6}')
+    _SPAN_RE = re.compile(r"color:\s*#[0-9A-Fa-f]{6}")
 
     # ───────────────────────────  ctor  ────────────────────────────
     def __init__(self, parent):
@@ -51,20 +50,20 @@ class ViewAllUnavailableScreen(QWidget):
         main.setContentsMargins(24, 24, 24, 24)
         main.setSpacing(16)
 
-        self.search = QLineEdit(placeholderText="Search by nurse name…",
-                                font=QFont("Roboto", 17))
+        self.search = QLineEdit(placeholderText="Search by nurse name…", font=QFont("Roboto", 17))
         main.addWidget(self.search)
 
         self.list = QListWidget(
             verticalScrollMode=QAbstractItemView.ScrollPerPixel,
             horizontalScrollBarPolicy=Qt.ScrollBarAlwaysOff,
-            spacing=6, frameShape=QFrame.NoFrame)
+            spacing=6,
+            frameShape=QFrame.NoFrame,
+        )
         main.addWidget(self.list, 1)
 
         QScroller.grabGesture(self.list.viewport(), QScroller.TouchGesture)
 
-        self.edit_btn = QPushButton("Edit Unavailable", minimumHeight=48,
-                                    font=QFont("Roboto", 16))
+        self.edit_btn = QPushButton("Edit Unavailable", minimumHeight=48, font=QFont("Roboto", 16))
         main.addWidget(self.edit_btn)
 
         back = QPushButton("Back", minimumHeight=48)
@@ -86,18 +85,18 @@ class ViewAllUnavailableScreen(QWidget):
     # ─────────────── theme palette helper ────────────────
     @property
     def _colours(self):
-        theme  = self.parent.settings.get("theme")
+        theme = self.parent.settings.get("theme")
         accent = self.parent.settings.get("accent_color")
 
         if theme == "dark":
             bg, edge = "#2D3238", shade_color("#2D3238", 1.15)
-            act_bg, act_edge = accent, shade_color(accent, .80)
+            act_bg, act_edge = accent, shade_color(accent, 0.80)
             month_idle, month_sel = accent, "#FFFFFF"
         elif theme == "light":
             bg, edge = "#FFFFFF", "#E1DDD6"
-            act_bg, act_edge = accent, shade_color(accent, .80)
+            act_bg, act_edge = accent, shade_color(accent, 0.80)
             month_idle, month_sel = accent, "#FFFFFF"
-        else:                           # pink
+        else:  # pink
             bg, edge = "#FFE6E6", "#F4C2C2"
             act_bg, act_edge = "#FFBFD2", "#E88AA5"
             month_idle = month_sel = "#AA5577"
@@ -106,7 +105,7 @@ class ViewAllUnavailableScreen(QWidget):
 
     # ─────────────── card factory ────────────────────────
     def _build_card(self, name: str, iso_dates: list[str]) -> QWidget:
-        bg, edge, *_ , month_idle, _ = self._colours
+        bg, edge, *_, month_idle, _ = self._colours
 
         html = [f"<b>{name}</b>"]
         if iso_dates:
@@ -115,10 +114,12 @@ class ViewAllUnavailableScreen(QWidget):
                 y, m, d = iso.split("-")
                 groups[(int(y), int(m))].append(int(d))
             for (yr, mo), days in sorted(groups.items()):
-                span = (f'<span style="font-weight:600;color:{month_idle};">'
-                        f'{calendar.month_abbr[mo]} {yr}:</span>')
+                span = (
+                    f'<span style="font-weight:600;color:{month_idle};">'
+                    f"{calendar.month_abbr[mo]} {yr}:</span>"
+                )
                 for i in range(0, len(days := sorted(days)), 8):
-                    chunk = ", ".join(map(str, days[i:i+8]))
+                    chunk = ", ".join(map(str, days[i : i + 8]))
                     html.append(f"{span if i == 0 else '&nbsp;&nbsp;'} {chunk}")
         else:
             html.append("(no unavailable dates)")
@@ -129,8 +130,9 @@ class ViewAllUnavailableScreen(QWidget):
 
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 10, 10, 10)
-        lbl = QLabel("<br>".join(html), wordWrap=True,
-                     textFormat=Qt.RichText, font=QFont("Roboto", 17))
+        lbl = QLabel(
+            "<br>".join(html), wordWrap=True, textFormat=Qt.RichText, font=QFont("Roboto", 17)
+        )
         lay.addWidget(lbl)
         return card
 
@@ -179,14 +181,14 @@ class ViewAllUnavailableScreen(QWidget):
 
     # ─────────────── dynamic row-size fixer ─────────────
     def _fix_item_sizes(self):
-        vw = self.list.viewport().width()           # current usable width
+        vw = self.list.viewport().width()  # current usable width
         for i in range(self.list.count()):
-            itm  = self.list.item(i)
+            itm = self.list.item(i)
             card = self.list.itemWidget(itm)
             if not card:
                 continue
-            card.setFixedWidth(vw)                  # enforce exact width
-            card.layout().activate()               # recalc wrapping
+            card.setFixedWidth(vw)  # enforce exact width
+            card.layout().activate()  # recalc wrapping
             card.adjustSize()
             itm.setSizeHint(card.sizeHint())
 
@@ -253,28 +255,34 @@ class ViewAllUnavailableScreen(QWidget):
             return
         name = itm.data(Qt.UserRole)
         try:
-            existing = {d.strftime("%Y-%m-%d")
-                        for d in self.nm.get_unavailable_dates(name)}
+            existing = {d.strftime("%Y-%m-%d") for d in self.nm.get_unavailable_dates(name)}
         except Exception as e:
-            show_warning(self, "Database Error", str(e)); return
+            show_warning(self, "Database Error", str(e))
+            return
 
         accent = self.parent.settings.get("accent_color")
-        theme  = self.parent.settings.get("theme")
+        theme = self.parent.settings.get("theme")
 
         dlg = ToolDialog(self.parent, f"Unavailable: {name}")
-        v   = QVBoxLayout()
+        v = QVBoxLayout()
         picker = MultiDatePicker(existing, accent=accent, theme=theme)
         v.addWidget(picker)
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+
         def _save():
             try:
                 self.nm.update_unavailable_dates(name, picker.selected)
-                dlg.accept(); self._load_all()
+                dlg.accept()
+                self._load_all()
             except Exception as e:
                 show_error(dlg, "Database Error", str(e))
-        btns.accepted.connect(_save); btns.rejected.connect(dlg.reject)
-        v.addWidget(btns); dlg.setLayout(v); dlg.open()
+
+        btns.accepted.connect(_save)
+        btns.rejected.connect(dlg.reject)
+        v.addWidget(btns)
+        dlg.setLayout(v)
+        dlg.open()
 
 
 __all__ = ["ViewAllUnavailableScreen"]

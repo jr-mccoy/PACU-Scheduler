@@ -8,18 +8,11 @@ internals, and that the eager variant→optimizer back-reference is gone.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 import pandas as pd
-import pytest
 
-from scheduler import ScheduleState, ScheduleVariant, SchedulerConfig
+from scheduler import SchedulerConfig, ScheduleState, ScheduleVariant
 from scheduler.generation import (
     CandidateDomainBuilder,
     OrderGenerator,
@@ -56,9 +49,7 @@ def _build_variant(nurses=("Alice", "Bob")) -> ScheduleVariant:
         nurse_weekend_lists={n: [] for n in nurses},
         rotation_repeats=0,
     )
-    availability = pd.DataFrame(
-        True, index=idx, columns=list(nurses)
-    )
+    availability = pd.DataFrame(True, index=idx, columns=list(nurses))
     return ScheduleVariant(
         state=state,
         nurses=list(nurses),
@@ -111,9 +102,7 @@ def _make_fake_context():
     # Read-only views
     idx = pd.date_range("2026-01-05", periods=2, freq="D")
     fake.state = SimpleNamespace(
-        schedule=pd.DataFrame(
-            {"main": [None, None], "backup": [None, None]}, index=idx
-        ),
+        schedule=pd.DataFrame({"main": [None, None], "backup": [None, None]}, index=idx),
         main_assignment_counts=pd.Series([0, 0], index=["Alice", "Bob"]),
         backup_assignment_counts=pd.Series([0, 0], index=["Alice", "Bob"]),
         last_assignment={"Alice": None, "Bob": None},
@@ -149,9 +138,10 @@ def _make_fake_context():
 
     fake.eligible_domain = eligible_domain
     fake.eligible_domain_gap = eligible_domain
-    fake.get_eligible_nurses_for_day = (
-        lambda d, r, diagnostics=None, *, relaxed_spacing=False: ["Alice", "Bob"]
-    )
+    fake.get_eligible_nurses_for_day = lambda d, r, diagnostics=None, *, relaxed_spacing=False: [
+        "Alice",
+        "Bob",
+    ]
     fake.get_eligible_nurses_for_day_gap = fake.get_eligible_nurses_for_day
 
     def inc_assign(d, r, n, *, gap_phase=False):

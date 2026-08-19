@@ -30,9 +30,7 @@ def test_scheduler_package_contains_no_input_calls():
             if stripped.startswith("#") or "``input(" in line:
                 continue
             if pattern.search(line):
-                offenders.append(
-                    f"{path.relative_to(scheduler_root.parent)}:{lineno}: {stripped}"
-                )
+                offenders.append(f"{path.relative_to(scheduler_root.parent)}:{lineno}: {stripped}")
     assert not offenders, (
         "scheduler/** must not call input(); move CLI code to the `cli` package:\n"
         + "\n".join(offenders)
@@ -72,9 +70,9 @@ def test_scheduler_service_advertises_the_attributes_the_gui_relies_on():
         "violation_history_service",
         "sync_assignment_history_with_weekend",
     ):
-        assert hasattr(SchedulerService, attr) or attr in SchedulerService.__init__.__code__.co_names, (
-            f"SchedulerService missing {attr}"
-        )
+        assert (
+            hasattr(SchedulerService, attr) or attr in SchedulerService.__init__.__code__.co_names
+        ), f"SchedulerService missing {attr}"
     assert callable(SchedulerService.sync_assignment_history_with_weekend)
     assert callable(build_scheduler_service)
     # Protocol membership is structural — the protocol must list the same

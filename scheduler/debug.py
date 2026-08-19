@@ -10,7 +10,7 @@ import os
 import pathlib
 import threading
 from contextlib import suppress
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import runtime as _runtime
 
@@ -21,9 +21,12 @@ _reject = _runtime._reject
 _accept = _runtime._accept
 _pair = _runtime._pair
 
-_DEBUG = bool(int(os.getenv("DEBUG_SCHED", "1")))
+# Opt-in: when enabled this writes an assignment_debug_*.jsonl/.csv pair into
+# the working directory for every run, which is a diagnostic aid rather than
+# something an ordinary run should leave behind.
+_DEBUG = bool(int(os.getenv("DEBUG_SCHED", "0")))
 _LOCK = threading.Lock()
-_LOG_FILE_CACHE: Dict[str, str] = {}
+_LOG_FILE_CACHE: dict[str, str] = {}
 
 
 class AssignmentDebugLogger:
@@ -50,11 +53,11 @@ class AssignmentDebugLogger:
 
     def __init__(self, enabled: bool, *, directory: pathlib.Path | None = None) -> None:
         self.enabled = bool(enabled)
-        self._json_handle: Optional[Any] = None
-        self._csv_handle: Optional[Any] = None
-        self._csv_writer: Optional[csv.DictWriter] = None
-        self.json_path: Optional[pathlib.Path] = None
-        self.csv_path: Optional[pathlib.Path] = None
+        self._json_handle: Any | None = None
+        self._csv_handle: Any | None = None
+        self._csv_writer: csv.DictWriter | None = None
+        self.json_path: pathlib.Path | None = None
+        self.csv_path: pathlib.Path | None = None
 
         if not self.enabled:
             return
@@ -82,6 +85,30 @@ class AssignmentDebugLogger:
             self._csv_writer.writeheader()
 
         atexit.register(self.close)
+
+    def __getstate__(self) -> dict:
+        """Drop the open file handles so the logger survives pickling.
+
+        ``ScheduleVariant`` holds a reference to this logger, and variants are
+        pickled to worker processes during parallel evaluation. File objects
+        cannot be pickled, so without this the whole variant fails to send and
+        every worker dies with ``cannot pickle '_io.TextIOWrapper' object``.
+
+        Handles are dropped rather than reopened because a worker must not
+        write through them anyway: concurrent writes to a shared handle
+        interleave, and on Windows the second process cannot open the file at
+        all. An unpickled logger therefore arrives disabled, and the parent
+        keeps writing the assignment diagnostics it collected itself.
+        """
+        state = self.__dict__.copy()
+        state["enabled"] = False
+        state["_json_handle"] = None
+        state["_csv_handle"] = None
+        state["_csv_writer"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
 
     def close(self) -> None:
         """Close both debug files."""
@@ -116,7 +143,11 @@ class AssignmentDebugLogger:
         record.setdefault("timestamp", datetime.datetime.now().isoformat())
 
         with _LOCK:
-            assert self._json_handle is not None and self._csv_writer is not None and self._csv_handle is not None
+            assert (
+                self._json_handle is not None
+                and self._csv_writer is not None
+                and self._csv_handle is not None
+            )
             self._json_handle.write(json.dumps(record, default=str) + "\n")
 
             row = {field: self._stringify(record.get(field)) for field in self.CSV_FIELDS}
@@ -133,13 +164,15 @@ def log(kind: str, payload: dict):
     """Write one JSON line to <kind>_dump_<timestamp>.log."""
     if not _DEBUG:
         return
-    line  = json.dumps(payload, default=str)
+    line = json.dumps(payload, default=str)
     with _LOCK:
         fname = _LOG_FILE_CACHE.setdefault(kind, f"{kind}_dump_{_ts()}.log")
         with open(fname, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
+
 ASSIGNMENT_DEBUG_LOGGER = AssignmentDebugLogger(enabled=_DEBUG)
+
 
 def configure_pair_variant_debug(mode: str) -> None:
     """Reconfigure pair/variant debug streams without stale aliases."""
@@ -156,6 +189,7 @@ def configure_pair_variant_debug(mode: str) -> None:
     if normalized in {"variants", "all"}:
         _runtime._DBG_FILE_VARIANTS = _runtime._open_dbg("debug_variants.txt")
 
+
 def configure_assignment_debug_logger(enabled: bool) -> None:
     """Reconfigure the shared logger while preserving imported references."""
     global _DEBUG
@@ -164,6 +198,7 @@ def configure_assignment_debug_logger(enabled: bool) -> None:
     ASSIGNMENT_DEBUG_LOGGER.close()
     ASSIGNMENT_DEBUG_LOGGER.__dict__.clear()
     ASSIGNMENT_DEBUG_LOGGER.__dict__.update(replacement.__dict__)
+
 
 __all__ = [
     "AssignmentDebugLogger",

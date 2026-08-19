@@ -9,13 +9,6 @@ duplicate ``idx`` entries and ``_score_and_rank_variants`` crashes on
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from concurrent.futures.process import BrokenProcessPool
 
 import pandas as pd
@@ -69,8 +62,10 @@ def _build_scheduler() -> NurseScheduler:
     )
 
 
-def _fake_worker(pair):
-    idx, _var = pair
+def _fake_worker(work_item):
+    # Work items are (idx, variant, tuning); the tuning is what lets a caller's
+    # search budgets reach worker processes started with "spawn".
+    idx, _var, _tuning = work_item
     stats = {"rotation_rep": 0, "gaps": 0, "balance_main": 0, "balance_backup": 0}
     nurse_counts = {"Alice": {"total": 0}, "Bob": {"total": 0}}
     s_idx = pd.date_range("2026-01-05", periods=4, freq="D")  # Mon-Thu, no Fri
@@ -136,8 +131,8 @@ def test_profiled_serial_fallback_dedups(monkeypatch):
     scheduler = _build_scheduler()
     variants = ["v0", "v1", "v2", "v3"]
 
-    def fake_worker_profiled(pair):
-        idx, stats, nurse_counts, sched_df = _fake_worker(pair)
+    def fake_worker_profiled(work_item):
+        idx, stats, nurse_counts, sched_df = _fake_worker(work_item)
         return (idx, stats, nurse_counts, sched_df, None)  # metrics = None
 
     monkeypatch.setattr(engine, "_evaluate_variant_worker_profiled", fake_worker_profiled)

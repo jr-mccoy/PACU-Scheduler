@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
+
 
 if TYPE_CHECKING:
     from ..generation.context import VariantSearchContext
@@ -15,12 +19,12 @@ class WindowRefillOptimizer:
     underscored methods on the variant cannot silently break the optimizer.
     """
 
-    def __init__(self, context: "VariantSearchContext"):
+    def __init__(self, context: VariantSearchContext):
         self.context = context
 
     # Backwards-compatible alias: existing callers used ``optimizer.variant``.
     @property
-    def variant(self) -> "VariantSearchContext":  # pragma: no cover - shim
+    def variant(self) -> VariantSearchContext:  # pragma: no cover - shim
         return self.context
 
     def _finalize_tracker(self, tracker, initial_quality, improved: bool, label: str) -> bool:
@@ -28,7 +32,13 @@ class WindowRefillOptimizer:
         final_quality = tracker.get_global_best_quality()
         if final_quality and initial_quality:
             improved = final_quality.is_better_than(initial_quality) or improved
-        print(f"[{label}] Final: {initial_quality} -> {final_quality} (improved={bool(improved)})")
+        logger.info(
+            "[%s] Final: %s -> %s (improved=%s)",
+            label,
+            initial_quality,
+            final_quality,
+            bool(improved),
+        )
         return bool(improved)
 
     def backtrack_window(
@@ -193,7 +203,9 @@ class WindowRefillOptimizer:
                 new_tuple = ctx.spread_components()
                 sub2 = ctx.state.schedule.loc[days, ["main", "backup"]]
                 mapper2 = getattr(sub2, "map", None)
-                new_mask = mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
+                new_mask = (
+                    mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
+                )
                 new_gaps = int(new_mask.to_numpy().sum())
 
                 if (ctx.lexi_better(new_tuple, base_tuple)) and (new_gaps <= base_gaps):
@@ -219,7 +231,9 @@ class WindowRefillOptimizer:
             if comparison == ctx.Comparison.WORSE and not schedule_changed:
                 break
 
-        return self._finalize_tracker(tracker, initial_quality, improved or target_hit, "WindowRefill")
+        return self._finalize_tracker(
+            tracker, initial_quality, improved or target_hit, "WindowRefill"
+        )
 
     def iterative_full_period_refill(
         self,

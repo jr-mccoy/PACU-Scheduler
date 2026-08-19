@@ -8,16 +8,8 @@ out the variant and verify both paths drive the same algorithm.
 
 from __future__ import annotations
 
-import sys
-from contextlib import contextmanager
-from pathlib import Path
-
 import pandas as pd
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import scheduler.legacy_core as legacy_core
 from scheduler import (
@@ -170,7 +162,9 @@ def test_both_workers_drive_the_same_algorithm_phases(stubbed_worker_env):
     assert profiled_variant.calls == expected
 
 
-def test_unprofiled_worker_records_timings_when_measure_phase_times(stubbed_worker_env, monkeypatch):
+def test_unprofiled_worker_records_timings_when_measure_phase_times(
+    stubbed_worker_env, monkeypatch
+):
     monkeypatch.setattr(legacy_core, "MEASURE_PHASE_TIMES", True)
     _idx, stats, _counts, _sched = _evaluate_variant_worker((0, _StubVariant()))
     for key in ("t_clone", "t_assign", "t_gapfill", "t_rebalance", "t_lns_2w", "t_total"):
@@ -179,8 +173,6 @@ def test_unprofiled_worker_records_timings_when_measure_phase_times(stubbed_work
 
 def test_profiled_worker_records_timings_when_measure_phase_times(stubbed_worker_env, monkeypatch):
     monkeypatch.setattr(legacy_core, "MEASURE_PHASE_TIMES", True)
-    _idx, stats, _counts, _sched, _metrics = _evaluate_variant_worker_profiled(
-        (0, _StubVariant())
-    )
+    _idx, stats, _counts, _sched, _metrics = _evaluate_variant_worker_profiled((0, _StubVariant()))
     for key in ("t_clone", "t_assign", "t_gapfill", "t_rebalance", "t_lns_2w", "t_total"):
         assert key in stats, f"missing {key} in profiled stats: {stats}"

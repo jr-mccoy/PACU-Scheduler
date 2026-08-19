@@ -5,6 +5,8 @@ through the deprecated ``legacy_core`` compatibility facade.
 """
 
 from .debug import (
+    _DEBUG,
+    _LOG_FILE_CACHE,
     ASSIGNMENT_DEBUG_LOGGER,
     AssignmentDebugLogger,
     _accept,
@@ -17,7 +19,6 @@ from .debug import (
     configure_pair_variant_debug,
     log,
 )
-from .debug import _DEBUG, _LOG_FILE_CACHE
 from .domain import (
     BestStateTracker,
     Comparison,
@@ -25,9 +26,9 @@ from .domain import (
     PreSchedulerProtocol,
     Role,
     ScheduleQuality,
+    SchedulerConfig,
     ScheduleState,
     ScheduleVariant,
-    SchedulerConfig,
     StateSnapshot,
     WeekBackup,
     WeekendAssignment,
@@ -59,10 +60,10 @@ from .profiling import (
 )
 from .repositories import (
     AssignmentHistory,
-    DBColumns,
-    DBTables,
     DatabaseMixin,
     DateUtils,
+    DBColumns,
+    DBTables,
     NurseManager,
     PreScheduler,
     WeekendHistory,
@@ -70,7 +71,6 @@ from .repositories import (
 )
 from .runtime import is_empty
 from .settings import SharedSettings
-
 
 __all__ = [
     "AssignmentDebugLogger",

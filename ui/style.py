@@ -10,12 +10,12 @@ from .theme import shade_color
 
 class UiStyle:
     # ─────────── fonts ───────────
-    _BASE_SIZE  = 12
-    FONT        = QFont("Roboto", _BASE_SIZE)
-    TITLE_FONT  = QFont("Roboto", _BASE_SIZE + 8, QFont.Bold)
-    FONT_H1     = TITLE_FONT
-    FONT_H2     = QFont("Roboto", _BASE_SIZE + 4, QFont.Medium)
-    FONT_BODY   = QFont("Roboto", _BASE_SIZE + 2)
+    _BASE_SIZE = 12
+    FONT = QFont("Roboto", _BASE_SIZE)
+    TITLE_FONT = QFont("Roboto", _BASE_SIZE + 8, QFont.Bold)
+    FONT_H1 = TITLE_FONT
+    FONT_H2 = QFont("Roboto", _BASE_SIZE + 4, QFont.Medium)
+    FONT_BODY = QFont("Roboto", _BASE_SIZE + 2)
 
     # ────────── colour helpers ──────────
     @staticmethod
@@ -46,53 +46,53 @@ class UiStyle:
 
     # ───────────── ENHANCED DARK THEME (Blue-Gray Sophisticated) ─────────────
     _CORE_DARK_QSS = r"""
-        QWidget {{ 
-            background:#1A1D23; 
-            color:#E8EAF0; 
-            font-family:Roboto; 
+        QWidget {{
+            background:#1A1D23;
+            color:#E8EAF0;
+            font-family:Roboto;
         }}
         QPushButton {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #3A404B, stop:1 #2D3238);
-            color:#E8EAF0; 
-            border:1px solid #4A5568; 
-            border-radius:6px; 
+            color:#E8EAF0;
+            border:1px solid #4A5568;
+            border-radius:6px;
             padding:8px 16px;
             font-weight:500;
         }}
         QPushButton:hover {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #4A5568, stop:1 #3A404B);
             border:1px solid #5A6C7D;
         }}
-        QPushButton:pressed {{ 
-            background:{ACCENT}; 
-            color:#FFFFFF; 
+        QPushButton:pressed {{
+            background:{ACCENT};
+            color:#FFFFFF;
             border:1px solid {ACCENT_DARK};
         }}
-        QPushButton[role="special"] {{ 
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
-                stop:0 {ACCENT}, stop:1 {ACCENT_DARK}); 
-            color:#FFFFFF; 
+        QPushButton[role="special"] {{
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
+                stop:0 {ACCENT}, stop:1 {ACCENT_DARK});
+            color:#FFFFFF;
             border:none;
             font-weight:600;
         }}
         QPushButton[role="destructive"] {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #E53935, stop:1 #C62828);
-            color:#FFFFFF; 
+            color:#FFFFFF;
             border:none;
             font-weight:600;
         }}
         QListWidget, QTableWidget {{
-            background:#252A32; 
+            background:#252A32;
             border:1px solid #3A404B;
-            selection-background-color:{ACCENT}; 
+            selection-background-color:{ACCENT};
             selection-color:#FFFFFF;
             alternate-background-color:#2A3038;
         }}
         QHeaderView::section {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #3A404B, stop:1 #2D3238);
             color:#E8EAF0;
             border:1px solid #4A5568;
@@ -100,14 +100,14 @@ class UiStyle:
             font-weight:400;
         }}
         QLineEdit, QTextEdit, QComboBox {{
-            background:#2D3238; 
-            border:1px solid #3A404B; 
-            border-radius:4px; 
+            background:#2D3238;
+            border:1px solid #3A404B;
+            border-radius:4px;
             padding:3px 4px;
             color:#E8EAF0;
         }}
-        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ 
-            border:1px solid {ACCENT}; 
+        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{
+            border:1px solid {ACCENT};
             background:#323842;
         }}
         QTabWidget::pane {{
@@ -144,53 +144,53 @@ class UiStyle:
 
     # ───────────── ENHANCED LIGHT THEME (Warm Cream Sophisticated) ─────────────
     _CORE_LIGHT_QSS = r"""
-        QWidget {{ 
-            background:#F8F6F3; 
-            color:#2C2A27; 
-            font-family:Roboto; 
+        QWidget {{
+            background:#F8F6F3;
+            color:#2C2A27;
+            font-family:Roboto;
         }}
         QPushButton {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #FFFFFF, stop:1 #F5F3F0);
-            color:#2C2A27; 
-            border:1px solid #D4CFC7; 
-            border-radius:6px; 
+            color:#2C2A27;
+            border:1px solid #D4CFC7;
+            border-radius:6px;
             padding:8px 16px;
             font-weight:500;
         }}
         QPushButton:hover {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #FEFEFE, stop:1 #F0EDE8);
             border:1px solid #C9C3BA;
         }}
-        QPushButton:pressed {{ 
-            background:{ACCENT}; 
-            color:#FFFFFF; 
+        QPushButton:pressed {{
+            background:{ACCENT};
+            color:#FFFFFF;
             border:1px solid {ACCENT_DARK};
         }}
-        QPushButton[role="special"] {{ 
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
-                stop:0 {ACCENT}, stop:1 {ACCENT_DARK}); 
-            color:#FFFFFF; 
+        QPushButton[role="special"] {{
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
+                stop:0 {ACCENT}, stop:1 {ACCENT_DARK});
+            color:#FFFFFF;
             border:none;
             font-weight:600;
         }}
-        QPushButton[role="destructive"] {{ 
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
-                stop:0 #E53935, stop:1 #C62828); 
-            color:#FFFFFF; 
+        QPushButton[role="destructive"] {{
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
+                stop:0 #E53935, stop:1 #C62828);
+            color:#FFFFFF;
             border:none;
             font-weight:600;
         }}
         QListWidget, QTableWidget {{
-            background:#FFFFFF; 
+            background:#FFFFFF;
             border:1px solid #E1DDD6;
-            selection-background-color:{ACCENT}; 
+            selection-background-color:{ACCENT};
             selection-color:#FFFFFF;
             alternate-background-color:#FDFCFA;
         }}
         QHeaderView::section {{
-            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, 
+            background:qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1,
                 stop:0 #F5F3F0, stop:1 #E8E4DE);
             color:#2C2A27;
             border:1px solid #D4CFC7;
@@ -198,14 +198,14 @@ class UiStyle:
             font-weight:400;
         }}
         QLineEdit, QTextEdit, QComboBox {{
-            background:#FFFFFF; 
-            border:1px solid #E1DDD6; 
-            border-radius:3px; 
+            background:#FFFFFF;
+            border:1px solid #E1DDD6;
+            border-radius:3px;
             padding:3px 4px;
             color:#2C2A27;
         }}
-        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ 
-            border:2px solid {ACCENT}; 
+        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{
+            border:2px solid {ACCENT};
             background:#FEFEFE;
         }}
         QTabWidget::pane {{
@@ -264,8 +264,8 @@ class UiStyle:
     @staticmethod
     def apply(app: QApplication, theme="dark", accent_color="#5C8DBC") -> None:
         """Apply palette + QSS to *app* (now supports enhanced dark/light themes)."""
-        accent       = accent_color
-        accent_dark  = shade_color(accent, 0.85)
+        accent = accent_color
+        accent_dark = shade_color(accent, 0.85)
         accent_drkst = shade_color(accent, 0.7)
 
         pal = QPalette()
@@ -288,12 +288,14 @@ class UiStyle:
             pal.setColor(QPalette.Text, QColor("#4A4A4A"))
             pal.setColor(QPalette.Button, QColor("#F9D1D9"))
             pal.setColor(QPalette.ButtonText, QColor("#4A4A4A"))
-            pal.setColor(QPalette.Highlight, QColor("#FF85A1"))   # rose
+            pal.setColor(QPalette.Highlight, QColor("#FF85A1"))  # rose
             pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
             # use rose family for accent overrides
-            accent = "#FF85A1"; accent_dark = shade_color(accent, 0.85); accent_drkst = shade_color(accent, 0.7)
+            accent = "#FF85A1"
+            accent_dark = shade_color(accent, 0.85)
+            accent_drkst = shade_color(accent, 0.7)
             qss_core = UiStyle._CORE_PINK_QSS
-        else:   # dark (enhanced blue-gray theme)
+        else:  # dark (enhanced blue-gray theme)
             pal.setColor(QPalette.Window, QColor("#1A1D23"))
             pal.setColor(QPalette.WindowText, QColor("#E8EAF0"))
             pal.setColor(QPalette.Base, QColor("#252A32"))
@@ -307,10 +309,9 @@ class UiStyle:
         app.setPalette(pal)
         app.setStyleSheet(
             (qss_core + UiStyle._SCROLLBAR_QSS + UiStyle._INPUT_QSS).format(
-                ACCENT=accent,
-                ACCENT_DARK=accent_dark,
-                ACCENT_DARKEST=accent_drkst
+                ACCENT=accent, ACCENT_DARK=accent_dark, ACCENT_DARKEST=accent_drkst
             )
         )
+
 
 __all__ = ["UiStyle"]

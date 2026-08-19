@@ -12,6 +12,7 @@ from .services import (
     export_top_variants_pdfs,
     export_variants_calendar_html,
 )
+from .style import UiStyle
 from .theme import (
     CAL_BORDER,
     _apply_header,
@@ -20,7 +21,6 @@ from .theme import (
     themed_file,
     themed_icon,
 )
-from .style import UiStyle
 from .workers import RebuildViolationWorker, ScheduleProgressWorker
 
 __all__ = [

@@ -9,12 +9,15 @@ tested without constructing a full scheduler.
 from __future__ import annotations
 
 import calendar
-from typing import Mapping
+import logging
+from collections.abc import Mapping
 
 import pandas as pd
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas as _pdf_canvas
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_PDF_FONT_SIZES: Mapping[str, int] = {
@@ -96,8 +99,8 @@ def draw_week_rows(
 
 def export_variant_pdf(
     pdf_path: str,
-    sched_df: "pd.DataFrame",
-    cal: "calendar.Calendar",
+    sched_df: pd.DataFrame,
+    cal: calendar.Calendar,
     font_sizes: Mapping[str, int] = DEFAULT_PDF_FONT_SIZES,
 ) -> None:
     """Create a landscape-letter PDF containing every month in ``sched_df``."""
@@ -143,4 +146,4 @@ def export_variant_pdf(
         year = year + 1 if month == 1 else year
 
     c.save()
-    print(f"[analysis] wrote PDF {pdf_path}")
+    logger.info("Wrote PDF %s", pdf_path)

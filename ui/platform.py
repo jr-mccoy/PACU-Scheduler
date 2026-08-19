@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -26,11 +26,11 @@ def is_android_platform() -> bool:
         or "ANDROID_STORAGE" in os.environ
         or "ANDROID_ARGUMENT" in os.environ
         or platform_plugin == "android"
-        or hasattr(sys, "getandroidapilevel")               # p4a convenience
+        or hasattr(sys, "getandroidapilevel")  # p4a convenience
     )
 
 
-def _coerce_env_flag(value: Optional[str]) -> Optional[bool]:
+def _coerce_env_flag(value: str | None) -> bool | None:
     """Map common truthy/falsey strings to bool; return None when unknown."""
     if value is None:
         return None
@@ -89,9 +89,7 @@ def apply_backend_debug_preferences(settings: Any) -> None:
     """
 
     try:
-        debug_mode = _normalize_debug_mode(
-            _get_setting(settings, "debug_variant_logging", "off")
-        )
+        debug_mode = _normalize_debug_mode(_get_setting(settings, "debug_variant_logging", "off"))
         assignment_enabled = _normalize_bool(
             _get_setting(settings, "assignment_debug_enabled", True),
             default=True,
@@ -128,7 +126,7 @@ def tune_dialog(root_layout: QLayout, spacing: int = 12) -> None:
         # skip the invisible layout that lives inside a button-box
         if isinstance(lay.parentWidget(), QDialogButtonBox):
             continue
-        if isinstance(lay, (type(root_layout),)):       # quick self-check
+        if isinstance(lay, (type(root_layout),)):  # quick self-check
             lay.setSpacing(spacing)
         elif lay.__class__.__name__ in ("QVBoxLayout", "QHBoxLayout", "QFormLayout"):
             lay.setSpacing(spacing)
@@ -162,7 +160,9 @@ def _open_external(path: str) -> bool:
     # Fallback for Android: try an intent
     try:
         if is_android_platform():
-            import subprocess, mimetypes, shlex
+            import mimetypes
+            import subprocess
+
             mt, _ = mimetypes.guess_type(path)
             if not mt:
                 # crude guess by extension
@@ -180,24 +180,29 @@ def adjust_dialog_for_android(dialog):
     Helper function to adjust any dialog's size for Android screens.
     Call this after creating a dialog but before showing it.
     """
-    if sys.platform == 'android' or 'ANDROID_ROOT' in os.environ:
+    if sys.platform == "android" or "ANDROID_ROOT" in os.environ:
         screen = QApplication.primaryScreen()
         if screen:
             screen_size = screen.size()
-            
+
             # Calculate appropriate size for high-DPI display
             max_width = int(screen_size.width() * 0.92)
             max_height = int(screen_size.height() * 0.85)
-            
+
             # Get current size hint or current size
-            current_width = dialog.sizeHint().width() if dialog.sizeHint().isValid() else dialog.width()
-            current_height = dialog.sizeHint().height() if dialog.sizeHint().isValid() else dialog.height()
-            
+            current_width = (
+                dialog.sizeHint().width() if dialog.sizeHint().isValid() else dialog.width()
+            )
+            current_height = (
+                dialog.sizeHint().height() if dialog.sizeHint().isValid() else dialog.height()
+            )
+
             # Constrain to screen limits
             new_width = min(current_width, max_width)
             new_height = min(current_height, max_height)
-            
+
             dialog.resize(new_width, new_height)
+
 
 __all__ = [
     "is_android_platform",

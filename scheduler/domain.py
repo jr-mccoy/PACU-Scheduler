@@ -4,27 +4,22 @@ from __future__ import annotations
 
 import bisect
 import datetime
+import logging
 import os
 import time
-from copy import deepcopy
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from functools import cached_property
-from itertools import permutations
+from itertools import islice, permutations
+from math import factorial
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
     NamedTuple,
-    Optional,
-        Protocol,
-        TYPE_CHECKING,
-    Tuple,
-    Union,
-    )
+    Protocol,
+)
 
 import pandas as pd
 
@@ -50,6 +45,8 @@ from .scoring import (
 if TYPE_CHECKING:
     from .engine import NurseScheduler
 
+logger = logging.getLogger(__name__)
+
 DAYS_IN_WEEKEND = 3
 FRIDAY_WEEKDAY = 4
 MONDAY_WEEKDAY = 0
@@ -66,13 +63,14 @@ GAP_REPORT_FILE = "weekday_gap_report.txt"
 
 class WeekendPattern(str, Enum):
     """Weekend shift patterns."""
+
     FSF = "FSF"  # First-Second-First (Main on Friday, Backup on Saturday, Main on Sunday)
     SFS = "SFS"  # Second-First-Second (Backup on Friday, Main on Saturday, Backup on Sunday)
 
 
 class WeekendAssignment:
     """Represents a weekend assignment with specific patterns."""
-    
+
     def __init__(self, date_obj, nurse_fsf: str, nurse_sfs: str):
         # Convert to pandas Timestamp and normalize to remove time component
         if not isinstance(date_obj, pd.Timestamp):
@@ -85,101 +83,114 @@ class WeekendAssignment:
     def to_dict(self) -> dict:
         """Convert assignment to dictionary representation."""
         return {
-            "date": self.start_date.strftime('%Y-%m-%d'),  # Format as YYYY-MM-DD
+            "date": self.start_date.strftime("%Y-%m-%d"),  # Format as YYYY-MM-DD
             "nurse_fsf": self.nurse_fsf,
-            "nurse_sfs": self.nurse_sfs
+            "nurse_sfs": self.nurse_sfs,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'WeekendAssignment':
+    def from_dict(cls, data: dict) -> WeekendAssignment:
         """Create WeekendAssignment from dictionary representation."""
-        return cls(
-            pd.Timestamp(data["date"]),
-            data["nurse_fsf"],
-            data["nurse_sfs"]
-        )
+        return cls(pd.Timestamp(data["date"]), data["nurse_fsf"], data["nurse_sfs"])
 
 
 class Role(str, Enum):
     """Nurse assignment roles."""
+
     MAIN = "main"
     BACKUP = "backup"
 
 
 class NurseManagerProtocol(Protocol):
     """Protocol defining the nurse manager interface."""
+
     db_name: str
-    nurses: Dict[str, Dict[str, Any]]
-    
+    nurses: dict[str, dict[str, Any]]
+
     def is_prn_nurse(self, nurse: str) -> bool: ...
     def is_late_shift_nurse(self, nurse: str) -> bool: ...
 
 
 class WeekendHistoryProtocol(Protocol):
     """Protocol defining the weekend history interface."""
-    def get_last_pattern(self, nurse: str) -> Optional[str]: ...
-    def get_weekends(self, nurse: str) -> List[pd.Timestamp]: ...
+
+    def get_last_pattern(self, nurse: str) -> str | None: ...
+    def get_weekends(self, nurse: str) -> list[pd.Timestamp]: ...
 
 
 class PreSchedulerProtocol(Protocol):
     def get_assignments_in_range(
-        self, start_date: Union[str, datetime.date, pd.Timestamp],
-        end_date:   Union[str, datetime.date, pd.Timestamp]
-    ) -> Dict[pd.Timestamp, Dict[str, Optional[str]]]: ...
+        self,
+        start_date: str | datetime.date | pd.Timestamp,
+        end_date: str | datetime.date | pd.Timestamp,
+    ) -> dict[pd.Timestamp, dict[str, str | None]]: ...
 
 
 class SchedulerConfig:
-    def __init__(self,
-                 weekend_gap_days: int = 14,
-                 main_score_factor: int = 10,
-                 backup_score_factor: int = 10,
-                 availability_penalty: int = 10,
-                 min_days_between_assignments: int = 2,
-                 allow_post_weekend_wednesday_main: bool = False,
-                 allow_post_weekend_wednesday_backup: bool = True,
-                 allow_post_weekend_thursday_main: bool = True,
-                 allow_post_weekend_thursday_backup: bool = True,
-                 *,
-                 scoring_weights: dict[str, float] | None = None,
-                 # NEW:
-                 allow_one_day_weekday_gap: bool = False,
-                 max_plateau_depth: int = 10,
-                 max_weekend_variants: int | None = 500,
-                 **extra):
- 
+    def __init__(
+        self,
+        weekend_gap_days: int = 14,
+        main_score_factor: int = 10,
+        backup_score_factor: int = 10,
+        availability_penalty: int = 10,
+        min_days_between_assignments: int = 2,
+        allow_post_weekend_wednesday_main: bool = False,
+        allow_post_weekend_wednesday_backup: bool = True,
+        allow_post_weekend_thursday_main: bool = True,
+        allow_post_weekend_thursday_backup: bool = True,
+        *,
+        scoring_weights: dict[str, float] | None = None,
+        # NEW:
+        allow_one_day_weekday_gap: bool = False,
+        max_plateau_depth: int = 10,
+        max_weekend_variants: int | None = 500,
+        max_week_permutations: int | None = 200,
+        **extra,
+    ):
+
         if allow_one_day_weekday_gap is None:
             allow_one_day_weekday_gap = False
         else:
             allow_one_day_weekday_gap = bool(allow_one_day_weekday_gap)
 
-        self.allow_one_day_weekday_gap               = allow_one_day_weekday_gap
+        self.allow_one_day_weekday_gap = allow_one_day_weekday_gap
         # Neutral-move (plateau) allowance for local search; tune to trade
         # exploration depth against compute (best-so-far is always retained).
-        self.max_plateau_depth                         = max(0, int(max_plateau_depth))
+        self.max_plateau_depth = max(0, int(max_plateau_depth))
         # Beam cap on weekend variant branching: variants grow roughly as
         # (valid pairs)^(weekends), and every survivor runs the full heavy
         # evaluation pipeline. 0 means unlimited.
         if max_weekend_variants is None:
             max_weekend_variants = 500
-        self.max_weekend_variants                      = max(0, int(max_weekend_variants))
-        self.weekend_gap_days                          = weekend_gap_days
-        self.main_score_factor                         = main_score_factor
-        self.backup_score_factor                       = backup_score_factor
-        self.availability_penalty                      = availability_penalty
-        self.min_days_between_assignments              = min_days_between_assignments
-        self.allow_post_weekend_wednesday_main         = allow_post_weekend_wednesday_main
-        self.allow_post_weekend_wednesday_backup       = allow_post_weekend_wednesday_backup
-        self.allow_post_weekend_thursday_main          = allow_post_weekend_thursday_main
-        self.allow_post_weekend_thursday_backup        = allow_post_weekend_thursday_backup
+        self.max_weekend_variants = max(0, int(max_weekend_variants))
+        # Cap on the slot orderings tried when rebalancing one week. The
+        # rebalance pass permutes a week's modifiable (date, role) slots and
+        # keeps the first ordering that improves the spread; a full week has
+        # ten such slots, so an exhaustive search is 10! = 3,628,800 orderings
+        # and only terminates early when an improvement happens to exist.
+        # Weeks that cannot be improved would otherwise run for hours. 0 means
+        # unlimited (the original exhaustive behaviour).
+        if max_week_permutations is None:
+            max_week_permutations = 200
+        self.max_week_permutations = max(0, int(max_week_permutations))
+        self.weekend_gap_days = weekend_gap_days
+        self.main_score_factor = main_score_factor
+        self.backup_score_factor = backup_score_factor
+        self.availability_penalty = availability_penalty
+        self.min_days_between_assignments = min_days_between_assignments
+        self.allow_post_weekend_wednesday_main = allow_post_weekend_wednesday_main
+        self.allow_post_weekend_wednesday_backup = allow_post_weekend_wednesday_backup
+        self.allow_post_weekend_thursday_main = allow_post_weekend_thursday_main
+        self.allow_post_weekend_thursday_backup = allow_post_weekend_thursday_backup
 
         # ── per-metric weights for the composite schedule score ───
         default_weights = {
-            "rotation_rep" : 0.30,   # pattern repeat count
-            "gaps"         : 0.20,   # weekday gap-fill penalty
-            "rot_viol"     : 0.15,   # historic rotation violations
-            "weekend_gap"  : 0.15,   # fairness of “time-since-last-wknd”
-            "balance"      : 0.10,   # main/backup daily balance
-            "long_term"    : 0.10,   # 30-day over/under utilisation
+            "rotation_rep": 0.30,  # pattern repeat count
+            "gaps": 0.20,  # weekday gap-fill penalty
+            "rot_viol": 0.15,  # historic rotation violations
+            "weekend_gap": 0.15,  # fairness of “time-since-last-wknd”
+            "balance": 0.10,  # main/backup daily balance
+            "long_term": 0.10,  # 30-day over/under utilisation
         }
 
         if scoring_weights is None:
@@ -188,7 +199,7 @@ class SchedulerConfig:
             merged = default_weights.copy()
             for k, v in scoring_weights.items():
                 if k in merged:
-                    merged[k] = max(0.0, float(v))         # clip negatives
+                    merged[k] = max(0.0, float(v))  # clip negatives
             self.scoring_weights = merged
 
         # normalise so Σw == 1 (absolute scale irrelevant)
@@ -206,10 +217,11 @@ class WeekBackup(NamedTuple):
     Immutable snapshot of the four objects a week-permutation may have
     to roll back to.
     """
-    rows:            pd.DataFrame      # schedule slice - columns ["main","backup"]
-    main_counts:     pd.Series         # copy of main_assignment_counts
-    backup_counts:   pd.Series         # copy of backup_assignment_counts
-    last_assignment: dict              # deepcopy of last_assignment
+
+    rows: pd.DataFrame  # schedule slice - columns ["main","backup"]
+    main_counts: pd.Series  # copy of main_assignment_counts
+    backup_counts: pd.Series  # copy of backup_assignment_counts
+    last_assignment: dict  # deepcopy of last_assignment
 
 
 class Comparison(Enum):
@@ -236,9 +248,9 @@ class ScheduleQuality:
     @classmethod
     def from_variant(
         cls,
-        variant: "ScheduleVariant",
-        scheduler: Optional["NurseScheduler"] = None,
-    ) -> "ScheduleQuality":
+        variant: ScheduleVariant,
+        scheduler: NurseScheduler | None = None,
+    ) -> ScheduleQuality:
         """Calculate the quality metrics from a schedule variant.
 
         NOTE:
@@ -252,9 +264,7 @@ class ScheduleQuality:
         weekend_penalty = 0.0
         if scheduler and hasattr(scheduler, "_weekend_gap_penalty"):
             try:
-                weekend_penalty = float(
-                    scheduler._weekend_gap_penalty(variant.state.schedule)
-                )
+                weekend_penalty = float(scheduler._weekend_gap_penalty(variant.state.schedule))
             except Exception:  # pragma: no cover - defensive guard
                 weekend_penalty = 0.0
 
@@ -276,9 +286,7 @@ class ScheduleQuality:
                     }
 
                 overage = scheduler._historic_overage()
-                history_penalty = float(
-                    scheduler._long_term_score(nurse_counts, overage)
-                )
+                history_penalty = float(scheduler._long_term_score(nurse_counts, overage))
             except Exception:  # pragma: no cover - defensive guard
                 history_penalty = 0.0
 
@@ -305,7 +313,7 @@ class ScheduleQuality:
             weighted_score=metrics.weighted_score,
         )
 
-    def compare_to(self, other: "ScheduleQuality", *, float_tol: float = 1e-6) -> Comparison:
+    def compare_to(self, other: ScheduleQuality, *, float_tol: float = 1e-6) -> Comparison:
         """Lexicographic comparison with tolerance for float metrics.
 
         This order is the tracker acceptance policy (earlier keys dominate):
@@ -339,10 +347,10 @@ class ScheduleQuality:
             return Comparison.WORSE
         return Comparison.EQUAL
 
-    def is_better_than(self, other: "ScheduleQuality") -> bool:
+    def is_better_than(self, other: ScheduleQuality) -> bool:
         return self.compare_to(other) == Comparison.BETTER
 
-    def is_at_least_as_good(self, other: "ScheduleQuality") -> bool:
+    def is_at_least_as_good(self, other: ScheduleQuality) -> bool:
         return self.compare_to(other) in (Comparison.BETTER, Comparison.EQUAL)
 
     def __str__(self) -> str:  # pragma: no cover - debugging helper
@@ -380,9 +388,9 @@ class StateSnapshot:
     @classmethod
     def capture(
         cls,
-        variant: "ScheduleVariant",
+        variant: ScheduleVariant,
         quality: ScheduleQuality,
-    ) -> "StateSnapshot":
+    ) -> StateSnapshot:
         sched = variant.state.schedule
         idx = sched.index.copy()
 
@@ -400,7 +408,7 @@ class StateSnapshot:
             index_hash=hash(tuple(idx)),
         )
 
-    def restore_to(self, variant: "ScheduleVariant") -> None:
+    def restore_to(self, variant: ScheduleVariant) -> None:
         current_idx = variant.state.schedule.index
         current_hash = hash(tuple(current_idx))
 
@@ -410,16 +418,16 @@ class StateSnapshot:
                 f"Expected hash {self.index_hash}, got {current_hash}"
             )
 
-        variant.state.schedule.loc[
-            self.schedule_index, ["main", "backup"]
-        ] = self.schedule_rows
+        variant.state.schedule.loc[self.schedule_index, ["main", "backup"]] = self.schedule_rows
 
         variant.state.main_assignment_counts = self.main_counts.copy()
         variant.state.backup_assignment_counts = self.backup_counts.copy()
         variant.state.last_assignment = dict(self.last_assignment)
         variant.state.rotation_repeats = self.rotation_repeats
         variant.state.weekend_tracking = dict(self.weekend_tracking)
-        variant.state.nurse_weekend_lists = {k: list(v) for k, v in self.nurse_weekend_lists.items()}
+        variant.state.nurse_weekend_lists = {
+            k: list(v) for k, v in self.nurse_weekend_lists.items()
+        }
         variant.state.last_pattern = dict(self.last_pattern)
 
         variant._invalidate_weekday_cache()
@@ -430,24 +438,22 @@ class BestStateTracker:
 
     def __init__(
         self,
-        variant: "ScheduleVariant",
-        scheduler: Optional["NurseScheduler"] = None,
+        variant: ScheduleVariant,
+        scheduler: NurseScheduler | None = None,
     ) -> None:
         self.variant = variant
         self.scheduler = scheduler
 
-        self._global_best: Optional[StateSnapshot] = None
-        self._global_best_quality: Optional[ScheduleQuality] = None
+        self._global_best: StateSnapshot | None = None
+        self._global_best_quality: ScheduleQuality | None = None
 
-        self._iteration_snapshot: Optional[StateSnapshot] = None
-        self._iteration_quality: Optional[ScheduleQuality] = None
+        self._iteration_snapshot: StateSnapshot | None = None
+        self._iteration_quality: ScheduleQuality | None = None
 
         self._plateau_depth = 0
         # Plateau allowance is a tunable knob (SchedulerConfig.max_plateau_depth);
         # fall back to 10 if the variant carries no config.
-        self._max_plateau_depth = getattr(
-            getattr(variant, "config", None), "max_plateau_depth", 10
-        )
+        self._max_plateau_depth = getattr(getattr(variant, "config", None), "max_plateau_depth", 10)
 
         self._improvements = 0
         self._neutrals = 0
@@ -463,7 +469,7 @@ class BestStateTracker:
         self._global_best = snapshot
         self._global_best_quality = quality
 
-        print(f"[Tracker] Initialized with: {quality}")
+        logger.debug("[Tracker] Initialized with: %s", quality)
         return quality
 
     def begin_iteration(self, phase_name: str = "") -> ScheduleQuality:
@@ -477,7 +483,7 @@ class BestStateTracker:
         self._iteration_quality = quality
 
         if phase_name:
-            print(f"[Tracker] {phase_name}: Begin iteration with {quality}")
+            logger.debug("[Tracker] %s: Begin iteration with %s", phase_name, quality)
 
         return quality
 
@@ -501,19 +507,20 @@ class BestStateTracker:
             self._improvements += 1
             self._plateau_depth = 0
 
-            if (
-                self._global_best_quality is None
-                or current_quality.is_better_than(self._global_best_quality)
+            if self._global_best_quality is None or current_quality.is_better_than(
+                self._global_best_quality
             ):
                 self._global_best = StateSnapshot.capture(self.variant, current_quality)
                 self._global_best_quality = current_quality
                 if phase_name:
-                    print(f"[Tracker] {phase_name}: NEW GLOBAL BEST: {current_quality}")
+                    logger.debug("[Tracker] %s: NEW GLOBAL BEST: %s", phase_name, current_quality)
             else:
                 if phase_name:
-                    print(
-                        f"[Tracker] {phase_name}: Local improvement: "
-                        f"{self._iteration_quality} -> {current_quality}"
+                    logger.debug(
+                        "[Tracker] %s: Local improvement: %s -> %s",
+                        phase_name,
+                        self._iteration_quality,
+                        current_quality,
                     )
 
             return Comparison.BETTER
@@ -523,20 +530,22 @@ class BestStateTracker:
                 self._neutrals += 1
                 self._plateau_depth += 1
                 if phase_name:
-                    print(
-                        f"[Tracker] {phase_name}: Neutral move accepted "
-                        f"(plateau={self._plateau_depth}): {current_quality}"
+                    logger.debug(
+                        "[Tracker] %s: Neutral move accepted (plateau=%d): %s",
+                        phase_name,
+                        self._plateau_depth,
+                        current_quality,
                     )
                 return Comparison.EQUAL
 
             if phase_name:
-                print(f"[Tracker] {phase_name}: Plateau limit reached, reverting")
+                logger.debug("[Tracker] %s: Plateau limit reached, reverting", phase_name)
             self._revert_to_iteration()
             return Comparison.WORSE
 
         self._reversions += 1
         if phase_name:
-            print(f"[Tracker] {phase_name}: No improvement, reverting: {current_quality}")
+            logger.debug("[Tracker] %s: No improvement, reverting: %s", phase_name, current_quality)
         self._revert_to_iteration()
         return Comparison.WORSE
 
@@ -548,13 +557,13 @@ class BestStateTracker:
 
     def restore_global_best(self) -> None:
         if self._global_best is None:
-            print("[Tracker] Warning: No global best to restore")
+            logger.warning("[Tracker] No global best to restore")
             return
 
-        print(f"[Tracker] Restoring global best: {self._global_best_quality}")
+        logger.debug("[Tracker] Restoring global best: %s", self._global_best_quality)
         self._global_best.restore_to(self.variant)
 
-    def get_global_best_quality(self) -> Optional[ScheduleQuality]:
+    def get_global_best_quality(self) -> ScheduleQuality | None:
         return self._global_best_quality
 
     def get_statistics(self) -> dict:
@@ -563,9 +572,7 @@ class BestStateTracker:
             "neutrals": self._neutrals,
             "reversions": self._reversions,
             "plateau_depth": self._plateau_depth,
-            "global_best": str(self._global_best_quality)
-            if self._global_best_quality
-            else None,
+            "global_best": str(self._global_best_quality) if self._global_best_quality else None,
         }
 
     def reset_plateau(self) -> None:
@@ -578,18 +585,18 @@ class ScheduleState:
     Deep-copies guarantee that no mutable object is ever shared across
     ScheduleVariants.
     """
-    
+
     def __init__(
         self,
         schedule: pd.DataFrame,
         main_assignment_counts: pd.Series,
         backup_assignment_counts: pd.Series,
-        last_assignment: Dict,
-        last_pattern: Dict,
-        weekend_tracking: Dict,
-        nurse_weekend_lists: Optional[Dict] = None,
+        last_assignment: dict,
+        last_pattern: dict,
+        weekend_tracking: dict,
+        nurse_weekend_lists: dict | None = None,
         rotation_repeats: int = 0,
-        pre_window_worked: Optional[Dict] = None,
+        pre_window_worked: dict | None = None,
     ):
         # Always own *private* copies of mutable objects
         self.schedule = schedule.copy()
@@ -601,9 +608,7 @@ class ScheduleState:
 
         # Per-nurse Friday lists
         if nurse_weekend_lists is None:
-            self.nurse_weekend_lists = {
-                n: [] for n in self.main_assignment_counts.index
-            }
+            self.nurse_weekend_lists = {n: [] for n in self.main_assignment_counts.index}
         else:
             self.nurse_weekend_lists = {k: list(v) for k, v in nurse_weekend_lists.items()}
 
@@ -613,11 +618,9 @@ class ScheduleState:
         # Days worked immediately before the scheduling window, per nurse
         # (weekend history plus persisted per-day schedule history). Read-only
         # after construction, so frozensets may be shared across clones.
-        self.pre_window_worked = {
-            k: frozenset(v) for k, v in (pre_window_worked or {}).items()
-        }
+        self.pre_window_worked = {k: frozenset(v) for k, v in (pre_window_worked or {}).items()}
 
-    def clone(self) -> "ScheduleState":
+    def clone(self) -> ScheduleState:
         """
         Produce a fully detached copy. Every mutable member is either
         .copy() (for pandas objects) or deepcopy() (for plain Python
@@ -638,21 +641,21 @@ class ScheduleState:
 
 class ScheduleVariant:
     """
-    One branch of the search tree with 100% isolation: every mutable object 
+    One branch of the search tree with 100% isolation: every mutable object
     is privately owned, so no data leak can occur between variants.
     """
-    
+
     def __init__(
         self,
         state: ScheduleState,
-        nurses: List[str],
+        nurses: list[str],
         availability: pd.DataFrame,
-        config: 'SchedulerConfig',
-        nurse_manager: 'NurseManagerProtocol',
-        pre_scheduled: Optional[Dict] = None,
-        historical_main: Optional[Dict] = None,
-        historical_backup: Optional[Dict] = None,
-        console_debug: Optional[bool] = None,
+        config: SchedulerConfig,
+        nurse_manager: NurseManagerProtocol,
+        pre_scheduled: dict | None = None,
+        historical_main: dict | None = None,
+        historical_backup: dict | None = None,
+        console_debug: bool | None = None,
         _skip_copy: bool = False,
     ):
         # All *mutable* arguments are copied so the caller keeps ownership
@@ -677,10 +680,8 @@ class ScheduleVariant:
             self.hist_backup = (historical_backup or {}).copy()
 
         # Cache of late-shift staff
-        self._late_set = {
-            n for n in self.nurses if nurse_manager.is_late_shift_nurse(n)
-        }
-        
+        self._late_set = {n for n in self.nurses if nurse_manager.is_late_shift_nurse(n)}
+
         # Immutable dict supplied by caller – we may share safely
         self.pre_scheduled = pre_scheduled or {}
 
@@ -688,10 +689,13 @@ class ScheduleVariant:
         # tree, as (weekend_friday, nurse, pattern_value) tuples. Populated by
         # assign_weekend() and copied on clone(), so every final schedule
         # carries exactly the violations that belong to it.
-        self.rotation_violations: List[Tuple[pd.Timestamp, str, str]] = []
+        self.rotation_violations: list[tuple[pd.Timestamp, str, str]] = []
 
         if console_debug is None:
-            env_val = os.getenv("SCHEDULE_VARIANT_DEBUG", "1")
+            # Opt-in: this traces every candidate slot considered, which is
+            # thousands of lines per variant — useful when debugging the
+            # search, unusable as default output.
+            env_val = os.getenv("SCHEDULE_VARIANT_DEBUG", "0")
             try:
                 self._console_debug = bool(int(env_val))
             except ValueError:
@@ -705,7 +709,6 @@ class ScheduleVariant:
         self.BestStateTracker = BestStateTracker
         self.DEFAULT_POST_WEEKEND_WINDOW = DEFAULT_POST_WEEKEND_WINDOW
         self.DEFAULT_PRE_WEEKEND_WINDOW = DEFAULT_PRE_WEEKEND_WINDOW
-        self.pd = pd
         # NOTE: search helpers (domain_builder, order_generator, window_optimizer)
         # are constructed lazily via @cached_property below so they only hold a
         # reference to this variant through the VariantSearchContext surface,
@@ -747,7 +750,7 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
@@ -757,7 +760,7 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
@@ -767,7 +770,7 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         relaxed_spacing: bool = False,
     ) -> list[str]:
@@ -779,7 +782,7 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         relaxed_spacing: bool = False,
     ) -> list[str]:
@@ -813,9 +816,7 @@ class ScheduleVariant:
     def collect_weekday_windows(self, window_weeks: int = 2) -> list[list[pd.Timestamp]]:
         return self._collect_weekday_windows(window_weeks=window_weeks)
 
-    def build_window_varlist(
-        self, days: list[pd.Timestamp]
-    ) -> list[tuple[pd.Timestamp, str]]:
+    def build_window_varlist(self, days: list[pd.Timestamp]) -> list[tuple[pd.Timestamp, str]]:
         return self._build_window_varlist(days)
 
     def clear_window_assignments(self, days: list[pd.Timestamp]) -> None:
@@ -862,15 +863,15 @@ class ScheduleVariant:
     # constructed variant does not unconditionally instantiate these helpers,
     # and helpers depend only on the `VariantSearchContext` protocol.
     @cached_property
-    def domain_builder(self) -> "CandidateDomainBuilder":
+    def domain_builder(self) -> CandidateDomainBuilder:
         return CandidateDomainBuilder(self)
 
     @cached_property
-    def order_generator(self) -> "OrderGenerator":
+    def order_generator(self) -> OrderGenerator:
         return OrderGenerator(self)
 
     @cached_property
-    def window_optimizer(self) -> "WindowRefillOptimizer":
+    def window_optimizer(self) -> WindowRefillOptimizer:
         return WindowRefillOptimizer(self)
 
     def _initialize_pre_scheduled_slots(self) -> None:
@@ -885,7 +886,7 @@ class ScheduleVariant:
         # Ensure counters & last-assignment dictionaries reflect the seeding
         self._recalculate_assignment_counts()
         self._update_last_assignment_dates()
-    
+
         # After placing pre-scheduled cells, ensure our per-nurse Friday lists
         # include any weekend already seeded (Fri/Sat/Sun).
         for friday in [d for d in sched.index if d.weekday() == FRIDAY_WEEKDAY]:
@@ -906,8 +907,8 @@ class ScheduleVariant:
                     pos = bisect.bisect_left(lst, friday)
                     if pos >= len(lst) or lst[pos] != friday:
                         bisect.insort(lst, friday)
-    
-    def clone(self) -> "ScheduleVariant":
+
+    def clone(self) -> ScheduleVariant:
         """
         Return a *completely* detached copy of this variant with independent
         copies of all mutable state.  Read-only data (availability, hist,
@@ -927,7 +928,7 @@ class ScheduleVariant:
         )
         new_variant.rotation_violations = list(self.rotation_violations)
         return new_variant
-   
+
     def _is_pre_scheduled(self, date: pd.Timestamp, role: str) -> bool:
         """Returns True if the given date/role is pre-scheduled with a non-empty nurse name."""
         slot = self.pre_scheduled.get(date)
@@ -935,7 +936,7 @@ class ScheduleVariant:
         return nurse is not None and str(nurse).strip() != ""
 
     # ===== CONFLICT DETECTION =====
-    
+
     def _late_shift_conflict(self, nurse: str, date: pd.Timestamp, role: str) -> bool:
         """Check if assigning this nurse would create a late-shift conflict."""
         if nurse not in self._late_set:
@@ -949,7 +950,7 @@ class ScheduleVariant:
         return True
 
     # ===== WEEKEND ASSIGNMENT =====
-    
+
     def assign_weekend(
         self,
         weekend_start: pd.Timestamp,
@@ -970,9 +971,7 @@ class ScheduleVariant:
             (sfs_nurse, WeekendPattern.SFS),
         ):
             if self.state.last_pattern.get(nurse) == new_pattern:
-                self.rotation_violations.append(
-                    (weekend_start, nurse, new_pattern.value)
-                )
+                self.rotation_violations.append((weekend_start, nurse, new_pattern.value))
 
         self._apply_weekend_assignments(weekend_dates, assignments)
         self._update_weekend_tracking(weekend_start, fsf_nurse, sfs_nurse)
@@ -994,7 +993,6 @@ class ScheduleVariant:
             return False
         return True
 
-    
     def _spread_components(self) -> tuple[int, int, int]:
         """
         Return (backup_spread, main_spread, total_spread).
@@ -1002,18 +1000,19 @@ class ScheduleVariant:
         """
         mains = self.state.main_assignment_counts
         backs = self.state.backup_assignment_counts
-        tot   = mains + backs
+        tot = mains + backs
         s_b = int(backs.max() - backs.min()) if len(backs) else 0
         s_m = int(mains.max() - mains.min()) if len(mains) else 0
-        s_t = int(tot.max()   - tot.min())   if len(tot)   else 0
+        s_t = int(tot.max() - tot.min()) if len(tot) else 0
         return (s_b, s_m, s_t)
-    
-    def _lexi_better(self, new_tuple: tuple[int, int, int], base_tuple: tuple[int, int, int]) -> bool:
+
+    def _lexi_better(
+        self, new_tuple: tuple[int, int, int], base_tuple: tuple[int, int, int]
+    ) -> bool:
         """Return True if new_tuple is lexicographically better than base_tuple."""
         return new_tuple < base_tuple
 
-    
-    def _get_weekend_dates(self, weekend_start: pd.Timestamp) -> List[pd.Timestamp]:
+    def _get_weekend_dates(self, weekend_start: pd.Timestamp) -> list[pd.Timestamp]:
         """Get the three dates of a weekend (Friday, Saturday, Sunday)."""
         return [
             weekend_start,
@@ -1021,11 +1020,7 @@ class ScheduleVariant:
             weekend_start + timedelta(days=2),
         ]
 
-    def _get_weekend_assignments(
-        self, 
-        fsf_nurse: str, 
-        sfs_nurse: str
-    ) -> List[Tuple[str, str]]:
+    def _get_weekend_assignments(self, fsf_nurse: str, sfs_nurse: str) -> list[tuple[str, str]]:
         """Get the main/backup assignments for a weekend pattern."""
         return [
             (fsf_nurse, sfs_nurse),  # Fri (FSF main)
@@ -1034,31 +1029,23 @@ class ScheduleVariant:
         ]
 
     def _apply_weekend_assignments(
-        self,
-        weekend_dates: List[pd.Timestamp],
-        assignments: List[Tuple[str, str]]
+        self, weekend_dates: list[pd.Timestamp], assignments: list[tuple[str, str]]
     ) -> None:
         """Apply weekend assignments to schedule, respecting pre-scheduled slots."""
-        for day, (main, backup) in zip(weekend_dates, assignments):
+        for day, (main, backup) in zip(weekend_dates, assignments, strict=True):
             if is_empty(self.state.schedule.at[day, "main"]):
                 self.state.schedule.at[day, "main"] = main
             if is_empty(self.state.schedule.at[day, "backup"]):
                 self.state.schedule.at[day, "backup"] = backup
 
     def _update_weekend_tracking(
-        self, 
-        weekend_start: pd.Timestamp, 
-        fsf_nurse: str, 
-        sfs_nurse: str
+        self, weekend_start: pd.Timestamp, fsf_nurse: str, sfs_nurse: str
     ) -> None:
         """Update weekend tracking dictionary."""
         self.state.weekend_tracking[weekend_start] = (fsf_nurse, sfs_nurse)
 
     def _update_nurse_weekend_lists(
-        self, 
-        fsf_nurse: str, 
-        sfs_nurse: str, 
-        weekend_start: pd.Timestamp
+        self, fsf_nurse: str, sfs_nurse: str, weekend_start: pd.Timestamp
     ) -> None:
         """Keep each nurse's sorted Friday list up-to-date (deduplicated)."""
         for nurse in (fsf_nurse, sfs_nurse):
@@ -1079,9 +1066,8 @@ class ScheduleVariant:
         self.state.last_pattern[fsf_nurse] = WeekendPattern.FSF
         self.state.last_pattern[sfs_nurse] = WeekendPattern.SFS
 
-        self.state.rotation_repeats += (
-            int(prev_fsf == WeekendPattern.FSF) +
-            int(prev_sfs == WeekendPattern.SFS)
+        self.state.rotation_repeats += int(prev_fsf == WeekendPattern.FSF) + int(
+            prev_sfs == WeekendPattern.SFS
         )
 
     def _log_assignment_debug(
@@ -1093,9 +1079,9 @@ class ScheduleVariant:
         role: str | None,
         eligible: Iterable[str] | None,
         diagnostics: dict[str, list[str]] | None,
-        final_pick: Optional[str],
+        final_pick: str | None,
         note: str | None = None,
-        extra: Optional[dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """Emit a structured assignment log entry when debug mode is enabled."""
 
@@ -1103,10 +1089,7 @@ class ScheduleVariant:
             return
 
         eligible_list = list(eligible or [])
-        diagnostics_map = {
-            nurse: list(reasons)
-            for nurse, reasons in (diagnostics or {}).items()
-        }
+        diagnostics_map = {nurse: list(reasons) for nurse, reasons in (diagnostics or {}).items()}
 
         def _series_to_int_dict(series: pd.Series) -> dict[str, int]:
             if series is None:
@@ -1163,16 +1146,14 @@ class ScheduleVariant:
         _debug.ASSIGNMENT_DEBUG_LOGGER.log(payload)
 
     # ===== WEEKDAY ASSIGNMENT =====
-    
+
     def assign_weekdays(self) -> None:
         """Assign nurses to all Mon-Thu slots, skipping pre-scheduled slots."""
         sched = self.state.schedule
-        weekday_dates = sched.index[~sched['is_weekend']]
+        weekday_dates = sched.index[~sched["is_weekend"]]
 
         for date in weekday_dates:
-            self._debug_print(
-                f"[ScheduleVariant] [WeekdayAssign] start {date.date()}"
-            )
+            self._debug_print(f"[ScheduleVariant] [WeekdayAssign] start {date.date()}")
             self._assign_roles_for_date(date)
 
         self._recalculate_assignment_counts()
@@ -1180,19 +1161,17 @@ class ScheduleVariant:
 
     def _assign_roles_for_date(self, date: pd.Timestamp) -> None:
         roles_and_counts = [
-            ('main', self.state.main_assignment_counts),
-            ('backup', self.state.backup_assignment_counts)
+            ("main", self.state.main_assignment_counts),
+            ("backup", self.state.backup_assignment_counts),
         ]
         for role, counts in roles_and_counts:
             if self._is_pre_scheduled(date, role):
                 continue
             if not is_empty(self.state.schedule.at[date, role]):
                 continue
-            self._debug_print(
-                f"[ScheduleVariant] [WeekdayAssign] {date.date()} role={role}"
-            )
+            self._debug_print(f"[ScheduleVariant] [WeekdayAssign] {date.date()} role={role}")
 
-            diag_map: Optional[dict[str, list[str]]] = (
+            diag_map: dict[str, list[str]] | None = (
                 {} if _debug.ASSIGNMENT_DEBUG_LOGGER.enabled else None
             )
 
@@ -1208,7 +1187,7 @@ class ScheduleVariant:
 
             # 2) Fallback to relaxed spacing ONLY if nothing is base-eligible
             if not eligible and self.config.allow_one_day_weekday_gap:
-                diag_relaxed: Optional[dict[str, list[str]]] = (
+                diag_relaxed: dict[str, list[str]] | None = (
                     {} if _debug.ASSIGNMENT_DEBUG_LOGGER.enabled else None
                 )
                 eligible = self._get_eligible_nurses_for_day(
@@ -1289,13 +1268,13 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
-        relaxed_spacing: bool = False
+        relaxed_spacing: bool = False,
     ) -> list[str]:
         sched = self.state.schedule
         avail = self.availability.loc[date]
-        other_role = 'backup' if role == 'main' else 'main'
+        other_role = "backup" if role == "main" else "main"
         other_nurse = sched.at[date, other_role]
 
         out: list[str] = []
@@ -1334,11 +1313,11 @@ class ScheduleVariant:
         role: str,
         avail: pd.Series,
         other_nurse: str,
-        diagnostics: Optional[list[str]] = None
+        diagnostics: list[str] | None = None,
     ) -> bool:
         """
         Quick rejects before the heavier spacing / weekly-limit checks.
-    
+
         * Treat **NaN / missing** cells in the availability matrix
           as **unavailable** (previously they slipped through).
         """
@@ -1357,7 +1336,7 @@ class ScheduleVariant:
         role: str,
         *,
         relaxed_spacing: bool = False,
-        diagnostics: Optional[list[str]] = None
+        diagnostics: list[str] | None = None,
     ) -> bool:
         if not self._has_sufficient_spacing(nurse, date, role, relaxed_spacing=relaxed_spacing):
             if diagnostics is not None:
@@ -1377,12 +1356,7 @@ class ScheduleVariant:
     # 2.  FULL-ROW ELIGIBILITY (also fixes NaN handling)
     # ────────────────────────────────────────────────────────────────────
     def _is_nurse_eligible_for_assignment(
-        self,
-        nurse: str,
-        date: pd.Timestamp,
-        role: str,
-        *,
-        relaxed_spacing: bool = False
+        self, nurse: str, date: pd.Timestamp, role: str, *, relaxed_spacing: bool = False
     ) -> bool:
         """Mon–Thu eligibility (NaN-safe availability + advanced rules)."""
         if self._late_shift_conflict(nurse, date, role):
@@ -1406,7 +1380,7 @@ class ScheduleVariant:
         role: str,
         *,
         relaxed_spacing: bool = False,
-        diagnostics: Optional[list[str]] = None
+        diagnostics: list[str] | None = None,
     ) -> bool:
         """
         Gap-filling eligibility (NaN-safe) with Mon/Tue pre-weekend relaxation already
@@ -1447,35 +1421,36 @@ class ScheduleVariant:
         return True
 
     # ===== ASSIGNMENT MANAGEMENT =====
-    
+
     def _inc_assign(
-        self, 
-        date: pd.Timestamp, 
-        role: str, 
-        nurse: str, 
-        gap_phase: bool = False
+        self, date: pd.Timestamp, role: str, nurse: str, gap_phase: bool = False
     ) -> bool:
         """Assign nurse to schedule and update counters (with relaxed fallback if needed)."""
         if self._is_pre_scheduled(date, role):
             return False
-    
+
         # Pick the right checker
-        check = (self._is_nurse_eligible_for_assignment_gap 
-                 if gap_phase else self._is_nurse_eligible_for_assignment)
-    
+        check = (
+            self._is_nurse_eligible_for_assignment_gap
+            if gap_phase
+            else self._is_nurse_eligible_for_assignment
+        )
+
         # 1) Try base spacing first
         ok = check(nurse, date, role, relaxed_spacing=False)
-    
+
         # 2) If base fails, optionally try relaxed spacing (only Mon–Thu and
         #    only when not in this nurse's pre/post weekend windows)
-        if (not ok 
-            and self.config.allow_one_day_weekday_gap 
-            and self._weekday_relaxation_applicable(nurse, date)):
+        if (
+            not ok
+            and self.config.allow_one_day_weekday_gap
+            and self._weekday_relaxation_applicable(nurse, date)
+        ):
             ok = check(nurse, date, role, relaxed_spacing=True)
-    
+
         if not ok:
             return False
-    
+
         apply_assignment(
             schedule_df=self.state.schedule,
             main_counts=self.state.main_assignment_counts,
@@ -1498,7 +1473,7 @@ class ScheduleVariant:
         """
         if self._is_pre_scheduled(date, role):
             return
-    
+
         revert_assignment(
             schedule_df=self.state.schedule,
             main_counts=self.state.main_assignment_counts,
@@ -1513,10 +1488,12 @@ class ScheduleVariant:
         )
 
         self._invalidate_weekday_cache()
-            
+
     # ===== NURSE SELECTION =====
-    
-    def _select_best_candidate(self, nurses: list[str], role: str, date: pd.Timestamp | None = None) -> str:
+
+    def _select_best_candidate(
+        self, nurses: list[str], role: str, date: pd.Timestamp | None = None
+    ) -> str:
         """
         Deterministic tie-breaking among 'nurses' for 'role':
           1) fewest role-specific assignments (backup if role=='backup', main otherwise)
@@ -1525,21 +1502,25 @@ class ScheduleVariant:
           3) fewest 30-day total (main + backup)
           4) first by canonical global order (self.nurses)
         """
-        role_counts  = self.state.main_assignment_counts if role == "main" else self.state.backup_assignment_counts
+        role_counts = (
+            self.state.main_assignment_counts
+            if role == "main"
+            else self.state.backup_assignment_counts
+        )
         total_counts = self._get_total_counts()
-    
+
         # Optional weekday diversity counts (Mon–Thu only)
         if date is not None and date.weekday() in (0, 1, 2, 3):
             w_counts = self._weekday_counts_for(int(date.weekday()))
         else:
             w_counts = {}
-    
+
         # 1) fewest role-specific count
         min_role = min(role_counts[n] for n in nurses)
         tier = [n for n in nurses if role_counts[n] == min_role]
         if len(tier) == 1:
             return tier[0]
-    
+
         # 1.5) fewest same-weekday count (soft)
         if w_counts:
             min_dow = min(w_counts.get(n, 0) for n in tier)
@@ -1548,34 +1529,30 @@ class ScheduleVariant:
             tier_dow = tier
         if len(tier_dow) == 1:
             return tier_dow[0]
-    
+
         # 2) fewest total
         min_total = min(total_counts[n] for n in tier_dow)
         tier2 = [n for n in tier_dow if total_counts[n] == min_total]
         if len(tier2) == 1:
             return tier2[0]
-    
+
         # 3) fewest 30-day history
         def past_total(n: str) -> int:
             return self.hist_main.get(n, 0) + self.hist_backup.get(n, 0)
+
         min_hist = min(past_total(n) for n in tier2)
         tier3 = [n for n in tier2 if past_total(n) == min_hist]
         if len(tier3) == 1:
             return tier3[0]
-    
+
         # 4) deterministic fallback by canonical order
         order = self._order_index
         return min(tier3, key=lambda n: order.get(n, 1_000_000))
 
     # ===== VALIDATION METHODS =====
-    
+
     def _has_sufficient_spacing(
-        self, 
-        nurse: str, 
-        date: pd.Timestamp, 
-        role: str,
-        *,
-        relaxed_spacing: bool = False
+        self, nurse: str, date: pd.Timestamp, role: str, *, relaxed_spacing: bool = False
     ) -> bool:
         """
         Base: require self.config.min_days_between_assignments days clear on
@@ -1584,13 +1561,15 @@ class ScheduleVariant:
         """
         base = int(self.config.min_days_between_assignments)
         min_days_off = base
-    
-        if (relaxed_spacing 
-            and self.config.allow_one_day_weekday_gap 
-            and self._weekday_relaxation_applicable(nurse, date)):
+
+        if (
+            relaxed_spacing
+            and self.config.allow_one_day_weekday_gap
+            and self._weekday_relaxation_applicable(nurse, date)
+        ):
             # One-day buffer: forbid assignments on adjacent days only
             min_days_off = max(1, base - 1)
-    
+
         idx_set = self._get_index_set()
         worked_before_window = self.state.pre_window_worked.get(nurse, ())
         for offset in range(1, min_days_off + 1):
@@ -1607,15 +1586,9 @@ class ScheduleVariant:
     def _nurse_assigned_on_date(self, nurse: str, date: pd.Timestamp) -> bool:
         """Check if nurse is assigned on specific date."""
         sched = self.state.schedule
-        return (nurse == sched.at[date, 'main'] or 
-                nurse == sched.at[date, 'backup'])
+        return nurse == sched.at[date, "main"] or nurse == sched.at[date, "backup"]
 
-    def _validate_weekly_assignment_limits(
-        self,
-        nurse: str,
-        date: pd.Timestamp,
-        role: str
-    ) -> bool:
+    def _validate_weekly_assignment_limits(self, nurse: str, date: pd.Timestamp, role: str) -> bool:
         """Check weekly assignment limits."""
         week_start = date - timedelta(days=date.weekday())  # Always Monday
         idx_set = self._get_index_set()
@@ -1627,24 +1600,21 @@ class ScheduleVariant:
             d = week_start + timedelta(days=i)
             if d == date or d not in idx_set:
                 continue
-            if sched.at[d, 'main'] == nurse:
+            if sched.at[d, "main"] == nurse:
                 main_count += 1
-            if sched.at[d, 'backup'] == nurse:
+            if sched.at[d, "backup"] == nurse:
                 backup_count += 1
         total_count = main_count + backup_count
 
-        if role == 'main' and main_count >= MAX_MAIN_ASSIGNMENTS_PER_WEEK:
+        if role == "main" and main_count >= MAX_MAIN_ASSIGNMENTS_PER_WEEK:
             return False
         if total_count >= MAX_TOTAL_ASSIGNMENTS_PER_WEEK:
             return False
-    
+
         return True
-        
+
     def _validate_weekday_relative_to_weekend(
-        self, 
-        nurse: str, 
-        date: pd.Timestamp, 
-        role: str
+        self, nurse: str, date: pd.Timestamp, role: str
     ) -> bool:
         """Validate weekday assignments relative to weekend schedule."""
         cfg = WeekdayConstraintConfig(
@@ -1663,10 +1633,7 @@ class ScheduleVariant:
         )
 
     def _validate_post_weekend_assignment(
-        self, 
-        weekday: int, 
-        role: str, 
-        cfg: 'SchedulerConfig'
+        self, weekday: int, role: str, cfg: SchedulerConfig
     ) -> bool:
         """Validate post-weekend assignment based on day and role."""
         return validate_post_weekend_assignment(
@@ -1681,10 +1648,7 @@ class ScheduleVariant:
         )
 
     def _validate_weekday_relative_to_weekend_gap(
-        self, 
-        nurse: str, 
-        date: pd.Timestamp, 
-        role: str
+        self, nurse: str, date: pd.Timestamp, role: str
     ) -> bool:
         """Gap-filling specific weekend validation with relaxed Monday/Tuesday rule."""
         cfg = WeekdayConstraintConfig(
@@ -1703,24 +1667,19 @@ class ScheduleVariant:
         )
 
     # ===== WEEKEND WINDOW DETECTION =====
-    
+
     def _get_neighboring_fridays(
-        self, 
-        nurse: str, 
-        current_date: pd.Timestamp
-    ) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+        self, nurse: str, current_date: pd.Timestamp
+    ) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
         """Get the previous and next Friday for a nurse."""
         fridays = self.state.nurse_weekend_lists.get(nurse, [])
         idx = bisect.bisect_left(fridays, current_date)
-        prev_fri = fridays[idx-1] if idx > 0 else None
+        prev_fri = fridays[idx - 1] if idx > 0 else None
         next_fri = fridays[idx] if idx < len(fridays) else None
         return prev_fri, next_fri
 
     def _is_in_pre_weekend_window(
-        self, 
-        nurse: str, 
-        date: pd.Timestamp, 
-        window: int = DEFAULT_PRE_WEEKEND_WINDOW
+        self, nurse: str, date: pd.Timestamp, window: int = DEFAULT_PRE_WEEKEND_WINDOW
     ) -> bool:
         """Check if date is in pre-weekend window."""
         _, next_fri = self._get_neighboring_fridays(nurse, date)
@@ -1730,10 +1689,7 @@ class ScheduleVariant:
         return 1 <= days <= window
 
     def _is_in_post_weekend_window(
-        self,
-        nurse: str,
-        date: pd.Timestamp,
-        window: int = DEFAULT_POST_WEEKEND_WINDOW
+        self, nurse: str, date: pd.Timestamp, window: int = DEFAULT_POST_WEEKEND_WINDOW
     ) -> bool:
         """Check if date is in post-weekend window."""
         prev_fri, _ = self._get_neighboring_fridays(nurse, date)
@@ -1750,12 +1706,14 @@ class ScheduleVariant:
     def _get_total_counts(self) -> pd.Series:
         """Return cached main+backup total counts (invalidated with weekday cache)."""
         if self._total_counts_cache is None:
-            self._total_counts_cache = self.state.main_assignment_counts + self.state.backup_assignment_counts
+            self._total_counts_cache = (
+                self.state.main_assignment_counts + self.state.backup_assignment_counts
+            )
         return self._total_counts_cache
 
     def _get_index_set(self) -> frozenset:
         """Return cached frozenset of schedule index dates for O(1) membership."""
-        if not hasattr(self, '_index_set') or self._index_set is None:
+        if not hasattr(self, "_index_set") or self._index_set is None:
             self._index_set = frozenset(self.state.schedule.index)
         return self._index_set
 
@@ -1784,14 +1742,13 @@ class ScheduleVariant:
         self._weekday_counts_cache[weekday] = result
         return result
 
-    
     # ===== SCHEDULE UTILITY METHODS =====
-    
+
     def _recalculate_assignment_counts(self) -> None:
         """Recalculate assignment counts from current schedule."""
         self._invalidate_weekday_cache()
-        mains = self.state.schedule['main'].value_counts()
-        backups = self.state.schedule['backup'].value_counts()
+        mains = self.state.schedule["main"].value_counts()
+        backups = self.state.schedule["backup"].value_counts()
 
         for nurse in self.state.main_assignment_counts.index:
             self.state.main_assignment_counts[nurse] = mains.get(nurse, 0)
@@ -1802,33 +1759,30 @@ class ScheduleVariant:
         sched = self.state.schedule
         # Iterate over a stable list of keys in case callers mutate the dict elsewhere
         for nurse in list(self.state.last_assignment.keys()):
-            assigned = sched.index[
-                (sched["main"] == nurse) | (sched["backup"] == nurse)
-            ]
+            assigned = sched.index[(sched["main"] == nurse) | (sched["backup"] == nurse)]
             self.state.last_assignment[nurse] = assigned.max() if len(assigned) else None
-    
+
     def _days_to(self, start: pd.Timestamp, end: pd.Timestamp) -> int:
         """Return number of days between dates."""
         return (end - start).days
 
     # ===== CONVENIENCE METHODS =====
-    
+
     def count_gaps(self) -> int:
         """Count empty slots in schedule."""
         return _count_main_backup_empties(self.state.schedule)
 
-    def get_weekdays(self) -> List[pd.Timestamp]:
+    def get_weekdays(self) -> list[pd.Timestamp]:
         """Get all weekday dates from schedule (cached; index never changes)."""
-        if not hasattr(self, '_weekdays_cache') or self._weekdays_cache is None:
+        if not hasattr(self, "_weekdays_cache") or self._weekdays_cache is None:
             self._weekdays_cache = [
-                d for d in self.state.schedule.index
-                if not self.state.schedule.at[d, 'is_weekend']
+                d for d in self.state.schedule.index if not self.state.schedule.at[d, "is_weekend"]
             ]
         return self._weekdays_cache
 
-    def get_weeks(self) -> List[List[pd.Timestamp]]:
+    def get_weeks(self) -> list[list[pd.Timestamp]]:
         """Get weekday dates grouped by week (cached; index never changes)."""
-        if not hasattr(self, '_weeks_cache') or self._weeks_cache is None:
+        if not hasattr(self, "_weeks_cache") or self._weeks_cache is None:
             weekdays = self.get_weekdays()
             weeks = []
             seen = set()
@@ -1837,7 +1791,8 @@ class ScheduleVariant:
                 week_start = date - timedelta(days=date.weekday())
                 if week_start not in seen:
                     week_days = [
-                        week_start + timedelta(days=i) for i in range(4)
+                        week_start + timedelta(days=i)
+                        for i in range(4)
                         if (week_start + timedelta(days=i)) in weekdays
                     ]
                     weeks.append(week_days)
@@ -1850,27 +1805,29 @@ class ScheduleVariant:
         """Calculate total assignment imbalance across all nurses."""
         main_counts = self.state.main_assignment_counts.values
         backup_counts = self.state.backup_assignment_counts.values
-        
+
         imbalance_main = (max(main_counts) - min(main_counts)) if len(main_counts) > 0 else 0
-        imbalance_backup = (max(backup_counts) - min(backup_counts)) if len(backup_counts) > 0 else 0
-        
+        imbalance_backup = (
+            (max(backup_counts) - min(backup_counts)) if len(backup_counts) > 0 else 0
+        )
+
         return imbalance_main + imbalance_backup
 
     def _rebalance_score(self, alpha: float = 0.5, beta: float = 1.5) -> float:
         """Calculate rebalancing objective score."""
         mains = self.state.main_assignment_counts
         backs = self.state.backup_assignment_counts
-        
+
         main_spread = int(mains.max() - mains.min())
         backup_spread = int(backs.max() - backs.min())
-        
+
         total = mains + backs
         total_spread = int(total.max() - total.min())
-        
+
         return main_spread + beta * backup_spread + alpha * total_spread
 
     # ===== ASSIGNMENT METHODS =====
-    
+
     def _assign_slot_sequence(
         self,
         slots: Iterable[tuple[pd.Timestamp, str]],
@@ -1884,9 +1841,13 @@ class ScheduleVariant:
 
         domain_fn: Callable[[pd.Timestamp, str], list[str]]
         if gap_mode:
-            domain_fn = lambda d, r: self._eligible_domain_gap(d, r, force_relaxed=force_relaxed)
+
+            def domain_fn(d, r):
+                return self._eligible_domain_gap(d, r, force_relaxed=force_relaxed)
         else:
-            domain_fn = lambda d, r: self._eligible_domain(d, r, force_relaxed=force_relaxed)
+
+            def domain_fn(d, r):
+                return self._eligible_domain(d, r, force_relaxed=force_relaxed)
 
         had_failure = False
 
@@ -1895,9 +1856,7 @@ class ScheduleVariant:
                 continue
             if not is_empty(self.state.schedule.at[date, role]):
                 continue
-            self._debug_print(
-                f"[ScheduleVariant] [SlotSeq] slot {date.date()} role={role}"
-            )
+            self._debug_print(f"[ScheduleVariant] [SlotSeq] slot {date.date()} role={role}")
 
             domain = domain_fn(date, role)
             if not domain:
@@ -1930,10 +1889,7 @@ class ScheduleVariant:
         return not had_failure
 
     def assign_nurses_to_weekdays(
-        self,
-        weekdays: list[pd.Timestamp],
-        role: str,
-        sorted_nurses: list[str] | None = None
+        self, weekdays: list[pd.Timestamp], role: str, sorted_nurses: list[str] | None = None
     ) -> bool:
         """
         Assign nurses to the given weekdays for ``role`` using live counts.
@@ -1949,11 +1905,11 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
-        relaxed_spacing: bool = False
+        relaxed_spacing: bool = False,
     ) -> list[str]:
-        other_role = 'backup' if role == 'main' else 'main'
+        other_role = "backup" if role == "main" else "main"
         other_nurse = self.state.schedule.at[date, other_role]
         capture = diagnostics
         created_local_diag = False
@@ -2030,55 +1986,47 @@ class ScheduleVariant:
         return out
 
     # ===== NEXT WEEKEND UTILITY =====
-    
-    def _get_next_weekend_dates(
-        self, 
-        current_date: pd.Timestamp
-    ) -> List[pd.Timestamp]:
+
+    def _get_next_weekend_dates(self, current_date: pd.Timestamp) -> list[pd.Timestamp]:
         """Get the dates of the next weekend."""
         days_ahead = (FRIDAY_WEEKDAY - current_date.weekday()) % 7
         friday = current_date + timedelta(days=days_ahead)
         return [friday + timedelta(days=i) for i in range(DAYS_IN_WEEKEND)]
 
-    def _is_nurse_assigned_to_next_weekend(
-        self, 
-        nurse: str, 
-        current_date: pd.Timestamp
-    ) -> bool:
+    def _is_nurse_assigned_to_next_weekend(self, nurse: str, current_date: pd.Timestamp) -> bool:
         """Check if nurse is assigned to next weekend."""
         weekend_dates = self._get_next_weekend_dates(current_date)
         return any(
-            d in self.state.schedule.index and 
-            (self.state.schedule.at[d, 'main'] == nurse or 
-             self.state.schedule.at[d, 'backup'] == nurse)
+            d in self.state.schedule.index
+            and (
+                self.state.schedule.at[d, "main"] == nurse
+                or self.state.schedule.at[d, "backup"] == nurse
+            )
             for d in weekend_dates
         )
 
     # ===== BACKUP AND RESTORE =====
-    
-    def backup_week_assignments(
-        self, 
-        week_days: List[pd.Timestamp]
-    ) -> 'WeekBackup':
+
+    def backup_week_assignments(self, week_days: list[pd.Timestamp]) -> WeekBackup:
         """Return a snapshot of week assignments for restoration."""
         return WeekBackup(
-            rows=self.state.schedule.loc[week_days, ['main', 'backup']].copy(),
+            rows=self.state.schedule.loc[week_days, ["main", "backup"]].copy(),
             main_counts=self.state.main_assignment_counts.copy(),
             backup_counts=self.state.backup_assignment_counts.copy(),
             last_assignment=dict(self.state.last_assignment),
         )
 
     # ===== REBALANCING =====
-    
+
     def iterative_rebalance_no_revert(
         self,
         tolerance: int = 1,
         max_iterations: int = 6000,
         alpha: float = 1.0,
         beta: float = 1.0,
-        #early_stop_spread: tuple[int, int] | None = (1, 1),
+        # early_stop_spread: tuple[int, int] | None = (1, 1),
         early_stop_spread=None,
-        tracker: Optional[BestStateTracker] = None,
+        tracker: BestStateTracker | None = None,
     ) -> bool:
         """
         Rebalance Monday-Thursday weeks in place. Early-stop when both spreads
@@ -2120,11 +2068,11 @@ class ScheduleVariant:
                 s_b, s_m, _ = self._spread_components()
                 if s_b <= early_stop_spread[0] and s_m <= early_stop_spread[1]:
                     tracker.restore_global_best()
-                    print(f"[Rebalance] Target reached at iter {iteration}")
+                    logger.debug("[Rebalance] Target reached at iter %d", iteration)
                     return True
 
             if not schedule_changed and comparison != Comparison.BETTER:
-                print(f"[Rebalance] No progress at iter {iteration}")
+                logger.debug("[Rebalance] No progress at iter %d", iteration)
                 break
 
         tracker.restore_global_best()
@@ -2133,11 +2081,13 @@ class ScheduleVariant:
         if final_quality and initial_quality:
             improved = final_quality.is_better_than(initial_quality) or improved
 
-        print(
-            f"[Rebalance] Final: {initial_quality} -> {final_quality} "
-            f"(improved={bool(improved)})"
+        logger.info(
+            "[Rebalance] Final: %s -> %s (improved=%s)",
+            initial_quality,
+            final_quality,
+            bool(improved),
         )
-        print(f"[Rebalance] Statistics: {tracker.get_statistics()}")
+        logger.debug("[Rebalance] Statistics: %s", tracker.get_statistics())
 
         return bool(improved)
 
@@ -2148,7 +2098,7 @@ class ScheduleVariant:
         s_m = int(mains.max() - mains.min()) if len(mains) else 0
         s_b = int(backs.max() - backs.min()) if len(backs) else 0
         return s_m, s_b
-    
+
     def _collect_weekday_windows(self, window_weeks: int = 2) -> list[list[pd.Timestamp]]:
         """
         Build sliding windows of 'window_weeks' consecutive Monday–Thursday blocks.
@@ -2159,11 +2109,11 @@ class ScheduleVariant:
             return []
         first = idx.min()
         last = idx.max()
-    
+
         # first Monday >= first
         offset = (MONDAY_WEEKDAY - first.weekday()) % 7
         cur = first + timedelta(days=offset)
-    
+
         windows: list[list[pd.Timestamp]] = []
         while cur <= last:
             days: list[pd.Timestamp] = []
@@ -2178,7 +2128,7 @@ class ScheduleVariant:
                 windows.append(days)
             cur += timedelta(days=7)
         return windows
-    
+
     def _clear_window_assignments(self, days: list[pd.Timestamp]) -> None:
         """
         Clear non-pre-scheduled assignments for the given 'days' for both roles.
@@ -2191,12 +2141,12 @@ class ScheduleVariant:
                 nurse = self.state.schedule.at[d, role]
                 if not is_empty(nurse):
                     self._dec_assign(d, role, nurse)
-    
+
     def _eligible_domain(
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
@@ -2212,7 +2162,7 @@ class ScheduleVariant:
         self,
         date: pd.Timestamp,
         role: str,
-        diagnostics: Optional[dict[str, list[str]]] = None,
+        diagnostics: dict[str, list[str]] | None = None,
         *,
         force_relaxed: bool = False,
     ) -> list[str]:
@@ -2236,7 +2186,7 @@ class ScheduleVariant:
                     if is_empty(val):
                         vars_list.append((d, role))
         return vars_list
-    
+
     def _backtrack_window(
         self,
         vars_list: list[tuple[pd.Timestamp, str]],
@@ -2255,7 +2205,7 @@ class ScheduleVariant:
             force_relaxed=force_relaxed,
             depth=depth,
         )
-    
+
     def iterative_window_refill_rebalance(
         self,
         window_weeks: int = 3,
@@ -2263,7 +2213,7 @@ class ScheduleVariant:
         time_limit_ms: int = 800000,
         node_limit: int = 8000000,
         target_spread: tuple[int, int] | None = (1, 1),
-        tracker: Optional[BestStateTracker] = None,
+        tracker: BestStateTracker | None = None,
     ) -> bool:
         return self.window_optimizer.iterative_window_refill_rebalance(
             window_weeks=window_weeks,
@@ -2278,22 +2228,24 @@ class ScheduleVariant:
         """All Mon–Thu dates in the schedule period (non-weekend)."""
         idx = self.state.schedule.index
         return [d for d in idx if not bool(self.state.schedule.at[d, "is_weekend"])]
-    
-    def _build_full_varlist(self, days: list[pd.Timestamp], role_order: str = "MB") -> list[tuple[pd.Timestamp, str]]:
+
+    def _build_full_varlist(
+        self, days: list[pd.Timestamp], role_order: str = "MB"
+    ) -> list[tuple[pd.Timestamp, str]]:
         """
         Build a variable list over the entire period's weekdays.
         role_order "MB" → assign MAIN then BACKUP for each day; "BM" → BACKUP then MAIN.
         Skips pre-scheduled cells that already have fixed nurses.
         """
         return self.order_generator.build_full_varlist(days, role_order=role_order)
-    
+
     def _gen_full_orders(
         self,
         days: list[pd.Timestamp],
         max_orders: int = 50,
     ) -> list[list[tuple[pd.Timestamp, str]]]:
         return self.order_generator.gen_full_orders(days, max_orders=max_orders)
-    
+
     def _backtrack_full_order(
         self,
         vars_list: list[tuple[pd.Timestamp, str]],
@@ -2305,11 +2257,11 @@ class ScheduleVariant:
         Requires fully assigning all variables in vars_list for success.
         """
         n = len(vars_list)
-    
+
         def dfs(idx: int) -> bool:
             if time.perf_counter() >= deadline or node_budget[0] <= 0:
                 return False
-    
+
             # advance to next unfilled
             while idx < n:
                 d, r = vars_list[idx]
@@ -2319,20 +2271,20 @@ class ScheduleVariant:
                 idx += 1
             if idx >= n:
                 return True
-    
+
             d0, r0 = vars_list[idx]
             dom = self._eligible_domain(d0, r0)
             if not dom:
                 return False  # must assign this var
-    
+
             for nurse in dom:
                 node_budget[0] -= 1
                 if node_budget[0] <= 0 or time.perf_counter() >= deadline:
                     return False
-    
+
                 if not self._inc_assign(d0, r0, nurse):
                     continue
-    
+
                 # bounded forward check
                 fail = False
                 look_ahead = 8
@@ -2346,16 +2298,16 @@ class ScheduleVariant:
                             break
                         steps += 1
                     j += 1
-    
+
                 if not fail and dfs(idx + 1):
                     return True
-    
+
                 self._dec_assign(d0, r0, nurse)
-    
+
             return False
-    
+
         return dfs(0)
-    
+
     def iterative_full_period_refill(
         self,
         max_orders: int = 10000,
@@ -2363,7 +2315,7 @@ class ScheduleVariant:
         per_attempt_nodes: int = 350000,
         target_spread: tuple[int, int] = (1, 1),
         required_spread: bool = True,
-        tracker: Optional[BestStateTracker] = None,
+        tracker: BestStateTracker | None = None,
     ) -> bool:
         return self.window_optimizer.iterative_full_period_refill(
             max_orders=max_orders,
@@ -2373,35 +2325,35 @@ class ScheduleVariant:
             required_spread=required_spread,
             tracker=tracker,
         )
-    
+
     def _rebalance_all_weeks(self) -> bool:
         """Rebalance all Monday-Thursday weeks."""
         schedule_changed = False
         idx = self.state.schedule.index
         if len(idx) == 0:
             return False
-    
+
         first = idx.min()
         last = idx.max()
-    
+
         # Find the first Monday on/after the first date
         offset = (MONDAY_WEEKDAY - first.weekday()) % 7
         current = first + timedelta(days=offset)
-    
+
         while current <= last:
             week_days = self._get_week_days(current)
             if week_days:
                 changed = self._try_week_permutations_no_revert(week_days)
                 schedule_changed |= changed
             current += timedelta(days=7)
-    
+
         return schedule_changed
-        
-    def _get_week_days(self, monday: pd.Timestamp) -> List[pd.Timestamp]:
+
+    def _get_week_days(self, monday: pd.Timestamp) -> list[pd.Timestamp]:
         """Get Monday–Thursday dates for a given Monday that exist in the index (non-weekend)."""
         idx = self.state.schedule.index
         sched = self.state.schedule
-        days: List[pd.Timestamp] = []
+        days: list[pd.Timestamp] = []
         for i in range(4):  # Mon..Thu
             d = monday + timedelta(days=i)
             if d in idx and not bool(sched.at[d, "is_weekend"]):
@@ -2429,9 +2381,7 @@ class ScheduleVariant:
             if not self._is_pre_scheduled(date, role)
         ]
         if not slots:
-            self._debug_print(
-                f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-slots"
-            )
+            self._debug_print(f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-slots")
             return False
         slot_tuple = tuple(slots)
 
@@ -2453,8 +2403,14 @@ class ScheduleVariant:
             improved = False
 
             perm_iterator = permutations(slot_tuple) if slot_tuple else [tuple()]
+            perm_limit = getattr(self.config, "max_week_permutations", 0)
+            if perm_limit:
+                perm_iterator = islice(perm_iterator, perm_limit)
+            truncated = False
 
             for idx, order in enumerate(perm_iterator, start=1):
+                if perm_limit and idx == perm_limit:
+                    truncated = True
                 if idx == 1 or idx % 50 == 0:
                     self._debug_print(
                         f"[ScheduleVariant] [WeekPerms] friday={friday_label} perm={idx} mode={mode}"
@@ -2493,6 +2449,18 @@ class ScheduleVariant:
                 )
                 return True
 
+            if truncated:
+                # Say so rather than letting a capped search read as an
+                # exhaustive one that found nothing.
+                logger.debug(
+                    "[WeekPerms] friday=%s mode=%s: no improvement within the first "
+                    "%d of %d slot orderings (max_week_permutations)",
+                    friday_label,
+                    mode,
+                    perm_limit,
+                    factorial(len(slot_tuple)),
+                )
+
             self._restore_from_backup(week_days, original_state)
             return False
 
@@ -2502,12 +2470,10 @@ class ScheduleVariant:
         if self.config.allow_one_day_weekday_gap and run_attempt(force_relaxed=True):
             return True
 
-        self._debug_print(
-            f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-change"
-        )
+        self._debug_print(f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-change")
         return False
 
-    def _clear_week_assignments(self, week_days: List[pd.Timestamp]) -> None:
+    def _clear_week_assignments(self, week_days: list[pd.Timestamp]) -> None:
         """Clear modifiable assignments for a week."""
         for d in week_days:
             for role in ("main", "backup"):
@@ -2518,11 +2484,11 @@ class ScheduleVariant:
                     self._dec_assign(d, role, nurse)
 
     # ===== GAP FILLING =====
-    
+
     def iterative_gap_fill_no_revert(
         self,
         max_iterations: int = 40,
-        tracker: Optional[BestStateTracker] = None,
+        tracker: BestStateTracker | None = None,
     ) -> bool:
         """Iteratively fill weekday gaps using tracker-backed snapshots."""
 
@@ -2587,25 +2553,22 @@ class ScheduleVariant:
         if final_quality and initial_quality:
             improved = final_quality.total_gaps < initial_quality.total_gaps or improved
 
-        print(
-            f"[GapFill] Final: {initial_quality} -> {final_quality} "
-            f"(improved={bool(improved)})"
+        logger.info(
+            "[GapFill] Final: %s -> %s (improved=%s)",
+            initial_quality,
+            final_quality,
+            bool(improved),
         )
 
         return bool(final_quality and final_quality.total_gaps == 0)
 
-    def _count_week_gaps(self, week_days: List[pd.Timestamp]) -> int:
+    def _count_week_gaps(self, week_days: list[pd.Timestamp]) -> int:
         """Count gaps in a specific week."""
         return sum(
-            is_empty(self.state.schedule.at[d, r])
-            for d in week_days
-            for r in ("main", "backup")
+            is_empty(self.state.schedule.at[d, r]) for d in week_days for r in ("main", "backup")
         )
 
-    def _try_week_gap_permutations_no_revert(
-        self,
-        week_days: List[pd.Timestamp]
-    ) -> int:
+    def _try_week_gap_permutations_no_revert(self, week_days: list[pd.Timestamp]) -> int:
         """Fill gaps for one week using heuristic search and return remaining gaps."""
 
         if not week_days:
@@ -2628,9 +2591,7 @@ class ScheduleVariant:
         # Clear modifiable cells so the search operates on a clean slate
         self._clear_week_assignments(ordered_days)
 
-        self._debug_print(
-            f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=1"
-        )
+        self._debug_print(f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=1")
         new_gaps = self._fill_week_with_permutation(ordered_days)
 
         if new_gaps < orig_gaps:
@@ -2644,9 +2605,7 @@ class ScheduleVariant:
         if self.config.allow_one_day_weekday_gap:
             self._restore_from_backup(ordered_days, original_state)
             self._clear_week_assignments(ordered_days)
-            self._debug_print(
-                f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=relaxed"
-            )
+            self._debug_print(f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=relaxed")
             relaxed_gaps = self._fill_week_with_permutation(
                 ordered_days,
                 force_relaxed=True,
@@ -2659,16 +2618,10 @@ class ScheduleVariant:
                 return relaxed_gaps
 
         self._restore_from_backup(ordered_days, original_state)
-        self._debug_print(
-            f"[ScheduleVariant] [GapPerms] friday={friday_label} no-change"
-        )
+        self._debug_print(f"[ScheduleVariant] [GapPerms] friday={friday_label} no-change")
         return orig_gaps
 
-    def _restore_from_backup(
-        self, 
-        week_days: List[pd.Timestamp], 
-        state: 'WeekBackup'
-    ) -> None:
+    def _restore_from_backup(self, week_days: list[pd.Timestamp], state: WeekBackup) -> None:
         """Restore week state from backup."""
         sched = self.state.schedule
         sched.loc[week_days, ["main", "backup"]] = state.rows
@@ -2679,7 +2632,7 @@ class ScheduleVariant:
 
     def _fill_week_with_permutation(
         self,
-        week_days: List[pd.Timestamp],
+        week_days: list[pd.Timestamp],
         *,
         force_relaxed: bool = False,
     ) -> int:
@@ -2697,9 +2650,7 @@ class ScheduleVariant:
             return self._count_week_gaps(week_days)
 
         window_label = f"{min(week_days).date()}-{max(week_days).date()}"
-        self._debug_print(
-            f"[ScheduleVariant] [WeekPerm] start {window_label} slots={len(slots)}"
-        )
+        self._debug_print(f"[ScheduleVariant] [WeekPerm] start {window_label} slots={len(slots)}")
 
         cleared_state = self.backup_week_assignments(week_days)
         best_state: WeekBackup | None = None
@@ -2736,7 +2687,11 @@ class ScheduleVariant:
 
         if best_state is not None:
             self._restore_from_backup(week_days, best_state)
-            remaining = best_remaining if best_remaining != float("inf") else self._count_week_gaps(week_days)
+            remaining = (
+                best_remaining
+                if best_remaining != float("inf")
+                else self._count_week_gaps(week_days)
+            )
         else:
             self._restore_from_backup(week_days, cleared_state)
             remaining = self._count_week_gaps(week_days)
@@ -2745,34 +2700,35 @@ class ScheduleVariant:
             f"[ScheduleVariant] [WeekPerm] exhaustive result {window_label} gaps={remaining}"
         )
         return remaining
+
     # ===== DEBUG METHODS =====
-    
+
     def print_current_schedule_state(self) -> None:
         """Debug method to print current schedule state."""
         print("\n==== CURRENT SCHEDULE STATE ====")
-        print(self.state.schedule[['main', 'backup']].to_string())
-        
+        print(self.state.schedule[["main", "backup"]].to_string())
+
         print("\nAssignment Counts:")
         print(f"Main: {dict(self.state.main_assignment_counts)}")
         print(f"Backup: {dict(self.state.backup_assignment_counts)}")
-        
+
         print("\nLast Assignment Dates:")
         last_assign_dict = {
-            k: (v.date() if v is not None else None) 
-            for k, v in self.state.last_assignment.items()
+            k: (v.date() if v is not None else None) for k, v in self.state.last_assignment.items()
         }
         print(last_assign_dict)
-        
+
         print("\nLast Patterns:")
         print(self.state.last_pattern)
-        
+
         print("\nWeekend Tracking:")
         weekend_tracking_dict = {
-            k.date() if isinstance(k, pd.Timestamp) else k: v 
+            k.date() if isinstance(k, pd.Timestamp) else k: v
             for k, v in self.state.weekend_tracking.items()
         }
         print(weekend_tracking_dict)
         print("=" * 50)
+
 
 __all__ = [
     "WeekendPattern",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QMovie
 from PySide6.QtWidgets import (
     QLabel,
@@ -18,7 +18,7 @@ from ..style import UiStyle
 class MainMenu(QWidget):
     def __init__(self, parent):
         super().__init__()
-        self.parent   = parent
+        self.parent = parent
         self.settings = parent.settings
 
         lay = QVBoxLayout(self)
@@ -45,15 +45,15 @@ class MainMenu(QWidget):
 
         # buttons
         for text, name in [
-            ("Manage Nurses",            "manage"),
-            ("Pre-scheduled Assignments","prescheduled"),
-            ("Assignment History",       "assignment_hist"),
-            ("Weekend History",          "weekend_history"),
-            ("View Unavailable Dates",   "view_unavail"),
-            ("Generate Schedule",        "generate"),
-            ("Advanced Weekend Stats",   "advanced_stats"),
-            ("Settings",                 "settings"),
-            ("Quit",                     None)
+            ("Manage Nurses", "manage"),
+            ("Pre-scheduled Assignments", "prescheduled"),
+            ("Assignment History", "assignment_hist"),
+            ("Weekend History", "weekend_history"),
+            ("View Unavailable Dates", "view_unavail"),
+            ("Generate Schedule", "generate"),
+            ("Advanced Weekend Stats", "advanced_stats"),
+            ("Settings", "settings"),
+            ("Quit", None),
         ]:
             btn = QPushButton(text)
             btn.setMinimumHeight(40)

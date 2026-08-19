@@ -202,7 +202,7 @@ class MultiDatePicker(QWidget):
         dow.setContentsMargins(0, 0, 0, 0)
         dow.setSpacing(0)
         self._dow_labels = []
-        for i, txt in enumerate(("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")):
+        for txt in ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
             lbl = QLabel(txt, alignment=Qt.AlignCenter, font=self._DOW_FONT)
             lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             dow.addWidget(lbl)
@@ -243,9 +243,7 @@ class MultiDatePicker(QWidget):
         btn.setIcon(themed_icon(png, self._THEME))
         btn.setIconSize(QSize(44, 44))
         btn.setStyleSheet("border:none;background:transparent;")
-        btn.clicked.connect(
-            self.cal.showPreviousMonth if prev else self.cal.showNextMonth
-        )
+        btn.clicked.connect(self.cal.showPreviousMonth if prev else self.cal.showNextMonth)
         btn.clicked.connect(self._refresh_month)
         layout.addWidget(btn)
         return btn
@@ -294,7 +292,7 @@ class SingleDatePicker(QWidget):
         dow = QHBoxLayout()
         dow.setSpacing(0)
         self.dow_labels = []
-        for i, d in enumerate(("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")):
+        for d in ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
             lbl = QLabel(d, alignment=Qt.AlignCenter, font=self.FONT_DOW)
             lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             dow.addWidget(lbl)

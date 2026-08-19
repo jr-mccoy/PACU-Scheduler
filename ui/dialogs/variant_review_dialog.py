@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .tool_dialog import ToolDialog
 from ..messages import show_info
 from ..services.variant_export import export_variants_calendar_html
 from ..theme import themed_icon
+from .tool_dialog import ToolDialog
 
 
 class VariantReviewDialog(ToolDialog):
@@ -82,9 +82,7 @@ class VariantReviewDialog(ToolDialog):
         nav.setSpacing(16)
         nav.addStretch()
         theme = (
-            self.parent().settings.get("theme")
-            if hasattr(self.parent(), "settings")
-            else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
         )
 
         self.prev_btn = QPushButton("Previous")
@@ -163,9 +161,7 @@ class VariantReviewDialog(ToolDialog):
             return
 
         theme = (
-            self.parent().settings.get("theme")
-            if hasattr(self.parent(), "settings")
-            else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
         )
         fg = QColor("#E8EAF0") if theme == "dark" else QColor("#2C2A27")
 
@@ -183,9 +179,7 @@ class VariantReviewDialog(ToolDialog):
             for c, val in enumerate(values):
                 itm = QTableWidgetItem(str(val))
                 itm.setFlags(Qt.ItemIsEnabled)
-                itm.setTextAlignment(
-                    Qt.AlignCenter if c == 0 else Qt.AlignVCenter | Qt.AlignLeft
-                )
+                itm.setTextAlignment(Qt.AlignCenter if c == 0 else Qt.AlignVCenter | Qt.AlignLeft)
                 itm.setForeground(fg)
                 self.schedule_tbl.setItem(r, c, itm)
 
@@ -233,9 +227,7 @@ class VariantReviewDialog(ToolDialog):
     def apply_theme_update(self):
         """Refresh navigation button icons when theme changes."""
         theme = (
-            self.parent().settings.get("theme")
-            if hasattr(self.parent(), "settings")
-            else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
         )
         self.prev_btn.setIcon(themed_icon("arrowL.png", theme))
         self.next_btn.setIcon(themed_icon("arrowR.png", theme))

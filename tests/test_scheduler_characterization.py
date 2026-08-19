@@ -1,25 +1,20 @@
 import sqlite3
 from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 import pytest
-from scheduler import debug as scheduler_module
 
 from scheduler import (
     BestStateTracker,
     Comparison,
     NurseScheduler,
+    SchedulerConfig,
     ScheduleState,
     ScheduleVariant,
-    SchedulerConfig,
     WeekendHistory,
     WeekendPattern,
 )
+from scheduler import debug as scheduler_module
 
 
 class DummyNurseManager:
@@ -172,6 +167,7 @@ def _assert_weekend_history_consistent(history: WeekendHistory, db_path: Path):
 
 # anchor: class WeekendHistory
 
+
 def test_weekend_history_integrity_operations(temp_weekend_db: Path):
     history = WeekendHistory(str(temp_weekend_db))
     service = history.weekend_service
@@ -247,7 +243,9 @@ def _build_variant(nurses=("Alice", "Bob"), periods=5) -> ScheduleVariant:
     )
 
 
-def _build_scheduler(start="2026-01-02", end="2026-01-04", nurses=("Alice", "Bob")) -> NurseScheduler:
+def _build_scheduler(
+    start="2026-01-02", end="2026-01-04", nurses=("Alice", "Bob")
+) -> NurseScheduler:
     return NurseScheduler(
         start_date=pd.Timestamp(start),
         end_date=pd.Timestamp(end),
@@ -261,6 +259,7 @@ def _build_scheduler(start="2026-01-02", end="2026-01-04", nurses=("Alice", "Bob
 
 
 # anchor: class BestStateTracker
+
 
 def test_tracker_begin_iteration_and_revert_restores_snapshot():
     variant = _build_variant()
@@ -394,6 +393,7 @@ def scheduler_for_modes():
 
 # anchor: def generate_schedule
 
+
 def test_generation_mode_strict_only(monkeypatch, scheduler_for_modes):
     calls = []
 
@@ -445,9 +445,7 @@ def test_strict_then_relaxed_gate_declined_aborts(monkeypatch, scheduler_for_mod
         calls.append(allow_rotation_violations)
         return []
 
-    monkeypatch.setattr(
-        scheduler_for_modes, "generate_all_weekend_variants", fake_generate
-    )
+    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: False,
@@ -466,9 +464,7 @@ def test_strict_then_relaxed_gate_accepted_retries_relaxed(monkeypatch, schedule
         calls.append(allow_rotation_violations)
         return sentinel if allow_rotation_violations else []
 
-    monkeypatch.setattr(
-        scheduler_for_modes, "generate_all_weekend_variants", fake_generate
-    )
+    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: True,
@@ -500,6 +496,7 @@ def test_generation_mode_relaxed_immediately(monkeypatch, scheduler_for_modes):
 
 # anchor: def assign_weekend
 
+
 def test_assign_weekend_records_rotation_repeat_on_variant():
     friday = pd.Timestamp("2026-01-02")
     variant = _build_variant()
@@ -507,9 +504,7 @@ def test_assign_weekend_records_rotation_repeat_on_variant():
 
     variant.assign_weekend(friday, "Alice", "Bob")  # Alice repeats FSF
 
-    assert variant.rotation_violations == [
-        (friday, "Alice", WeekendPattern.FSF.value)
-    ]
+    assert variant.rotation_violations == [(friday, "Alice", WeekendPattern.FSF.value)]
     assert variant.state.rotation_repeats == 1
 
 
@@ -532,9 +527,7 @@ def test_clone_isolates_rotation_violations():
     child.assign_weekend(friday, "Alice", "Bob")
 
     assert parent.rotation_violations == []
-    assert child.rotation_violations == [
-        (friday, "Alice", WeekendPattern.FSF.value)
-    ]
+    assert child.rotation_violations == [(friday, "Alice", WeekendPattern.FSF.value)]
 
 
 def test_collect_rotation_violations_deduplicates_shared_ancestry(scheduler_for_modes):
@@ -561,6 +554,7 @@ def test_collect_rotation_violations_deduplicates_shared_ancestry(scheduler_for_
 
 
 # anchor: _rotation_violation_score
+
 
 def test_metrics_diverge_and_weighted_score_reflects_difference():
     history = StaticWeekendHistory(
@@ -605,8 +599,12 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
     assert rot_viol_a > rot_viol_b
 
     overage = {"Alice": 3, "Bob": 0, "Cara": 0}
-    long_a = scheduler._long_term_score({"Alice": {"total": 4}, "Bob": {"total": 1}, "Cara": {"total": 1}}, overage)
-    long_b = scheduler._long_term_score({"Alice": {"total": 1}, "Bob": {"total": 3}, "Cara": {"total": 1}}, overage)
+    long_a = scheduler._long_term_score(
+        {"Alice": {"total": 4}, "Bob": {"total": 1}, "Cara": {"total": 1}}, overage
+    )
+    long_b = scheduler._long_term_score(
+        {"Alice": {"total": 1}, "Bob": {"total": 3}, "Cara": {"total": 1}}, overage
+    )
     assert long_a > long_b
 
     gap_a = scheduler._weekend_gap_penalty(sched_a)
@@ -614,8 +612,18 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
     assert gap_a != gap_b
 
     candidates = [
-        (0, {"rotation_rep": 2, "gaps": 1, "balance_main": 1, "balance_backup": 1}, nurse_counts_a, sched_a),
-        (1, {"rotation_rep": 0, "gaps": 0, "balance_main": 0, "balance_backup": 0}, nurse_counts_b, sched_b),
+        (
+            0,
+            {"rotation_rep": 2, "gaps": 1, "balance_main": 1, "balance_backup": 1},
+            nurse_counts_a,
+            sched_a,
+        ),
+        (
+            1,
+            {"rotation_rep": 0, "gaps": 0, "balance_main": 0, "balance_backup": 0},
+            nurse_counts_b,
+            sched_b,
+        ),
     ]
     scheduler._score_and_rank_variants(candidates)
     assert candidates[0][1]["weighted_score"] != candidates[1][1]["weighted_score"]
@@ -692,7 +700,11 @@ def test_window_refill_target_hit_short_circuits_before_search(monkeypatch: pyte
     tracker = BestStateTracker(variant)
     tracker.initialize()
 
-    monkeypatch.setattr(variant, "_collect_weekday_windows", lambda window_weeks=3: [[variant.state.schedule.index[0]]])
+    monkeypatch.setattr(
+        variant,
+        "_collect_weekday_windows",
+        lambda window_weeks=3: [[variant.state.schedule.index[0]]],
+    )
 
     def fail_backtrack(*_args, **_kwargs):
         raise AssertionError("backtrack should not run when target already met")

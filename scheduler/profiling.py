@@ -6,7 +6,6 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 try:
     import psutil  # type: ignore
@@ -42,7 +41,7 @@ class WorkerMetrics:
 
     worker_id: int
     variant_idx: int
-    phases: Dict[str, PhaseMetrics] = field(default_factory=dict)
+    phases: dict[str, PhaseMetrics] = field(default_factory=dict)
     total_duration_sec: float = 0.0
     process_id: int = 0
     cpu_count: int = 0
@@ -61,7 +60,7 @@ class WorkerMetrics:
 class PerformanceProfiler:
     """Context manager for profiling a single phase."""
 
-    def __init__(self, phase_name: str, metrics_collector: "MetricsCollector"):
+    def __init__(self, phase_name: str, metrics_collector: MetricsCollector):
         self.phase_name = phase_name
         self.collector = metrics_collector
         self.start_time = 0.0
@@ -128,7 +127,7 @@ class MetricsCollector:
 class PerformanceReport:
     """Aggregates and reports performance metrics across workers."""
 
-    def __init__(self, all_metrics: List[WorkerMetrics]):
+    def __init__(self, all_metrics: list[WorkerMetrics]):
         self.all_metrics = all_metrics
         self.num_workers = len(all_metrics)
 
@@ -146,20 +145,20 @@ class PerformanceReport:
         min_time = min(m.total_duration_sec for m in self.all_metrics)
         max_time = max(m.total_duration_sec for m in self.all_metrics)
 
-        print(f"\nOverall Summary:")
+        print("\nOverall Summary:")
         print(f"  Workers evaluated: {len(self.all_metrics)}")
         print(f"  Total time (all workers): {total_time:.2f}s")
         print(f"  Average time per worker: {avg_time:.2f}s")
         print(f"  Min/Max worker time: {min_time:.2f}s / {max_time:.2f}s")
         print(f"  CPU cores available: {self.all_metrics[0].cpu_count}")
 
-        print(f"\nPhase Breakdown (averaged across workers):")
+        print("\nPhase Breakdown (averaged across workers):")
         self._print_phase_summary()
 
-        print(f"\nResource Usage:")
+        print("\nResource Usage:")
         self._print_resource_summary()
 
-        print(f"\nPer-Worker Details:")
+        print("\nPer-Worker Details:")
         self._print_worker_details()
 
         print("=" * 80 + "\n")
@@ -175,8 +174,12 @@ class PerformanceReport:
 
         phase_stats: dict[str, dict[str, float]] = {}
         for phase in sorted(all_phases):
-            durations = [m.phases[phase].duration_sec for m in self.all_metrics if phase in m.phases]
-            mem_deltas = [m.phases[phase].memory_mb_delta for m in self.all_metrics if phase in m.phases]
+            durations = [
+                m.phases[phase].duration_sec for m in self.all_metrics if phase in m.phases
+            ]
+            mem_deltas = [
+                m.phases[phase].memory_mb_delta for m in self.all_metrics if phase in m.phases
+            ]
 
             if durations:
                 phase_stats[phase] = {
@@ -195,14 +198,18 @@ class PerformanceReport:
             )
 
     def _print_resource_summary(self):
-        total_mem_deltas = [sum(p.memory_mb_delta for p in m.phases.values()) for m in self.all_metrics]
+        total_mem_deltas = [
+            sum(p.memory_mb_delta for p in m.phases.values()) for m in self.all_metrics
+        ]
         if total_mem_deltas:
             avg_mem = sum(total_mem_deltas) / len(total_mem_deltas)
             max_mem = max(total_mem_deltas)
             print(f"  Average memory delta per worker: {avg_mem:+.1f} MB")
             print(f"  Max memory delta (single worker): {max_mem:+.1f} MB")
 
-        peak_mems = [max((p.memory_mb_end for p in m.phases.values()), default=0) for m in self.all_metrics]
+        peak_mems = [
+            max((p.memory_mb_end for p in m.phases.values()), default=0) for m in self.all_metrics
+        ]
         if peak_mems:
             print(f"  Peak memory usage (max across workers): {max(peak_mems):.1f} MB")
 
@@ -228,6 +235,7 @@ class PerformanceReport:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         print(f"Exported metrics to {filename}")
+
 
 __all__ = [
     "PhaseMetrics",

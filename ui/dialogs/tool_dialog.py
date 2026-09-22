@@ -8,12 +8,20 @@ available).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractSpinBox,
     QApplication,
+    QComboBox,
+    QDialogButtonBox,
     QGraphicsDropShadowEffect,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -48,8 +56,13 @@ class ToolDialog(QWidget):
         super().__init__(parent)
 
         self.is_android = _is_android_platform()
+        # Set once accept()/reject() has run, so closing the window afterwards
+        # does not emit a second (contradictory) signal.
+        self._finished = False
         if not self.is_android:
-            self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint)
+            self.setWindowFlags(
+                Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint | Qt.WindowCloseButtonHint
+            )
             self.setWindowModality(Qt.WindowModal)
         if title:
             self.setWindowTitle(title)
@@ -135,17 +148,73 @@ class ToolDialog(QWidget):
         self._body.setLayout(layout)
 
     def open(self):
+        self._finished = False
         self.show()
         self.raise_()
         self.activateWindow()
+        QTimer.singleShot(0, self._focus_first_input)
 
     def accept(self):
+        if self._finished:
+            return
+        self._finished = True
         self.close()
         self.accepted.emit()
 
     def reject(self):
+        if self._finished:
+            return
+        self._finished = True
         self.close()
         self.rejected.emit()
+
+    # ─────────────────────────── keyboard & window close ───────────────────────────
+    def closeEvent(self, ev):
+        # The title-bar close button (or Alt+F4) means "cancel".
+        if not self._finished:
+            self._finished = True
+            self.rejected.emit()
+        super().closeEvent(ev)
+
+    def keyPressEvent(self, ev):
+        key = ev.key()
+        if key == Qt.Key_Escape:
+            self.reject()
+            return
+        if key in (Qt.Key_Return, Qt.Key_Enter) and not isinstance(
+            QApplication.focusWidget(), (QTextEdit, QPlainTextEdit, QAbstractButton)
+        ):
+            button = self.default_button()
+            if button is not None and button.isEnabled():
+                button.click()
+                return
+        super().keyPressEvent(ev)
+
+    def default_button(self) -> QAbstractButton | None:
+        """The button Enter should press: an explicit default, else the accept button."""
+        for btn in self.findChildren(QPushButton):
+            if btn.isDefault() and btn.isVisible():
+                return btn
+        for box in self.findChildren(QDialogButtonBox):
+            for btn in box.buttons():
+                if box.buttonRole(btn) in (
+                    QDialogButtonBox.AcceptRole,
+                    QDialogButtonBox.YesRole,
+                    QDialogButtonBox.ApplyRole,
+                ):
+                    return btn
+        return None
+
+    def _focus_first_input(self) -> None:
+        for w in self._body.findChildren(QWidget):
+            if (
+                isinstance(w, (QLineEdit, QComboBox, QAbstractSpinBox, QTextEdit, QPlainTextEdit))
+                and w.isVisible()
+                and w.isEnabled()
+                and w.width() > 0
+            ):
+                w.setFocus(Qt.TabFocusReason)
+                return
 
     def exec(self, *_, **__):
         raise RuntimeError("Use .open() for non-blocking behaviour")

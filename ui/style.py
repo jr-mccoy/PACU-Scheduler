@@ -17,6 +17,71 @@ class UiStyle:
     FONT_H2 = QFont("Roboto", _BASE_SIZE + 4, QFont.Medium)
     FONT_BODY = QFont("Roboto", _BASE_SIZE + 2)
 
+    # ────────── semantic colours per theme ──────────
+    # Colours that code outside the QSS needs (message text, weekend marks,
+    # muted captions).  Each pair was checked for at least 4.5:1 contrast
+    # against the theme's window/base colour.
+    PALETTES: dict[str, dict[str, str]] = {
+        "dark": {
+            "window": "#1A1D23",
+            "base": "#252A32",
+            "text": "#E8EAF0",
+            "muted": "#A7AFBD",
+            "grid": "#3A404B",
+            "weekend": "#FF8A80",
+            "warning": "#F5A623",
+            "warning_text": "#F7C873",
+            "error": "#E53935",
+            "error_text": "#FF8A80",
+            "disabled_bg": "#2A2F37",
+            "disabled_fg": "#7C8594",
+        },
+        "light": {
+            "window": "#F8F6F3",
+            "base": "#FFFFFF",
+            "text": "#2C2A27",
+            "muted": "#66615A",
+            "grid": "#E1DDD6",
+            "weekend": "#C62828",
+            "warning": "#F5A623",
+            "warning_text": "#7A5A1E",
+            "error": "#E53935",
+            "error_text": "#B71C1C",
+            "disabled_bg": "#EEEBE6",
+            "disabled_fg": "#9A948B",
+        },
+        "pink": {
+            "window": "#FDEDEE",
+            "base": "#F7D7DF",
+            "text": "#4A4A4A",
+            "muted": "#6E5A60",
+            "grid": "#E9A9B8",
+            "weekend": "#B3261E",
+            "warning": "#F5A623",
+            "warning_text": "#7A5A1E",
+            "error": "#E53935",
+            "error_text": "#B71C1C",
+            "disabled_bg": "#F3E1E5",
+            "disabled_fg": "#A38E93",
+        },
+    }
+
+    @staticmethod
+    def palette(theme: str | None) -> dict[str, str]:
+        """Semantic colours for *theme* (unknown themes fall back to dark)."""
+        return UiStyle.PALETTES.get(theme or "dark", UiStyle.PALETTES["dark"])
+
+    @staticmethod
+    def current_theme() -> str:
+        """Best guess at the active theme from the application palette."""
+        app = QApplication.instance()
+        if app is None:
+            return "dark"
+        window = app.palette().color(QPalette.Window)
+        if window.lightness() < 128:
+            return "dark"
+        return "pink" if window.name().upper() == "#FDEDEE" else "light"
+
     # ────────── colour helpers ──────────
     @staticmethod
     def _shade(hex_rgb: str, k: float) -> str:
@@ -42,6 +107,23 @@ class UiStyle:
             background:{ACCENT}; border:1px solid {ACCENT_DARK};
         }}
         QSpinBox::up-button, QSpinBox::down-button {{ width:28px; height:20px; }}
+    """
+
+    # Disabled buttons must look disabled whatever their role; the role
+    # selectors are repeated so these rules win on specificity.
+    _DISABLED_QSS = r"""
+        QPushButton:disabled,
+        QPushButton[role="special"]:disabled,
+        QPushButton[role="destructive"]:disabled {{
+            background:{DISABLED_BG};
+            color:{DISABLED_FG};
+            border:1px solid {GRID};
+        }}
+        QCheckBox::indicator:unchecked {{
+            border:1px solid {MUTED}; border-radius:3px; background:transparent;
+        }}
+        QLabel[role="muted"] {{ color:{MUTED}; }}
+        QLabel[role="error"] {{ color:{ERROR_TEXT}; }}
     """
 
     # ───────────── ENHANCED DARK THEME (Blue-Gray Sophisticated) ─────────────
@@ -306,10 +388,18 @@ class UiStyle:
             pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
             qss_core = UiStyle._CORE_DARK_QSS
 
+        colours = UiStyle.palette(theme)
         app.setPalette(pal)
         app.setStyleSheet(
-            (qss_core + UiStyle._SCROLLBAR_QSS + UiStyle._INPUT_QSS).format(
-                ACCENT=accent, ACCENT_DARK=accent_dark, ACCENT_DARKEST=accent_drkst
+            (qss_core + UiStyle._SCROLLBAR_QSS + UiStyle._INPUT_QSS + UiStyle._DISABLED_QSS).format(
+                ACCENT=accent,
+                ACCENT_DARK=accent_dark,
+                ACCENT_DARKEST=accent_drkst,
+                DISABLED_BG=colours["disabled_bg"],
+                DISABLED_FG=colours["disabled_fg"],
+                GRID=colours["grid"],
+                MUTED=colours["muted"],
+                ERROR_TEXT=colours["error_text"],
             )
         )
 

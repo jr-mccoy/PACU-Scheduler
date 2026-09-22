@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -21,6 +22,16 @@ from PySide6.QtWidgets import (
 from scheduler import MAX_WEEKEND_VARIANTS_RANGE
 
 from ..widgets.common import WrappedCheck
+from .settings_support import (
+    LABELS,
+    ONE_DAY_GAP_HELP,
+    WEIGHTS,
+    add_restore_defaults,
+    apply_tooltips,
+    load_values,
+    validate_and_accept,
+    weight_values,
+)
 from .tool_dialog import ToolDialog
 
 try:  # pragma: no cover - environment-dependent
@@ -136,28 +147,17 @@ class CompactSettingsDialog(ToolDialog):
 
         self.weekend_gap = sb(settings.get("weekend_gap_days"), 7, 90)
         self.min_between = sb(settings.get("min_days_between_assignments"), 0, 7)
-        self.main_factor = sb(settings.get("main_score_factor"), 1, 100)
-        self.backup_factor = sb(settings.get("backup_score_factor"), 1, 100)
-        self.avail_penalty = sb(settings.get("availability_penalty"), 0, 100)
         self.hist_window = sb(settings.get("history_window_days"), 1, 365)
         self.hist_duration = sb(settings.get("history_duration_months"), 1, 60)
         self.variant_cap = sb(settings.get("max_weekend_variants"), *MAX_WEEKEND_VARIANTS_RANGE)
         self.variant_cap.setSpecialValueText("Unlimited")
         self.variant_cap.setSingleStep(100)
         self.variant_cap.setGroupSeparatorShown(True)
-        self.variant_cap.setToolTip(
-            "Weekend combinations kept after each weekend and fully evaluated.\n"
-            "Higher explores more candidate schedules; run time grows roughly\n"
-            "in proportion. Unlimited can take hours on long horizons."
-        )
 
         sched_form.addRow("Weekend gap (days):", self.weekend_gap)
-        sched_form.addRow("Min days between:", self.min_between)
-        sched_form.addRow("Main score factor:", self.main_factor)
-        sched_form.addRow("Backup score factor:", self.backup_factor)
-        sched_form.addRow("Availability penalty:", self.avail_penalty)
-        sched_form.addRow("History window (days):", self.hist_window)
-        sched_form.addRow("History duration (mo):", self.hist_duration)
+        sched_form.addRow("Days off between shifts:", self.min_between)
+        sched_form.addRow("Fairness window (days):", self.hist_window)
+        sched_form.addRow("History to load (months):", self.hist_duration)
         sched_form.addRow("Weekend variants:", self.variant_cap)
 
         self.tabs.addTab(sched_tab, "Schedule")
@@ -167,9 +167,9 @@ class CompactSettingsDialog(ToolDialog):
         dbg_outer.setContentsMargins(6, 6, 6, 6)
         dbg_outer.setSpacing(8)
 
-        self.measure_chk = QCheckBox("Measure phase times")
+        self.measure_chk = QCheckBox("Save phase timings with each run")
         self.measure_chk.setChecked(settings.get("measure_phase_times"))
-        self.analyse_chk = QCheckBox("Analyse initial gaps")
+        self.analyse_chk = QCheckBox("Save a weekday gap report with each run")
         self.analyse_chk.setChecked(settings.get("analyse_initial_weekday_gaps"))
         self.assignment_debug_chk = QCheckBox("Enable structured assignment debug logging")
         self.assignment_debug_chk.setChecked(settings.get("assignment_debug_enabled"))
@@ -201,41 +201,50 @@ class CompactSettingsDialog(ToolDialog):
         relax_tab = QWidget()
         relax_form = make_form(relax_tab)
 
-        self.wed_main = QCheckBox("Allow MAIN on Wednesday")
-        self.wed_main.setChecked(settings.get("allow_post_weekend_wednesday_main"))
-        self.wed_backup = QCheckBox("Allow BACKUP on Wednesday")
-        self.wed_backup.setChecked(settings.get("allow_post_weekend_wednesday_backup"))
-        self.thu_main = QCheckBox("Allow MAIN on Thursday")
-        self.thu_main.setChecked(settings.get("allow_post_weekend_thursday_main"))
-        self.thu_backup = QCheckBox("Allow BACKUP on Thursday")
-        self.thu_backup.setChecked(settings.get("allow_post_weekend_thursday_backup"))
-
-        self.hm_backup = WrappedCheck(
-            "Allow Mon–Wed / Tue–Thu one-day gap (both BACKUP)",
-            checked=settings.get("allow_midweek_pair_backup_only"),
-        )
-        self.hm_mixed = WrappedCheck(
-            "Allow Mon–Wed / Tue–Thu one-day gap (MAIN + BACKUP)",
-            checked=settings.get("allow_midweek_pair_mixed"),
-        )
-
+        relax_form.addRow(QLabel("<b>After a worked weekend, allow…</b>"))
+        self.wed_main = WrappedCheck(LABELS["allow_post_weekend_wednesday_main"])
+        self.wed_backup = WrappedCheck(LABELS["allow_post_weekend_wednesday_backup"])
+        self.thu_main = WrappedCheck(LABELS["allow_post_weekend_thursday_main"])
+        self.thu_backup = WrappedCheck(LABELS["allow_post_weekend_thursday_backup"])
         for cb in (self.wed_main, self.wed_backup, self.thu_main, self.thu_backup):
             relax_form.addRow("", cb)
-        relax_form.addRow("", self.hm_backup)
-        relax_form.addRow("", self.hm_mixed)
 
-        self.one_day_gap = WrappedCheck(
-            "Enable one-day weekday gap fallback (Mon–Wed / Tue–Thu) outside pre/post-weekend",
-            checked=settings.get("allow_one_day_weekday_gap"),
-        )
-        relax_form.addRow("", self.one_day_gap)
+        relax_form.addRow(QLabel("<b>One-day gap between weekday shifts</b>"))
+        gap_help = QLabel(ONE_DAY_GAP_HELP)
+        gap_help.setWordWrap(True)
+        gap_help.setProperty("role", "muted")
+        relax_form.addRow(gap_help)
+        self.one_day_gap = WrappedCheck(LABELS["allow_one_day_weekday_gap"])
+        self.hm_backup = WrappedCheck(LABELS["allow_midweek_pair_backup_only"])
+        self.hm_mixed = WrappedCheck(LABELS["allow_midweek_pair_mixed"])
+        for cb in (self.one_day_gap, self.hm_backup, self.hm_mixed):
+            relax_form.addRow("", cb)
+        self.one_day_gap.toggled.connect(lambda on: self.hm_backup.setEnabled(not on))
+        self.one_day_gap.toggled.connect(lambda on: self.hm_mixed.setEnabled(not on))
 
         self.tabs.addTab(relax_tab, "Relaxation")
+
+        weights_tab = QWidget()
+        weights_form = make_form(weights_tab)
+        weights_help = QLabel("How much each factor counts when ranking options.")
+        weights_help.setWordWrap(True)
+        weights_help.setProperty("role", "muted")
+        weights_form.addRow(weights_help)
+        for _key, attr, label, _tip in WEIGHTS:
+            w = QDoubleSpinBox()
+            w.setDecimals(3)
+            w.setRange(0.0, 1.0)
+            w.setSingleStep(0.05)
+            w.setMinimumHeight(40)
+            setattr(self, attr, w)
+            weights_form.addRow(label, w)
+        self.tabs.addTab(weights_tab, "Weights")
 
         self.setLayout(body)
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
+        add_restore_defaults(self, btns)
+        btns.accepted.connect(lambda: validate_and_accept(self))
         btns.rejected.connect(self.reject)
         if getattr(self, "is_android", False):
             for b in btns.buttons():
@@ -245,6 +254,10 @@ class CompactSettingsDialog(ToolDialog):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.viewport().installEventFilter(self)
 
+        load_values(self, settings.all() if hasattr(settings, "all") else dict(settings))
+        apply_tooltips(self)
+        self.analyse_chk.toggled.connect(self.gap_file.setEnabled)
+        self.gap_file.setEnabled(self.analyse_chk.isChecked())
         self.resize(560, 680)
 
     def showEvent(self, e):
@@ -286,25 +299,18 @@ class CompactSettingsDialog(ToolDialog):
             page.setMinimumWidth(0)
             page.setMaximumWidth(vw)
         wrap_width = vw - 60
-        if hasattr(self, "hm_backup"):
-            self.hm_backup.set_wrap_width(wrap_width)
-        if hasattr(self, "hm_mixed"):
-            self.hm_mixed.set_wrap_width(wrap_width)
-        if hasattr(self, "one_day_gap"):
-            self.one_day_gap.set_wrap_width(wrap_width)
+        for check in self.findChildren(WrappedCheck):
+            check.set_wrap_width(wrap_width)
 
     def values(self) -> dict:
         return {
             "theme": self.theme_combo.currentText(),
             "font_size": self.font_spin.value(),
-            "accent_color": self.accent_edit.text(),
+            "accent_color": self.accent_edit.text().strip(),
             "show_gif": self.gif_chk.isChecked(),
             "calendar_grid": self.grid_chk.isChecked(),
             "weekend_gap_days": self.weekend_gap.value(),
             "min_days_between_assignments": self.min_between.value(),
-            "main_score_factor": self.main_factor.value(),
-            "backup_score_factor": self.backup_factor.value(),
-            "availability_penalty": self.avail_penalty.value(),
             "history_window_days": self.hist_window.value(),
             "history_duration_months": self.hist_duration.value(),
             "max_weekend_variants": self.variant_cap.value(),
@@ -320,6 +326,7 @@ class CompactSettingsDialog(ToolDialog):
             "allow_midweek_pair_backup_only": self.hm_backup.isChecked(),
             "allow_midweek_pair_mixed": self.hm_mixed.isChecked(),
             "allow_one_day_weekday_gap": self.one_day_gap.isChecked(),
+            "scoring_weights": weight_values(self),
         }
 
 

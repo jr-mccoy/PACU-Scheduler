@@ -47,6 +47,16 @@ def themed_icon(basename: str, theme: str) -> QIcon:
     return QIcon(themed_file(basename, theme))
 
 
+def arrow_icon(prev: bool, theme: str) -> QIcon | None:
+    """The optional ``arrowL.png``/``arrowR.png`` artwork, or None if absent.
+
+    The images are not part of the repository; callers fall back to the
+    platform's standard arrow icon when they are missing.
+    """
+    path = themed_file("arrowL.png" if prev else "arrowR.png", theme)
+    return QIcon(path) if os.path.exists(path) else None
+
+
 def _shade(hex_rgb: str, k: float) -> str:
     """Deprecated wrapper; use ``ui.theme.shade_color``."""
     warnings.warn(
@@ -58,11 +68,16 @@ def _shade(hex_rgb: str, k: float) -> str:
 
 
 def _apply_header(
-    cal: QCalendarWidget, *, accent="#5C8DBC", fg_white="#FFFFFF", sat_sun="#E53935"
+    cal: QCalendarWidget,
+    *,
+    accent="#5C8DBC",
+    fg_white="#FFFFFF",
+    sat_sun="#E53935",
+    grid: bool = True,
 ) -> None:
     """
     Style the built-in header strip using the supplied accent.
-    Keeps week-numbers hidden and Sunday/Saturday red.
+    Keeps week-numbers hidden and Sunday/Saturday in ``sat_sun``.
     """
     accent = shade_color(accent, 1.0)
     fg_white = shade_color(fg_white, 1.0)
@@ -95,10 +110,17 @@ def _apply_header(
     fmt.setForeground(QColor(sat_sun))
     cal.setWeekdayTextFormat(Qt.Saturday, fmt)
     cal.setWeekdayTextFormat(Qt.Sunday, fmt)
-    cal.setGridVisible(True)
+    cal.setGridVisible(grid)
 
 
-def apply_theme_to_calendar(cal: QCalendarWidget, theme: str, accent: str) -> None:
+def weekend_color(theme: str) -> str:
+    """Weekend day-number colour with readable contrast on the calendar base."""
+    return {"dark": "#FF8A80", "light": "#C62828"}.get(theme, "#B3261E")
+
+
+def apply_theme_to_calendar(
+    cal: QCalendarWidget, theme: str, accent: str, *, grid: bool = True
+) -> None:
     """
     Give a vanilla QCalendarWidget a dark / light / pink look and apply the
     accent colour for selections.  Uses the generic _apply_header() helper
@@ -160,7 +182,7 @@ def apply_theme_to_calendar(cal: QCalendarWidget, theme: str, accent: str) -> No
         """)
 
     # header strip (days of week) + red Sat/Sun text
-    _apply_header(cal, accent=accent, fg_white="#FFFFFF", sat_sun="#E53935")
+    _apply_header(cal, accent=accent, fg_white="#FFFFFF", sat_sun=weekend_color(theme), grid=grid)
 
 
 def _apply_pink_header(
@@ -236,6 +258,8 @@ __all__ = [
     "shade_color",
     "themed_file",
     "themed_icon",
+    "arrow_icon",
+    "weekend_color",
     "_apply_header",
     "_apply_pink_header",
     "apply_theme_to_calendar",

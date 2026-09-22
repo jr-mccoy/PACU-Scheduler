@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+import os
+from datetime import date, timedelta
 
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QDate, QElapsedTimer, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
+    QBoxLayout,
     QLabel,
     QProgressDialog,
     QPushButton,
@@ -15,21 +18,45 @@ from PySide6.QtWidgets import (
 )
 
 from scheduler import AssignmentHistory, WeekendHistory
+from scheduler.exporters import write_gap_report
 
-from ..config import DB_NAME
+from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
 from ..dialogs.rotation_violation_dialog import RotationViolationDialog
 from ..dialogs.variant_review_dialog import VariantReviewDialog
-from ..messages import show_error, show_info, show_warning
-from ..style import UiStyle
+from ..messages import show_error, show_info
+from ..widgets.common import action_button, back_button, screen_title
 from ..widgets.date_pickers import MultiDatePicker, SingleDatePicker
 from ..worker_threads import ScheduleProgressWorker
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_SPAN_DAYS = 28  # four weeks, start day included
+
+
+def describe_range(start: date, end: date) -> str:
+    """One-line summary of a scheduling horizon, e.g. for the screen footer."""
+    if end < start:
+        return ""
+    days = (end - start).days + 1
+    weekends = sum(1 for i in range(days) if (start + timedelta(days=i)).weekday() == 5)
+    same_year = start.year == end.year
+    first = start.strftime("%a %b %d") if same_year else start.strftime("%a %b %d, %Y")
+    last = end.strftime("%a %b %d, %Y")
+    return (
+        f"{first} – {last}  ·  {days} day{'s' if days != 1 else ''}"
+        f"  ·  {weekends} weekend{'s' if weekends != 1 else ''}"
+    )
+
+
+def _qdate_to_date(qd: QDate) -> date:
+    return date(qd.year(), qd.month(), qd.day())
+
 
 class ScheduleGenerationScreen(QWidget):
-    """
-    Lets the user choose start / end dates (matching SingleDatePicker look),
-    then runs schedule generation in a background thread, with per-nurse rotation violation control.
-    """
+    """Pick a start and end date, then generate and review candidate schedules."""
+
+    # Side by side when there is room for two calendars, stacked otherwise.
+    _SIDE_BY_SIDE_MIN_WIDTH = 960
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -38,44 +65,94 @@ class ScheduleGenerationScreen(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        accent = parent.settings.get("accent_color")
-        theme = parent.settings.get("theme")
+        lay.addWidget(screen_title("Generate Schedule"))
 
-        # start / end pickers -------------------------------------------------
-        for label_txt, attr in [("Start Date", "_start_cal"), ("End Date", "_end_cal")]:
+        settings = parent.settings
+        accent = settings.get("accent_color")
+        theme = settings.get("theme")
+        grid = bool(settings.get("calendar_grid"))
+
+        today = QDate.currentDate()
+        self._pickers = QBoxLayout(QBoxLayout.LeftToRight)
+        self._pickers.setSpacing(24)
+        for label_txt, attr, initial in [
+            ("Start date", "_start_cal", today),
+            ("End date", "_end_cal", today.addDays(DEFAULT_SPAN_DAYS - 1)),
+        ]:
+            col = QVBoxLayout()
+            col.setSpacing(6)
             lbl = QLabel(label_txt, alignment=Qt.AlignCenter)
-            lbl.setFont(UiStyle.TITLE_FONT)
-            lay.addWidget(lbl)
-
-            picker = SingleDatePicker(accent=accent, initial=QDate.currentDate(), theme=theme)
-            lay.addWidget(picker)
+            font = lbl.font()
+            font.setBold(True)
+            font.setPointSize(font.pointSize() + 2)
+            lbl.setFont(font)
+            col.addWidget(lbl)
+            picker = SingleDatePicker(accent=accent, initial=initial, theme=theme, grid=grid)
+            picker.dateChanged.connect(self._update_summary)
+            col.addWidget(picker, 1)
+            self._pickers.addLayout(col, 1)
             setattr(self, attr, picker)
+        lay.addLayout(self._pickers, 1)
 
-        gen_btn = QPushButton("Generate Schedule")
-        gen_btn.setFont(QFont("Roboto", 16))
-        gen_btn.setMinimumHeight(48)
-        gen_btn.clicked.connect(self._on_generate)
-        lay.addWidget(gen_btn)
+        self.summary = QLabel(alignment=Qt.AlignCenter)
+        self.summary.setWordWrap(True)
+        lay.addWidget(self.summary)
 
-        back = QPushButton("Back", minimumHeight=48)
-        back.setProperty("role", "special")
-        back.setFont(QFont("Roboto", 16))
-        back.clicked.connect(lambda: parent.switch_frame("main"))
-        lay.addWidget(back)
+        self.gen_btn = action_button(
+            "Generate Schedule", "special", tooltip="Build and rank candidate schedules"
+        )
+        self.gen_btn.clicked.connect(self._on_generate)
+        lay.addWidget(self.gen_btn)
+
+        lay.addWidget(back_button(self, parent))
 
         # placeholders
+        self._running = False
         self.wh = self.ah = self.backup = None
-        self._progress = None
-        self.worker = None
+        self._progress: QProgressDialog | None = None
+        self.worker: ScheduleProgressWorker | None = None
         self._variant_dialog = None
+        self._stage_text = ""
+        self._done = self._total = 0
+        self._elapsed = QElapsedTimer()
+        self._tick = QTimer(self)
+        self._tick.setInterval(1000)
+        self._tick.timeout.connect(self._refresh_progress_label)
 
-    def _on_generate(self):
-        s_iso = self._start_cal.iso()
-        e_iso = self._end_cal.iso()
-        start = datetime.strptime(s_iso, "%Y-%m-%d").date()
-        end = datetime.strptime(e_iso, "%Y-%m-%d").date()
+        self._update_summary()
+
+    # ─────────────────────────── range selection ───────────────────────────
+    def selected_range(self) -> tuple[date, date]:
+        return _qdate_to_date(self._start_cal.qdate()), _qdate_to_date(self._end_cal.qdate())
+
+    def _update_summary(self, *_):
+        start, end = self.selected_range()
+        running = self._running
         if end < start:
-            show_warning(self, "Error", "End date is before start date")
+            self.summary.setText("The end date is before the start date. Pick a later end date.")
+            self.summary.setProperty("role", "error")
+            self.gen_btn.setEnabled(False)
+        else:
+            self.summary.setText(describe_range(start, end))
+            self.summary.setProperty("role", None)
+            self.gen_btn.setEnabled(not running)
+        self.summary.style().unpolish(self.summary)
+        self.summary.style().polish(self.summary)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        direction = (
+            QBoxLayout.LeftToRight
+            if self.width() >= self._SIDE_BY_SIDE_MIN_WIDTH
+            else QBoxLayout.TopToBottom
+        )
+        if self._pickers.direction() != direction:
+            self._pickers.setDirection(direction)
+
+    # ─────────────────────────── generation ───────────────────────────
+    def _on_generate(self):
+        start, end = self.selected_range()
+        if end < start or self._running:
             return
 
         # backup histories ---------------------------------------------------
@@ -91,121 +168,236 @@ class ScheduleGenerationScreen(QWidget):
             if not accepted:
                 return
             allow, nurses_allowed = dlg.get_values()
-
-            # Now show progress dialog and launch worker
-            if self._progress:
-                self._progress.cancel()
-            self._progress = QProgressDialog("Preparing…", None, 0, 100, self)
-            self._progress.setWindowTitle("Generating Schedules")
-            self._progress.setWindowModality(Qt.WindowModal)
-            self._progress.setCancelButton(None)
-            self._progress.setMinimumDuration(0)
-            self._progress.setValue(0)
-            self._progress.setFixedSize(320, 120)
-            if theme == "dark":
-                dlg_bg = "#2D3238"
-                text = "#E8EAF0"
-                bar_bg = "#3A404B"
-            elif theme == "light":
-                dlg_bg = "#F8F6F3"
-                text = "#2C2A27"
-                bar_bg = "#FFFFFF"
-            else:  # pink
-                dlg_bg = "#F28AAC"
-                text = "#FFFFFF"
-                bar_bg = "#FFFFFF"
-            self._progress.setStyleSheet(f"""
-                QProgressDialog {{
-                    background-color:{dlg_bg};
-                    border:2px solid {accent};
-                    border-radius:16px;
-                    padding:10px; font-size:16px; color:{text};
-                }}
-                QProgressDialog QLabel {{ color:{text}; }}
-                QProgressBar {{
-                    height:20px; border-radius:10px;
-                    background:{bar_bg}; text-align:center;
-                    border:1px solid {accent};
-                }}
-                QProgressBar::chunk {{
-                    background:{accent}; border-radius:10px;
-                }}
-            """)
-            self._progress.show()
-
-            # Launch worker with allow/nurses_allowed
-            self.worker = ScheduleProgressWorker(
-                start,
-                end,
-                allow_rotation_violations=allow,
-                nurses_allowed_rotation_violation=nurses_allowed,
-                settings=self.parent.settings,
-            )
-            self.worker.progress.connect(self._on_progress)
-            self.worker.error.connect(self._on_worker_error)
-            self.worker.finished.connect(self._on_worker_finished)
-            self.worker.start()
+            self._start_worker(start, end, allow, nurses_allowed)
 
         dlg.accepted.connect(lambda: after_dialog(True))
         dlg.rejected.connect(lambda: after_dialog(False))
         dlg.open()
 
-    def _on_progress(self, done: int, total: int):
-        pct = int(100 * done / total) if total else 0
-        self._progress.setMaximum(100)
-        self._progress.setValue(pct)
-        self._progress.setLabelText(f"Processing {done}/{total}  ({pct}%)")
+    def _start_worker(self, start: date, end: date, allow: bool, nurses_allowed: list[str]):
+        self._open_progress()
+        self.worker = ScheduleProgressWorker(
+            start,
+            end,
+            allow_rotation_violations=allow,
+            nurses_allowed_rotation_violation=nurses_allowed,
+            settings=self.parent.settings,
+        )
+        self.worker.stage.connect(self._on_stage)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.error.connect(self._on_worker_error)
+        self.worker.cancelled.connect(self._on_worker_cancelled)
+        self.worker.finished.connect(self._on_worker_finished)
+        self._running = True
+        self._elapsed.start()
+        self._tick.start()
+        self._update_summary()
+        self.worker.start()
 
-    def _on_worker_error(self, msg: str):
-        self._progress.cancel()
-        show_error(self, "Error", msg)
+    def _open_progress(self):
+        if self._progress:
+            self._progress.reset()
+            self._progress.close()
+        theme = self.parent.settings.get("theme")
+        accent = self.parent.settings.get("accent_color")
+        self._stage_text = "Preparing…"
+        self._done = self._total = 0
+
+        progress = QProgressDialog(self._stage_text, "Cancel", 0, 0, self)
+        self._cancel_btn = QPushButton("Cancel")
+        progress.setCancelButton(self._cancel_btn)
+        progress.setWindowTitle("Generating Schedules")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setMinimumWidth(420)
+        if theme == "dark":
+            dlg_bg, text, bar_bg = "#2D3238", "#E8EAF0", "#3A404B"
+        elif theme == "light":
+            dlg_bg, text, bar_bg = "#F8F6F3", "#2C2A27", "#FFFFFF"
+        else:  # pink
+            dlg_bg, text, bar_bg = "#FDEDEE", "#4A4A4A", "#FFFFFF"
+        progress.setStyleSheet(f"""
+            QProgressDialog {{
+                background-color:{dlg_bg};
+                border:2px solid {accent};
+                border-radius:16px;
+                padding:10px; font-size:15px; color:{text};
+            }}
+            QProgressDialog QLabel {{ color:{text}; }}
+            QProgressBar {{
+                height:20px; border-radius:10px;
+                background:{bar_bg}; text-align:center;
+                border:1px solid {accent};
+            }}
+            QProgressBar::chunk {{
+                background:{accent}; border-radius:10px;
+            }}
+        """)
+        progress.canceled.connect(self._on_cancel_requested)
+        progress.show()
+        self._progress = progress
+
+    def _on_cancel_requested(self):
+        if self.worker is None or not self._running:
+            return
+        self.worker.requestInterruption()
+        self._stage_text = "Cancelling… (finishing the current step)"
+        if self._progress:
+            # QProgressDialog hides itself on cancel; keep it up until the
+            # worker actually stops so the screen cannot start a second run.
+            self._cancel_btn.setText("Cancelling…")
+            self._cancel_btn.setEnabled(False)
+            self._progress.show()
+        self._refresh_progress_label()
+
+    def _on_stage(self, text: str):
+        if self.worker is not None and self.worker.isInterruptionRequested():
+            return
+        self._stage_text = text
+        self._refresh_progress_label()
+
+    def _on_progress(self, done: int, total: int):
+        self._done, self._total = done, total
+        if self._progress:
+            self._progress.setRange(0, max(total, 1))
+            self._progress.setValue(done)
+        self._refresh_progress_label()
+
+    def _refresh_progress_label(self):
+        if not self._progress:
+            return
+        secs = self._elapsed.elapsed() // 1000 if self._elapsed.isValid() else 0
+        elapsed = f"{secs // 60}:{secs % 60:02d}"
+        lines = [self._stage_text]
+        if self._total:
+            lines.append(f"{self._done} of {self._total} evaluated  ·  elapsed {elapsed}")
+        else:
+            lines.append(f"Elapsed {elapsed}")
+        self._progress.setLabelText("\n".join(lines))
+
+    def _close_progress(self):
+        self._tick.stop()
+        if self._progress:
+            self._progress.reset()
+            self._progress.close()
+            self._progress = None
+
+    def _restore_backup(self):
         if self.wh and self.backup:
             self.wh.restore(self.backup)
 
+    def _finish_run(self):
+        self._running = False
+        self._close_progress()
+        self._update_summary()
+
+    def _on_worker_cancelled(self):
+        self._finish_run()
+        self._restore_backup()
+        show_info(self, "Generation cancelled", "No schedule was generated. Nothing was changed.")
+
+    def _on_worker_error(self, trace: str):
+        self._finish_run()
+        self._restore_backup()
+        show_error(
+            self,
+            "Schedule generation failed",
+            "Something went wrong while generating schedules, so nothing was changed. "
+            "Use “Show details” for the technical error to include in a bug report.",
+            details=trace,
+        )
+
     def apply_theme_update(self) -> None:
         """Apply theme and accent to calendar pickers when theme changes."""
-        theme = self.parent.settings.get("theme")
-        accent = self.parent.settings.get("accent_color")
+        settings = self.parent.settings
+        theme = settings.get("theme")
+        accent = settings.get("accent_color")
+        grid = bool(settings.get("calendar_grid"))
 
         for picker in self.findChildren(MultiDatePicker):
-            picker.set_theme(theme, accent)
+            picker.set_theme(theme, accent, grid=grid)
         for picker in self.findChildren(SingleDatePicker):
-            picker.set_theme(theme, accent)
+            picker.set_theme(theme, accent, grid=grid)
 
     def _on_worker_finished(self, variants, scheduler, wh):
         from ..services.variant_export import _save_outputs_for_variants
 
-        # hide progress bar
-        if self._progress:
-            self._progress.cancel()
-
         # Guard: no feasible candidates
         if not variants:
+            self._finish_run()
+            self._restore_backup()
             show_info(
                 self,
                 "No feasible schedules",
-                "No valid schedules were generated for this date range and constraints.",
+                "No schedule satisfies every rule for this date range. Things to try:\n\n"
+                "• Raise “Weekend variants to evaluate” in Settings (or set it to "
+                "Unlimited); a low cap can prune the only workable weekend pattern.\n"
+                "• Allow rotation violations for some nurses when you generate.\n"
+                "• Enable a post-weekend or one-day-gap relaxation in Settings.\n"
+                "• Check for conflicting pre-scheduled assignments or time off.",
             )
-            if self.wh and self.backup:
-                self.wh.restore(self.backup)
             return
 
-        # ALWAYS save HTML + PDFs to a timestamped folder.
+        # Save HTML + PDFs to a timestamped folder; the review dialog links to it.
+        self._on_stage("Saving PDF and HTML copies…")
+        QApplication.processEvents()
+        failures: list[str] = []
+        out_dir = None
+        export_error = None
         try:
-            out_dir = _save_outputs_for_variants(variants, scheduler, top_n=min(5, len(variants)))
-            show_info(
-                self,
-                "Schedules exported",
-                f"Saved calendar HTML and PDFs to:\n{out_dir}\n\n"
-                "Open them manually to review. You can still use the in-app review now.",
+            out_dir = _save_outputs_for_variants(
+                variants,
+                scheduler,
+                top_n=min(5, len(variants)),
+                debug_save_variants=DEBUG_SAVE_VARIANTS,
+                failures=failures,
             )
+            if failures:
+                export_error = "; ".join(failures)
         except Exception as e:
-            show_warning(self, "Export failed", f"Could not save schedules:\n{e}")
+            logger.exception("Exporting schedules failed")
+            export_error = str(e)
 
-        # Proceed to the normal review dialog
-        self._variant_dialog = VariantReviewDialog(self.parent, variants, wh, self.ah, self.backup)
-        self._variant_dialog.rejected.connect(lambda: self.wh.restore(self.backup))
+        if out_dir:
+            self._write_diagnostics(scheduler, out_dir)
+
+        self._finish_run()
+
+        # Proceed to the review dialog
+        self._variant_dialog = VariantReviewDialog(
+            self.parent,
+            variants,
+            wh,
+            self.ah,
+            self.backup,
+            out_dir=out_dir,
+            export_error=export_error,
+        )
+        self._variant_dialog.rejected.connect(self._restore_backup)
         self._variant_dialog.open()
 
+    def _write_diagnostics(self, scheduler, out_dir: str) -> None:
+        """Write the opt-in diagnostics from Settings next to the exported PDFs."""
+        settings = self.parent.settings
+        worker = self.worker
+        if worker is None:
+            return
+        if settings.get("measure_phase_times") and worker.worker_metrics:
+            try:
+                scheduler._report_performance_metrics(
+                    worker.worker_metrics, os.path.join(out_dir, "performance_metrics.json")
+                )
+            except Exception:
+                logger.exception("Writing performance metrics failed")
+        if settings.get("analyse_initial_weekday_gaps") and worker.all_candidates:
+            name = settings.get("gap_report_file") or "weekday_gap_report.txt"
+            path = name if os.path.isabs(name) else os.path.join(out_dir, name)
+            try:
+                write_gap_report(worker.all_candidates, path)
+            except Exception:
+                logger.exception("Writing the weekday gap report failed")
 
-__all__ = ["ScheduleGenerationScreen"]
+
+__all__ = ["ScheduleGenerationScreen", "describe_range"]

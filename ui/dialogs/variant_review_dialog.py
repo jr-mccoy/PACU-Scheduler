@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+import os
+
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -16,109 +19,212 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..messages import show_info
+from ..messages import confirm, show_info
 from ..services.variant_export import export_variants_calendar_html
-from ..theme import themed_icon
+from ..style import UiStyle
+from ..widgets.common import add_shortcut, set_role
 from .tool_dialog import ToolDialog
+
+# (stats key, label, tooltip) — shown for the variant on screen.
+METRICS = [
+    (
+        "weighted_score",
+        "Score",
+        "Overall ranking score combining every metric below with the scoring weights "
+        "from Settings. Lower is better; options are listed best first.",
+    ),
+    (
+        "gaps",
+        "Unfilled slots",
+        "Main/Backup slots the scheduler could not fill. Ideally 0.",
+    ),
+    (
+        "balance_main",
+        "Main spread",
+        "Difference between the most and fewest Main shifts any nurse gets. Lower is fairer.",
+    ),
+    (
+        "balance_backup",
+        "Backup spread",
+        "Difference between the most and fewest Backup shifts any nurse gets. Lower is fairer.",
+    ),
+    (
+        "rotation_rep",
+        "Rotation repeats",
+        "Weekends where a nurse repeats the pattern (FSF/SFS) they worked last time "
+        "instead of alternating. Ideally 0.",
+    ),
+]
+
+
+def _format_metric(key: str, value) -> str:
+    if value is None:
+        return "—"
+    if key == "weighted_score":
+        try:
+            return f"{float(value):.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
 
 
 class VariantReviewDialog(ToolDialog):
-    """Touch-friendly review of schedule variants. Prev/Next arrows obey theme."""
+    """Review the ranked schedule options, then apply one or close without applying."""
 
-    _ROW_H = 18
-    _HEAD_FONT = QFont("Roboto", 14, QFont.Bold)
+    _ROW_H = 26
+    _HEAD_FONT = QFont("Roboto", 16, QFont.Bold)
     _CELL_FONT = QFont("Roboto", 12)
 
-    def __init__(self, parent, variants, weekend_history, assignment_history, backup):
+    def __init__(
+        self,
+        parent,
+        variants,
+        weekend_history,
+        assignment_history,
+        backup,
+        *,
+        out_dir: str | None = None,
+        export_error: str | None = None,
+    ):
         super().__init__(parent, title="Review Schedules")
         self.variants = variants
         self.wh = weekend_history
         self.ah = assignment_history
         self._backup = backup
+        self._out_dir = out_dir
+        self._export_error = export_error
         self._cur = 0
         self._build_ui()
         QTimer.singleShot(0, self._update_page)
         self.showMaximized()
 
+    def _theme(self) -> str:
+        parent = self.parent()
+        return parent.settings.get("theme") if hasattr(parent, "settings") else "dark"
+
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setContentsMargins(20, 20, 20, 20)
         outer.setSpacing(12)
+
+        # Where the automatic export went, with a way to get there.
+        if self._out_dir or self._export_error:
+            banner = QFrame()
+            banner.setObjectName("exportBanner")
+            banner.setStyleSheet(
+                "QFrame#exportBanner { border:1px solid palette(mid); border-radius:6px; }"
+            )
+            row = QHBoxLayout(banner)
+            row.setContentsMargins(12, 8, 12, 8)
+            if self._export_error:
+                msg = QLabel(f"Could not save the PDF/HTML copies: {self._export_error}")
+                msg.setProperty("role", "error")
+            else:
+                msg = QLabel(f"PDF and HTML copies of these options were saved to {self._out_dir}")
+                msg.setProperty("role", "muted")
+            msg.setWordWrap(True)
+            msg.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.addWidget(msg, 1)
+            if self._out_dir and not self._export_error:
+                open_btn = QPushButton("Open Folder")
+                open_btn.setAutoDefault(False)
+                open_btn.clicked.connect(self._open_out_dir)
+                row.addWidget(open_btn)
+            outer.addWidget(banner)
 
         self.header = QLabel(alignment=Qt.AlignCenter, font=self._HEAD_FONT)
         outer.addWidget(self.header)
+
+        # Metric strip: label + value per metric, each with an explanation.
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(24)
+        metrics_row.addStretch(1)
+        self._metric_values: dict[str, QLabel] = {}
+        for key, label, tip in METRICS:
+            cell = QVBoxLayout()
+            cell.setSpacing(0)
+            value = QLabel("—", alignment=Qt.AlignCenter)
+            value.setFont(QFont("Roboto", 16, QFont.Bold))
+            caption = QLabel(label, alignment=Qt.AlignCenter)
+            caption.setProperty("role", "muted")
+            for w in (value, caption):
+                w.setToolTip(tip)
+            cell.addWidget(value)
+            cell.addWidget(caption)
+            metrics_row.addLayout(cell)
+            self._metric_values[key] = value
+        metrics_row.addStretch(1)
+        outer.addLayout(metrics_row)
+        hint = QLabel("Hover a metric for what it means. Lower is better for all of them.")
+        hint.setProperty("role", "muted")
+        hint.setAlignment(Qt.AlignCenter)
+        outer.addWidget(hint)
 
         def _make_tbl(cols: int, headers: list[str]) -> QTableWidget:
             tbl = QTableWidget(0, cols, self)
             tbl.setHorizontalHeaderLabels(headers)
             tbl.setFont(self._CELL_FONT)
             tbl.verticalHeader().setDefaultSectionSize(self._ROW_H)
-            tbl.horizontalHeader().setFixedHeight(self._ROW_H + 2)
+            tbl.verticalHeader().setVisible(False)
             tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
             tbl.setSelectionMode(QAbstractItemView.NoSelection)
             tbl.setAlternatingRowColors(True)
             tbl.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             vp = tbl.viewport()
             vp.setAttribute(Qt.WA_AcceptTouchEvents, True)
             for g in (QScroller.TouchGesture, QScroller.LeftMouseButtonGesture):
                 QScroller.grabGesture(vp, g)
             return tbl
 
+        tables = QHBoxLayout()
+        tables.setSpacing(16)
         self.schedule_tbl = _make_tbl(3, ["Date", "Main", "Backup"])
         hh = self.schedule_tbl.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.Fixed)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.Stretch)
-        self.schedule_tbl.setColumnWidth(0, 100)
-        outer.addWidget(self.schedule_tbl, 3)
+        tables.addWidget(self.schedule_tbl, 3)
 
         self.counts_tbl = _make_tbl(4, ["Nurse", "Main", "Backup", "Total"])
-        for c in range(4):
-            self.counts_tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
-        outer.addWidget(self.counts_tbl, 2)
+        ch = self.counts_tbl.horizontalHeader()
+        ch.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3):
+            ch.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        tables.addWidget(self.counts_tbl, 2)
+        outer.addLayout(tables, 1)
 
         nav = QHBoxLayout()
         nav.setSpacing(16)
         nav.addStretch()
-        theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
-        )
-
-        self.prev_btn = QPushButton("Previous")
-        self.prev_btn.setMinimumWidth(110)
-        self.prev_btn.setIcon(themed_icon("arrowL.png", theme))
-        self.prev_btn.setIconSize(QSize(24, 24))
-        self.prev_btn.setLayoutDirection(Qt.LeftToRight)
-
-        self.next_btn = QPushButton("Next")
-        self.next_btn.setMinimumWidth(110)
-        self.next_btn.setIcon(themed_icon("arrowR.png", theme))
-        self.next_btn.setIconSize(QSize(24, 24))
-        self.next_btn.setLayoutDirection(Qt.RightToLeft)
-
+        self.prev_btn = QPushButton("‹  Previous option")
+        self.prev_btn.setToolTip("Previous option (Left arrow)")
+        self.next_btn = QPushButton("Next option  ›")
+        self.next_btn.setToolTip("Next option (Right arrow)")
+        for b in (self.prev_btn, self.next_btn):
+            b.setMinimumWidth(160)
+            b.setAutoDefault(False)
         nav.addWidget(self.prev_btn)
-        nav.addSpacing(20)
         nav.addWidget(self.next_btn)
         nav.addStretch()
         outer.addLayout(nav)
 
         act = QHBoxLayout()
-        act.setSpacing(16)
+        act.setSpacing(12)
         act.addStretch()
-        self.save_btn = QPushButton("Save")
-        self.cancel_btn = QPushButton("Cancel")
-
-        self.calendar_btn = QPushButton("Calendar View")
+        self.calendar_btn = QPushButton("Open Calendar View")
+        self.calendar_btn.setToolTip("Month-grid view of every option in your web browser")
+        self.calendar_btn.setAutoDefault(False)
         self.calendar_btn.clicked.connect(
             lambda: export_variants_calendar_html(self.variants, max_variants=5)
         )
-
-        act.addWidget(self.calendar_btn)
-        act.addSpacing(12)
-        act.addWidget(self.save_btn)
-        act.addSpacing(20)
-        act.addWidget(self.cancel_btn)
+        self.cancel_btn = QPushButton("Close Without Applying")
+        self.cancel_btn.setAutoDefault(False)
+        self.save_btn = QPushButton("Apply This Schedule…")
+        set_role(self.save_btn, "special")
+        self.save_btn.setToolTip("Write the option on screen to assignment and weekend history")
+        for b in (self.calendar_btn, self.cancel_btn, self.save_btn):
+            b.setMinimumHeight(44)
+            act.addWidget(b)
         act.addStretch()
         outer.addLayout(act)
 
@@ -126,6 +232,12 @@ class VariantReviewDialog(ToolDialog):
         self.next_btn.clicked.connect(self._next)
         self.save_btn.clicked.connect(self._save)
         self.cancel_btn.clicked.connect(self.reject)
+        add_shortcut(self, Qt.Key_Left, self._prev)
+        add_shortcut(self, Qt.Key_Right, self._next)
+
+    def _open_out_dir(self):
+        if self._out_dir and os.path.isdir(self._out_dir):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._out_dir))
 
     def _parse_variant(self, var):
         """Return idx, metrics dict, counts dict, df (counts built if missing)."""
@@ -146,11 +258,6 @@ class VariantReviewDialog(ToolDialog):
 
     def _update_page(self):
         total = len(self.variants)
-        print(
-            f"[review] cur={self._cur} total={total} "
-            f"rows={len(self._parse_variant(self.variants[self._cur])[3]) if total else 0}"
-        )
-
         if total == 0:
             self.header.setText("No schedules to display.")
             self.schedule_tbl.setRowCount(0)
@@ -160,30 +267,37 @@ class VariantReviewDialog(ToolDialog):
             self.save_btn.setEnabled(False)
             return
 
-        theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
-        )
-        fg = QColor("#E8EAF0") if theme == "dark" else QColor("#2C2A27")
+        colours = UiStyle.palette(self._theme())
+        fg = QColor(colours["text"])
+        weekend_fg = QColor(colours["weekend"])
 
-        idx, st, counts, df = self._parse_variant(self.variants[self._cur])
+        _idx, st, counts, df = self._parse_variant(self.variants[self._cur])
 
-        self.header.setText(
-            f"Variant {self._cur + 1}/{total} • gaps {st.get('gaps', '—')}"
-            f" • Δmain {st.get('balance_main', '—')}"
-            f" • Δbackup {st.get('balance_backup', '—')}"
-        )
+        rank = "best" if self._cur == 0 else f"#{self._cur + 1}"
+        self.header.setText(f"Option {self._cur + 1} of {total} ({rank} ranked)")
+        for key, _label, _tip in METRICS:
+            self._metric_values[key].setText(_format_metric(key, st.get(key)))
 
+        bold = QFont(self._CELL_FONT)
+        bold.setBold(True)
         self.schedule_tbl.setRowCount(len(df))
         for r, (dt, row) in enumerate(df.iterrows()):
-            values = (dt.date().isoformat(), row.get("main", "-"), row.get("backup", "-"))
+            is_weekend = dt.weekday() >= 4  # Fri–Sun belong to a weekend rotation
+            values = (
+                dt.strftime("%a %m/%d"),
+                row.get("main") or "—",
+                row.get("backup") or "—",
+            )
             for c, val in enumerate(values):
                 itm = QTableWidgetItem(str(val))
                 itm.setFlags(Qt.ItemIsEnabled)
                 itm.setTextAlignment(Qt.AlignCenter if c == 0 else Qt.AlignVCenter | Qt.AlignLeft)
-                itm.setForeground(fg)
+                itm.setForeground(weekend_fg if (c == 0 and is_weekend) else fg)
+                if c == 0 and is_weekend:
+                    itm.setFont(bold)
                 self.schedule_tbl.setItem(r, c, itm)
 
-        nurses = sorted(counts)
+        nurses = sorted(counts, key=str.casefold)
         self.counts_tbl.setRowCount(len(nurses))
         for r, n in enumerate(nurses):
             m = counts[n]["main"]
@@ -192,13 +306,9 @@ class VariantReviewDialog(ToolDialog):
             for c, val in enumerate((n, m, b, t)):
                 itm = QTableWidgetItem(str(val))
                 itm.setFlags(Qt.ItemIsEnabled)
-                itm.setTextAlignment(Qt.AlignCenter)
+                itm.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft if c == 0 else Qt.AlignCenter)
                 itm.setForeground(fg)
                 self.counts_tbl.setItem(r, c, itm)
-
-        head_h = self.counts_tbl.horizontalHeader().height()
-        visible = min(len(nurses), 9)
-        self.counts_tbl.setFixedHeight(head_h + visible * self._ROW_H)
 
         self.prev_btn.setEnabled(self._cur > 0)
         self.next_btn.setEnabled(self._cur < total - 1)
@@ -215,22 +325,38 @@ class VariantReviewDialog(ToolDialog):
 
     def _save(self):
         _, _, _, df = self._parse_variant(self.variants[self._cur])
+        if df.empty:
+            return
+        first = df.index.min().strftime("%b %d")
+        last = df.index.max().strftime("%b %d, %Y")
+        confirm(
+            self,
+            "Apply schedule",
+            f"Apply option {self._cur + 1} for {first} – {last}?\n\n"
+            f"This writes all {len(df)} days to assignment history and the weekend "
+            "rotations to weekend history, replacing anything already recorded for "
+            "those dates.",
+            yes_cb=lambda: self._apply(df),
+            yes_text="Apply",
+        )
+
+    def _apply(self, df):
         for dt, row in df.iterrows():
             main, backup = row.get("main"), row.get("backup")
             if dt.weekday() == 4 and main and backup and main != backup:
-                self.wh.modify_assignment(dt.isoformat(), main, backup)
+                self.wh.add_assignment(dt.isoformat(), main, backup)
             self.ah.update_history(dt.isoformat(), main, backup)
 
-        show_info(self, "Saved", "Schedule and history have been updated.")
+        show_info(
+            self.parent(),
+            "Schedule applied",
+            f"Option {self._cur + 1} is now in assignment and weekend history.",
+        )
         self.accept()
 
     def apply_theme_update(self):
-        """Refresh navigation button icons when theme changes."""
-        theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
-        )
-        self.prev_btn.setIcon(themed_icon("arrowL.png", theme))
-        self.next_btn.setIcon(themed_icon("arrowR.png", theme))
+        """Recolour the tables when the theme changes."""
+        self._update_page()
 
 
-__all__ = ["VariantReviewDialog"]
+__all__ = ["VariantReviewDialog", "METRICS"]

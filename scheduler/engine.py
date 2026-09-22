@@ -105,6 +105,7 @@ class NurseScheduler:
         config: SchedulerConfig | None = None,
         history_window_days: int = 30,
         worker_tuning: WorkerTuningConfig | None = None,
+        history_duration_months: int = 6,
     ):
 
         # Search budgets for the evaluation phase. Sent to the workers with each
@@ -127,8 +128,11 @@ class NurseScheduler:
         # Initialize scheduling data structures
         self._initialize_scheduling_data()
 
-        # Setup historical data and tracking
+        # Setup historical data and tracking.  history_duration_months bounds
+        # how much assignment history is loaded at all; history_window_days
+        # is the fairness window inside it that ends the day before start.
         self.history_window_days = history_window_days
+        self.history_duration_months = history_duration_months
         self._initialize_historical_data()
 
         # Initialize nurse assignment tracking
@@ -184,7 +188,10 @@ class NurseScheduler:
     def _initialize_historical_data(self):
         """Initialize historical assignment tracking."""
         try:
-            self.assignment_history = AssignmentHistory(self.nurse_manager.db_name)
+            self.assignment_history = AssignmentHistory(
+                self.nurse_manager.db_name,
+                history_duration_months=getattr(self, "history_duration_months", 6),
+            )
         except Exception:
             # DB is missing or table empty – proceed with empty history
             self.assignment_history = None

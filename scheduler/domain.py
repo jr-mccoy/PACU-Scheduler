@@ -144,8 +144,13 @@ class SchedulerConfig:
         allow_post_weekend_thursday_backup: bool = True,
         *,
         scoring_weights: dict[str, float] | None = None,
-        # NEW:
+        # One-day weekday gap (Mon–Wed / Tue–Thu) relaxation.  The master
+        # flag allows it for any pair of roles; the two narrower flags allow
+        # it only when the two shifts are both BACKUP, or one MAIN and one
+        # BACKUP.  Any of the three switches the relaxed fallback on.
         allow_one_day_weekday_gap: bool = False,
+        allow_midweek_pair_backup_only: bool = False,
+        allow_midweek_pair_mixed: bool = False,
         max_plateau_depth: int = 10,
         max_weekend_variants: int | None = DEFAULT_MAX_WEEKEND_VARIANTS,
         max_week_permutations: int | None = 200,
@@ -158,6 +163,8 @@ class SchedulerConfig:
             allow_one_day_weekday_gap = bool(allow_one_day_weekday_gap)
 
         self.allow_one_day_weekday_gap = allow_one_day_weekday_gap
+        self.allow_midweek_pair_backup_only = bool(allow_midweek_pair_backup_only)
+        self.allow_midweek_pair_mixed = bool(allow_midweek_pair_mixed)
         # Neutral-move (plateau) allowance for local search; tune to trade
         # exploration depth against compute (best-so-far is always retained).
         self.max_plateau_depth = max(0, int(max_plateau_depth))
@@ -214,6 +221,32 @@ class SchedulerConfig:
         # ── keep any additional keyword untouched (future proofing) ────
         for k, v in extra.items():
             setattr(self, k, v)
+
+    @property
+    def one_day_gap_enabled(self) -> bool:
+        """True when any form of the one-day weekday gap relaxation is on."""
+        return bool(
+            self.allow_one_day_weekday_gap
+            or getattr(self, "allow_midweek_pair_backup_only", False)
+            or getattr(self, "allow_midweek_pair_mixed", False)
+        )
+
+    def one_day_gap_allows_roles(self, role_a: str | None, role_b: str | None) -> bool:
+        """Whether a one-day gap between shifts in *role_a* and *role_b* is allowed.
+
+        A role of None means the other shift's role is unknown (e.g. worked
+        before the scheduling window); only the master flag covers that.
+        """
+        if self.allow_one_day_weekday_gap:
+            return True
+        if role_a is None or role_b is None:
+            return False
+        roles = {role_a, role_b}
+        if roles == {"backup"}:
+            return bool(getattr(self, "allow_midweek_pair_backup_only", False))
+        if roles == {"main", "backup"}:
+            return bool(getattr(self, "allow_midweek_pair_mixed", False))
+        return False
 
 
 class WeekBackup(NamedTuple):
@@ -1190,7 +1223,7 @@ class ScheduleVariant:
             used_relaxed = False
 
             # 2) Fallback to relaxed spacing ONLY if nothing is base-eligible
-            if not eligible and self.config.allow_one_day_weekday_gap:
+            if not eligible and self.config.one_day_gap_enabled:
                 diag_relaxed: dict[str, list[str]] | None = (
                     {} if _debug.ASSIGNMENT_DEBUG_LOGGER.enabled else None
                 )
@@ -1447,7 +1480,7 @@ class ScheduleVariant:
         #    only when not in this nurse's pre/post weekend windows)
         if (
             not ok
-            and self.config.allow_one_day_weekday_gap
+            and self.config.one_day_gap_enabled
             and self._weekday_relaxation_applicable(nurse, date)
         ):
             ok = check(nurse, date, role, relaxed_spacing=True)
@@ -1565,12 +1598,13 @@ class ScheduleVariant:
         """
         base = int(self.config.min_days_between_assignments)
         min_days_off = base
-
-        if (
+        relaxed = (
             relaxed_spacing
-            and self.config.allow_one_day_weekday_gap
+            and self.config.one_day_gap_enabled
             and self._weekday_relaxation_applicable(nurse, date)
-        ):
+        )
+
+        if relaxed:
             # One-day buffer: forbid assignments on adjacent days only
             min_days_off = max(1, base - 1)
 
@@ -1585,7 +1619,32 @@ class ScheduleVariant:
                     # Shift worked just before the window start (from weekend
                     # or per-day history) still counts toward spacing.
                     return False
+
+        if relaxed and min_days_off < base and not self.config.allow_one_day_weekday_gap:
+            # Only the role-scoped midweek-pair relaxations are on: a shift at
+            # the distance the relaxation newly allows is acceptable only for
+            # the permitted pair of roles.
+            for offset in range(min_days_off + 1, base + 1):
+                for check_date in (date - timedelta(days=offset), date + timedelta(days=offset)):
+                    if check_date in idx_set:
+                        other_role = self._role_on_date(nurse, check_date)
+                        if other_role and not self.config.one_day_gap_allows_roles(
+                            role, other_role
+                        ):
+                            return False
+                    elif check_date in worked_before_window:
+                        # Role unknown for history before the window.
+                        return False
         return True
+
+    def _role_on_date(self, nurse: str, date: pd.Timestamp) -> str | None:
+        """``"main"``/``"backup"`` if *nurse* works *date* in this schedule, else None."""
+        sched = self.state.schedule
+        if sched.at[date, "main"] == nurse:
+            return "main"
+        if sched.at[date, "backup"] == nurse:
+            return "backup"
+        return None
 
     def _nurse_assigned_on_date(self, nurse: str, date: pd.Timestamp) -> bool:
         """Check if nurse is assigned on specific date."""
@@ -2471,7 +2530,7 @@ class ScheduleVariant:
         if run_attempt(force_relaxed=False):
             return True
 
-        if self.config.allow_one_day_weekday_gap and run_attempt(force_relaxed=True):
+        if self.config.one_day_gap_enabled and run_attempt(force_relaxed=True):
             return True
 
         self._debug_print(f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-change")
@@ -2606,7 +2665,7 @@ class ScheduleVariant:
             return new_gaps
 
         # Retry with forced relaxed domains if allowed and first attempt stalled
-        if self.config.allow_one_day_weekday_gap:
+        if self.config.one_day_gap_enabled:
             self._restore_from_backup(ordered_days, original_state)
             self._clear_week_assignments(ordered_days)
             self._debug_print(f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=relaxed")

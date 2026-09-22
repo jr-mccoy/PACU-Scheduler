@@ -24,9 +24,10 @@ class AppSettings:
         "availability_penalty": 10,
         "history_window_days": 30,
         "history_duration_months": 6,
-        # Analysis / Debug
-        "measure_phase_times": True,
-        "analyse_initial_weekday_gaps": True,
+        # Analysis / Debug.  The two reports below are written into each run's
+        # export folder; they are opt-in because they add work to every run.
+        "measure_phase_times": False,
+        "analyse_initial_weekday_gaps": False,
         "gap_report_file": "weekday_gap_report.txt",
         "debug_variant_logging": "off",
         "assignment_debug_enabled": True,
@@ -35,12 +36,12 @@ class AppSettings:
         "allow_post_weekend_wednesday_backup": True,
         "allow_post_weekend_thursday_main": True,
         "allow_post_weekend_thursday_backup": True,
-        # Hail Mary midweek spacing exception toggles (legacy, still supported)
+        # One-day weekday gap fallback (Mon–Wed / Tue–Thu, never next to the
+        # nurse's own weekend).  The master toggle allows any roles; the two
+        # narrower toggles allow only Backup+Backup or Main+Backup pairs.
+        "allow_one_day_weekday_gap": False,
         "allow_midweek_pair_backup_only": False,
         "allow_midweek_pair_mixed": False,
-        # NEW: master toggle for one-day weekday gap fallback
-        # (Mon–Wed / Tue–Thu when NOT in a given nurse's pre/post-weekend period)
-        "allow_one_day_weekday_gap": False,
         # Beam cap on weekend variant branching (0 = unlimited)
         "max_weekend_variants": DEFAULT_MAX_WEEKEND_VARIANTS,
         # Canonical scorer weights

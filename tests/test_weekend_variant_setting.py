@@ -109,12 +109,6 @@ def test_cli_unlimited_requires_confirmation(cli, monkeypatch):
 # --- GUI ---------------------------------------------------------------------
 
 
-@pytest.fixture
-def qapp():
-    widgets = pytest.importorskip("PySide6.QtWidgets")
-    return widgets.QApplication.instance() or widgets.QApplication([])
-
-
 @pytest.mark.parametrize("dialog_name", ["SettingsDialog", "CompactSettingsDialog"])
 def test_gui_dialogs_edit_and_save_the_cap(home, qapp, dialog_name):
     import ui.dialogs as dialogs

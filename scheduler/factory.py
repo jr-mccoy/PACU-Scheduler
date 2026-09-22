@@ -92,6 +92,10 @@ class SchedulerService:
         surface them. This is the non-CLI replacement for
         ``NurseSchedulerUI._handle_sync_assignment_history_with_weekend``.
         """
+        # The GUI edits weekend history through its own repository instance,
+        # so re-read it rather than trusting this instance's startup cache.
+        if hasattr(self.weekend_history, "reload"):
+            self.weekend_history.reload()
         weekends = self.weekend_history.get_assignments()
         added = 0
         overwritten = 0
@@ -171,6 +175,8 @@ def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
         allow_post_weekend_thursday_main=settings.get("allow_post_weekend_thursday_main"),
         allow_post_weekend_thursday_backup=settings.get("allow_post_weekend_thursday_backup"),
         allow_one_day_weekday_gap=settings.get("allow_one_day_weekday_gap"),
+        allow_midweek_pair_backup_only=settings.get("allow_midweek_pair_backup_only"),
+        allow_midweek_pair_mixed=settings.get("allow_midweek_pair_mixed"),
         scoring_weights=settings.get("scoring_weights"),
         max_weekend_variants=max_weekend_variants,
     )
@@ -198,6 +204,7 @@ def build_scheduler_from_settings(
         ps,
         config=config,
         history_window_days=settings.get("history_window_days"),
+        history_duration_months=settings.get("history_duration_months") or 6,
     )
 
 

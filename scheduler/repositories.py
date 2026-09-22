@@ -367,6 +367,26 @@ class NurseManager(DatabaseMixin):
         """Get a nurse's unavailable dates."""
         return self._nurses.get(nurse, {}).get("unavailable_dates", set())
 
+    def find_nurse(self, name: str) -> dict[str, Any] | None:
+        """Look a nurse up by name, ignoring case and including inactive rows.
+
+        Returns ``{"name", "is_active", "is_prn", "is_late_shift"}`` or None.
+        """
+        rows = self.execute_query(
+            "SELECT name, is_active, is_prn, is_late_shift FROM nurses "
+            "WHERE name = ? COLLATE NOCASE",
+            (name.strip(),),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "name": row[0],
+            "is_active": bool(row[1]),
+            "is_prn": bool(row[2]),
+            "is_late_shift": bool(row[3]),
+        }
+
     def add_nurse(self, name: str, is_prn: bool = False, is_late_shift: bool = False) -> None:
         """Add or reactivate a nurse. If the nurse exists, mark active and update flags."""
         # Insert if new; ignore if exists
@@ -599,6 +619,11 @@ class WeekendHistory:
         return DateUtils.normalize_date(date_input)
 
     # Data Loading Methods
+    def reload(self) -> None:
+        """Re-read assignments and last patterns written by other instances."""
+        self._assignments = self._load_assignments()
+        self._last_patterns = self._load_last_patterns()
+
     def _load_assignments(self) -> dict[pd.Timestamp, tuple[str | None, str | None]]:
         """Load weekend assignments from the database with normalized timestamps."""
         assignments = {}

@@ -12,6 +12,7 @@ import pytest
 from scheduling_fixtures import build_scheduler, seed_db
 
 from scheduler import WeekendHistory, WeekendPattern
+from scheduler.engine import recorded_weekends_in_range
 
 
 def _record(db: str, tracking: dict) -> None:
@@ -116,3 +117,15 @@ def test_spacing_respects_a_committed_shift_after_the_window(tmp_path, source):
 
     for day in ("2026-12-01", "2026-12-02"):
         assert "A" not in variant._get_eligible_nurses_for_day(pd.Timestamp(day), "main")
+
+
+def test_recorded_weekends_in_range_lists_only_whole_weekends_inside(tmp_path):
+    db = seed_db(
+        tmp_path,
+        weekends=[("2026-10-30", "A", "B"), ("2026-11-06", "C", "D"), ("2026-11-27", "E", "F")],
+    )
+    history = WeekendHistory(db)
+
+    fridays = recorded_weekends_in_range(history, "2026-11-01", "2026-11-28")
+
+    assert fridays == [pd.Timestamp("2026-11-06")]  # Oct 30 starts before, Nov 27 ends after

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from scheduler import AssignmentHistory, WeekendHistory
-from scheduler.engine import whole_weekend_range
+from scheduler.engine import recorded_weekends_in_range, whole_weekend_range
 from scheduler.exporters import write_gap_report
 
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
@@ -35,13 +35,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_SPAN_DAYS = 28  # four weeks, start day included
 
 
-def describe_range(start: date, end: date, scheduled: tuple[date, date] | None = None) -> str:
+def describe_range(
+    start: date,
+    end: date,
+    scheduled: tuple[date, date] | None = None,
+    replaces: int = 0,
+) -> str:
     """Summary of a scheduling horizon, e.g. for the screen footer.
 
     ``scheduled`` is the range the scheduler will actually cover, which is
     wider when ``start``..``end`` cuts a weekend in two (see
     :func:`scheduler.engine.whole_weekend_range`). Weekends are counted over
-    it, and a second line says why it differs.
+    it, and a second line says why it differs. ``replaces`` is how many
+    weekends are already recorded in that range; applying an option will
+    replace them.
     """
     if end < start:
         return ""
@@ -58,6 +65,11 @@ def describe_range(start: date, end: date, scheduled: tuple[date, date] | None =
     )
     if (first_day, last_day) != (start, end):
         text += f"\nScheduling {_span(first_day, last_day)} so no weekend is split."
+    if replaces:
+        text += (
+            f"\n{replaces} weekend{'s are' if replaces != 1 else ' is'} already recorded in "
+            "this range. The new schedule is built without them and replaces them when applied."
+        )
     return text
 
 
@@ -169,7 +181,9 @@ class ScheduleGenerationScreen(QWidget):
             self.summary.setProperty("role", "error")
             self.gen_btn.setEnabled(False)
         else:
-            self.summary.setText(describe_range(start, end, self._scheduled_range(start, end)))
+            first, last = self._scheduled_range(start, end)
+            replaces = len(recorded_weekends_in_range(self._weekend_history, first, last))
+            self.summary.setText(describe_range(start, end, (first, last), replaces))
             self.summary.setProperty("role", None)
             self.gen_btn.setEnabled(not running)
         self.summary.style().unpolish(self.summary)
@@ -403,6 +417,8 @@ class ScheduleGenerationScreen(QWidget):
             out_dir=out_dir,
             export_error=export_error,
         )
+        # Applying records weekends in this range; refresh the summary's count.
+        self._variant_dialog.accepted.connect(self.on_show)
         self._variant_dialog.open()
 
     def _write_diagnostics(self, scheduler, out_dir: str) -> None:

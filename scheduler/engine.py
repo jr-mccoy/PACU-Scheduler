@@ -105,6 +105,24 @@ def whole_weekend_range(
     return start, end
 
 
+def recorded_weekends_in_range(weekend_history, start, end) -> list[pd.Timestamp]:
+    """Fridays of weekends already recorded wholly inside ``[start, end]``.
+
+    Generating that range replaces them: they are read as the schedule being
+    replaced, not as history, and applying a new option overwrites them.
+    """
+    start = DateUtils.normalize_date(start)
+    end = DateUtils.normalize_date(end)
+    get_assignments = getattr(weekend_history, "get_assignments", None)
+    if get_assignments is None:
+        return []
+    return [
+        friday
+        for friday, fsf, sfs in get_assignments()
+        if (fsf or sfs) and start <= friday and friday + timedelta(days=2) <= end
+    ]
+
+
 def _sync_worker_compatibility_overrides() -> None:
     """Honor monkeypatches made through the deprecated legacy module."""
     legacy = sys.modules.get("scheduler.legacy_core")
@@ -1868,6 +1886,7 @@ __all__ = [
     "GenerationError",
     "NurseScheduler",
     "WeekendGenerationResult",
+    "recorded_weekends_in_range",
     "whole_weekend_range",
     "_evaluate_variant_worker",
     "_evaluate_variant_worker_profiled",

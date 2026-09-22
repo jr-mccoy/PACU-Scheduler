@@ -39,6 +39,7 @@ from scheduler import (
     build_scheduler_from_settings,
     default_worker_count,
 )
+from scheduler.engine import recorded_weekends_in_range
 
 logger = logging.getLogger(__name__)
 
@@ -1554,6 +1555,14 @@ class NurseSchedulerUI:
                 print(
                     f"Scheduling {scheduler.start_date:%a %b %d} – "
                     f"{scheduler.end_date:%a %b %d, %Y} so no weekend is split."
+                )
+            replaced = recorded_weekends_in_range(
+                self.weekend_history, scheduler.start_date, scheduler.end_date
+            )
+            if replaced:
+                print(
+                    f"{len(replaced)} weekend(s) already recorded in this range will be "
+                    "ignored while generating and replaced if you save the new schedule."
                 )
             top_schedules = self._generate_schedule_with_violations(scheduler, nurses_allowed)
 

@@ -201,6 +201,14 @@ def test_describe_range_explains_a_widened_range():
     assert "28 days" in text
     assert "5 weekends" in text
     assert "Scheduling Fri Oct 02 – Sun Nov 01, 2026 so no weekend is split." in text
+    assert "already recorded" not in text
+
+
+def test_describe_range_warns_about_replaced_weekends():
+    from ui.screens.schedule_generation import describe_range
+
+    text = describe_range(date(2026, 11, 2), date(2026, 11, 29), replaces=2)
+    assert "2 weekends are already recorded in this range" in text
 
 
 def test_stats_items_sort_numerically(qapp):

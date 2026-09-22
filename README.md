@@ -274,6 +274,8 @@ for operator control.
   by characterization tests.
 - [`docs/ui-ux-audit.md`](docs/ui-ux-audit.md) — GUI audit findings, the
   conventions adopted, which settings were connected, and what was deferred.
+- [`docs/scheduler-audit.md`](docs/scheduler-audit.md) — logic errors and
+  oversights found in the scheduling engine, and the phased plan to fix them.
 
 ## License
 

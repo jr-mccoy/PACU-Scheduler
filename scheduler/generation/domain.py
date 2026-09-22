@@ -54,7 +54,7 @@ class CandidateDomainBuilder:
         used_relaxed = False
         relaxed_candidates: list[str] = []
 
-        if force_relaxed and ctx.config.allow_one_day_weekday_gap:
+        if force_relaxed and ctx.config.one_day_gap_enabled:
             capture_relaxed: dict[str, list[str]] | None = {} if diag_map is not None else None
             relaxed_candidates = get_eligible(
                 date,
@@ -67,7 +67,7 @@ class CandidateDomainBuilder:
                 if diag_map is not None and capture_relaxed is not None:
                     for nurse, reasons in capture_relaxed.items():
                         diag_map.setdefault(nurse, reasons)
-        elif not candidates and ctx.config.allow_one_day_weekday_gap:
+        elif not candidates and ctx.config.one_day_gap_enabled:
             if diag_map is not None:
                 diag_map.clear()
             candidates = get_eligible(

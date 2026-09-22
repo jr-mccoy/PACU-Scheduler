@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import traceback
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
 
 from PySide6.QtCore import QThread, Signal
 
@@ -13,8 +19,13 @@ from scheduler import (
     PreScheduler,
     WeekendHistory,
     _evaluate_variant_worker,
+    _evaluate_variant_worker_profiled,
     default_worker_count,
 )
+
+logger = logging.getLogger(__name__)
+
+_CANCEL_POLL_SECONDS = 0.5
 
 DB_NAME = "nurse_schedule.db"
 DEBUG_SAVE_VARIANTS = bool(int(os.environ.get("NSCHED_DEBUG_VARIANTS", "0")))
@@ -69,9 +80,41 @@ class RebuildViolationWorker(QThread):
             self.finished.emit(False, f"Error: {e}")
 
 
+def _terminate_pool(pool) -> None:
+    """Stop a cancelled executor without waiting for in-flight variants.
+
+    ``shutdown(cancel_futures=True)`` only drops queued work; a process
+    pool's running workers would otherwise keep evaluating (minutes per
+    variant) after the user pressed Cancel, so terminate them.
+    """
+    pool.shutdown(wait=False, cancel_futures=True)
+    processes = getattr(pool, "_processes", None) or {}
+    for proc in list(processes.values()):
+        try:
+            proc.terminate()
+        except Exception:  # pragma: no cover - best effort
+            logger.debug("Could not terminate worker process", exc_info=True)
+
+
 class ScheduleProgressWorker(QThread):
+    """Generate and evaluate schedule variants off the GUI thread.
+
+    Signals:
+        stage(str)            human-readable description of the current step
+        progress(done, total) variants evaluated so far
+        finished(top5, scheduler, weekend_history)
+        cancelled()           the user cancelled; no results
+        error(str)            a traceback, for the details pane and the log
+
+    After ``finished``, ``all_candidates`` holds every evaluated variant and
+    ``worker_metrics`` the per-variant profiling data (when
+    ``measure_phase_times`` is on) for the diagnostics exports.
+    """
+
     progress = Signal(int, int)
+    stage = Signal(str)
     finished = Signal(object, object, object)
+    cancelled = Signal()
     error = Signal(str)
 
     def __init__(
@@ -97,15 +140,12 @@ class ScheduleProgressWorker(QThread):
                 self.settings = {}
         except Exception:
             self.settings = {}
+        self.all_candidates: list = []
+        self.worker_metrics: list = []
 
-        # Normalize legacy midweek toggles into the master flag
-        try:
-            if "allow_one_day_weekday_gap" not in self.settings:
-                a = bool(self.settings.get("allow_midweek_pair_backup_only", False))
-                b = bool(self.settings.get("allow_midweek_pair_mixed", False))
-                self.settings["allow_one_day_weekday_gap"] = a or b
-        except Exception:
-            pass
+    @property
+    def profiling_enabled(self) -> bool:
+        return bool(self.settings.get("measure_phase_times"))
 
     def run(self):
         # Imported lazily to keep module import lightweight and avoid cycles
@@ -130,15 +170,21 @@ class ScheduleProgressWorker(QThread):
                 self.nurses_allowed_rotation_violation or []
             )
 
+            self.stage.emit("Building weekend rotation variants…")
             variants = sched.generate_all_weekend_variants(
                 allow_rotation_violations=self.allow_rotation_violations
             )
+            if self.isInterruptionRequested():
+                self.cancelled.emit()
+                return
             if not variants:
                 self.finished.emit([], sched, wh)
                 return
 
             total = len(variants)
             candidate_schedules = []
+            profiling = self.profiling_enabled
+            evaluate = _evaluate_variant_worker_profiled if profiling else _evaluate_variant_worker
 
             override_env = os.environ.get("NSCHED_FORCE_THREAD_POOL")
             override = _coerce_env_flag(override_env)
@@ -150,31 +196,64 @@ class ScheduleProgressWorker(QThread):
                 else min(default_worker_count(), total)
             )
             Executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
-            print(
-                "[progress-worker] using"
-                f" {'ThreadPoolExecutor' if use_threads else 'ProcessPoolExecutor'}"
-                f" with {maxw} workers"
-                f" (android={detected_android}, override={override_env!r})"
+            logger.info(
+                "Evaluating %d variants with %s (%d workers, android=%s, override=%r)",
+                total,
+                Executor.__name__,
+                maxw,
+                detected_android,
+                override_env,
             )
 
+            self.stage.emit(f"Evaluating {total} variant{'s' if total != 1 else ''}…")
+            self.progress.emit(0, total)
+            cancelled = False
             try:
-                with Executor(max_workers=maxw) as pool:
-                    futures = [
-                        pool.submit(_evaluate_variant_worker, (i, v, sched.worker_tuning))
+                pool = Executor(max_workers=maxw)
+                try:
+                    pending = {
+                        pool.submit(evaluate, (i, v, sched.worker_tuning))
                         for i, v in enumerate(variants)
-                    ]
-                    for done, fut in enumerate(as_completed(futures), start=1):
-                        try:
-                            res = fut.result()
+                    }
+                    done = 0
+                    while pending:
+                        # Poll rather than block on the next result so Cancel
+                        # takes effect within a fraction of a second.
+                        finished, pending = wait(
+                            pending, timeout=_CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
+                        )
+                        if self.isInterruptionRequested():
+                            cancelled = True
+                            break
+                        for fut in finished:
+                            done += 1
+                            try:
+                                res = fut.result()
+                            except Exception:
+                                logger.exception("Evaluating a variant failed")
+                                res = None
                             if res is not None:
+                                if profiling:
+                                    *res, metrics = res
+                                    self.worker_metrics.append(metrics)
+                                    res = tuple(res)
                                 candidate_schedules.append(res)
-                        except Exception:
-                            pass
-                        self.progress.emit(done, total)
+                            self.progress.emit(done, total)
+                finally:
+                    if cancelled:
+                        _terminate_pool(pool)
+                    else:
+                        pool.shutdown(wait=True)
             except Exception:
+                logger.exception("Variant evaluation pool failed")
                 candidate_schedules.clear()
 
+            if cancelled:
+                self.cancelled.emit()
+                return
+
             if not candidate_schedules:
+                logger.warning("No variant evaluated cleanly; ranking unevaluated variants")
                 for i, var in enumerate(variants):
                     try:
                         df = var.state.schedule.copy()
@@ -195,16 +274,17 @@ class ScheduleProgressWorker(QThread):
                         }
                         candidate_schedules.append((i, stats, counts, df))
                     except Exception:
-                        pass
+                        logger.exception("Building fallback stats for variant %d failed", i)
 
             if not candidate_schedules:
                 self.finished.emit([], sched, wh)
                 return
 
+            self.stage.emit("Ranking variants…")
             try:
                 sched._score_and_rank_variants(candidate_schedules)
             except Exception:
-                pass
+                logger.exception("Ranking variants failed; keeping evaluation order")
 
             if DEBUG_SAVE_VARIANTS:
                 try:
@@ -215,11 +295,13 @@ class ScheduleProgressWorker(QThread):
                         self._start,
                     )
                 except Exception:
-                    pass
+                    logger.exception("Preparing the variant debug payload failed")
 
+            self.all_candidates = list(candidate_schedules)
             self.finished.emit(candidate_schedules[:5], sched, wh)
 
         except Exception:
+            logger.exception("Schedule generation failed")
             self.error.emit(traceback.format_exc())
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 import mimetypes
 import os
 import subprocess
@@ -14,6 +15,8 @@ from PySide6.QtCore import QStandardPaths, QUrl
 from PySide6.QtGui import QDesktopServices
 
 from ..presenters.variant_review_presenter import _build_html_for_top_variants
+
+logger = logging.getLogger(__name__)
 
 
 def _is_android_platform() -> bool:
@@ -74,7 +77,15 @@ def _write_variant_debug_dump(out_dir, payload, *, owner=None):
     return path
 
 
-def _save_outputs_for_variants(variants, scheduler, *, top_n=5, debug_save_variants=False) -> str:
+def _save_outputs_for_variants(
+    variants, scheduler, *, top_n=5, debug_save_variants=False, failures: list[str] | None = None
+) -> str:
+    """Write the HTML calendar and one PDF per variant; return the folder.
+
+    Individual file failures are logged and, when *failures* is given,
+    appended to it so the caller can tell the user what is missing.
+    """
+    failures = failures if failures is not None else []
     base_dir = _runtime_base_dir()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = os.path.join(base_dir, f"Schedules_{ts}")
@@ -85,7 +96,8 @@ def _save_outputs_for_variants(variants, scheduler, *, top_n=5, debug_save_varia
         with open(os.path.join(out_dir, "variants_calendar.html"), "w", encoding="utf-8") as f:
             f.write(html)
     except Exception as exc:
-        print(f"[export] HTML calendar failed: {exc}")
+        logger.exception("Writing the HTML calendar failed")
+        failures.append(f"HTML calendar: {exc}")
 
     try:
         cal = calendar.Calendar(firstweekday=6)
@@ -95,18 +107,20 @@ def _save_outputs_for_variants(variants, scheduler, *, top_n=5, debug_save_varia
             try:
                 scheduler._export_variant_pdf(pdf_path, df.copy(deep=True), cal)
             except Exception as ex:
-                print(f"[export] PDF for variant {rank} failed: {ex}")
+                logger.exception("Writing the PDF for variant %d failed", rank)
+                failures.append(f"PDF for option {rank}: {ex}")
     except Exception as exc:
-        print(f"[export] PDF batch failed: {exc}")
+        logger.exception("Writing the variant PDFs failed")
+        failures.append(f"PDFs: {exc}")
 
     if debug_save_variants:
         snapshot = getattr(scheduler, "_debug_variant_dump", None)
         if snapshot is not None:
             try:
                 dest = _write_variant_debug_dump(out_dir, snapshot, owner=scheduler)
-                print(f"[export] wrote variant debug snapshot to {dest}")
-            except Exception as exc:
-                print(f"[export] failed to write variant debug snapshot: {exc}")
+                logger.info("Wrote variant debug snapshot to %s", dest)
+            except Exception:
+                logger.exception("Writing the variant debug snapshot failed")
                 try:
                     if hasattr(scheduler, "_debug_variant_dump"):
                         delattr(scheduler, "_debug_variant_dump")
@@ -141,8 +155,8 @@ def export_top_variants_pdfs(variants, scheduler, out_prefix="schedule_variant")
         try:
             scheduler._export_variant_pdf(pdf_path, df, cal)
             paths.append(pdf_path)
-        except Exception as exc:
-            print(f"[pdf export] failed for variant {rank}: {exc}")
+        except Exception:
+            logger.exception("PDF export failed for variant %d", rank)
 
     if paths:
         _open_external(paths[0])

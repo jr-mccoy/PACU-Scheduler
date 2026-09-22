@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -24,9 +23,15 @@ class RotationViolationDialog(ToolDialog):
     """Enable/disable rotation-rule violations and pick which nurses may violate."""
 
     def __init__(self, parent, backend, accent=None, theme=None):
-        super().__init__(parent, title="Rotation Violation Settings")
+        super().__init__(parent, title="Rotation Rules for This Run")
 
         summary = backend.weekend_history.get_violation_summary()
+        # Only nurses who can actually be given a weekend: active and not PRN.
+        try:
+            eligible = set(backend.nurse_manager.get_non_prn_nurses())
+            summary = summary[summary["nurse"].isin(eligible)]
+        except Exception:
+            pass
         summary = summary.sort_values(
             by=["total_viol", "consec_viol", "clean_run_weeks", "days_since_last"],
             ascending=[True, True, False, False],
@@ -34,34 +39,41 @@ class RotationViolationDialog(ToolDialog):
         self.nurses = summary["nurse"].tolist()
         self.stats = summary
 
-        self._accent = accent or getattr(parent, "settings", {}).get("accent_color", "#5C8DBC")
+        parent_settings = getattr(parent, "settings", None)
+        self._accent = accent or (
+            parent_settings.get("accent_color") if parent_settings is not None else "#5C8DBC"
+        )
         self._row_chk = []
 
         root = QVBoxLayout(self._body)
-        root.setContentsMargins(18, 18, 18, 10)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 12, 12, 10)
+        root.setSpacing(8)
 
         intro = QLabel(
-            "Enable rotation violations, then tick the nurses that are permitted "
-            "to violate.  Leave all boxes unchecked if NO nurse may violate.",
+            "Each nurse normally alternates between FSF and SFS weekends. If that "
+            "leaves no workable schedule, you can let chosen nurses repeat their last "
+            "pattern in this run. Fewest past violations are listed first.",
             wordWrap=True,
-            font=QFont("Roboto", 14),
         )
         root.addWidget(intro)
 
-        self.allow_chk = QCheckBox(
-            "Allow rotation violations for this run?",
-            font=QFont("Roboto", 15, QFont.Bold),
-        )
+        self.allow_chk = QCheckBox("Allow repeats for the ticked nurses")
+        font = self.allow_chk.font()
+        font.setBold(True)
+        self.allow_chk.setFont(font)
         root.addWidget(self.allow_chk)
 
+        sel_row = QHBoxLayout()
         self.select_all_btn = QPushButton("Select All")
-        self.select_all_btn.setFixedWidth(110)
-        self.select_all_btn.setVisible(len(self.nurses) > 8)
-        root.addWidget(self.select_all_btn, alignment=Qt.AlignLeft)
+        self.select_none_btn = QPushButton("Select None")
+        for b in (self.select_all_btn, self.select_none_btn):
+            b.setAutoDefault(False)
+            sel_row.addWidget(b)
+        sel_row.addStretch()
+        root.addLayout(sel_row)
 
         self.list = QListWidget()
-        self.list.setFont(QFont("Roboto", 14))
+        self.list.setFont(QFont("Roboto", 13))
         self.list.setAlternatingRowColors(False)
         self.list.setSelectionMode(QListWidget.NoSelection)
         self.list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -76,37 +88,30 @@ class RotationViolationDialog(ToolDialog):
         except Exception:
             pass
 
-        chk_style = f"""
-        QCheckBox::indicator         {{ width:28px; height:28px; }}
-        QCheckBox::indicator:unchecked {{
-            border:2px solid #000;
-            background:#fdfdfd;
-            border-radius:4px;
-        }}
-        QCheckBox::indicator:checked  {{
-            border:2px solid #000;
-            background:{self._accent};
-            border-radius:4px;
-        }}
-        """
-
         for _, row in summary.iterrows():
             n = row["nurse"]
-            label = (
-                f"{n}  (Viol: {row['total_viol']}, Streak: {row['consec_viol']}, "
-                f"Clean: {row['clean_run_weeks']}, Days: {row['days_since_last']})"
+            viol = int(row["total_viol"])
+            clean = int(row["clean_run_weeks"])
+            detail = (
+                "never violated"
+                if clean >= 999
+                else (
+                    f"{viol} violation{'s' if viol != 1 else ''}, streak {int(row['consec_viol'])}, "
+                    f"{clean} clean weekend{'s' if clean != 1 else ''}"
+                )
             )
             roww = QWidget()
             hl = QHBoxLayout(roww)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(6)
+            hl.setContentsMargins(4, 2, 4, 2)
+            hl.setSpacing(8)
             cb = QCheckBox()
-            cb.setFixedSize(28, 28)
-            cb.setStyleSheet(chk_style)
-            lbl = QLabel(label)
-            lbl.setFont(QFont("Roboto", 14))
+            cb.setAccessibleName(f"Allow {n} to repeat")
+            name_lbl = QLabel(f"<b>{n}</b>")
+            detail_lbl = QLabel(detail)
+            detail_lbl.setProperty("role", "muted")
             hl.addWidget(cb)
-            hl.addWidget(lbl)
+            hl.addWidget(name_lbl)
+            hl.addWidget(detail_lbl)
             hl.addStretch()
             itm = QListWidgetItem()
             itm.setSizeHint(roww.sizeHint())
@@ -122,27 +127,34 @@ class RotationViolationDialog(ToolDialog):
 
         self.list.itemClicked.connect(self._toggle_row)
 
-        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box = QDialogButtonBox()
+        start_btn = btn_box.addButton("Start Generating", QDialogButtonBox.AcceptRole)
+        start_btn.setProperty("role", "special")
+        start_btn.setDefault(True)
+        btn_box.addButton(QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
-        h = QHBoxLayout()
-        h.addStretch()
-        h.addWidget(btn_box)
-        h.addStretch()
-        root.addLayout(h)
+        root.addWidget(btn_box)
 
-        self.setMinimumWidth(300)
-        self.setMaximumWidth(420)
-        self.setMinimumHeight(500)
+        self.setMinimumWidth(480)
+        self.setMaximumWidth(720)
+        self.resize(600, 640)
+        self.setMinimumHeight(420)
         self.setMaximumHeight(1200)
 
         self._wire_signals()
         self._apply_accent()
 
     def _wire_signals(self):
-        self.allow_chk.toggled.connect(self.list.setEnabled)
-        self.list.setEnabled(False)
-        self.select_all_btn.clicked.connect(lambda: [cb.setChecked(True) for cb in self._row_chk])
+        for w in (self.list, self.select_all_btn, self.select_none_btn):
+            self.allow_chk.toggled.connect(w.setEnabled)
+            w.setEnabled(False)
+        self.select_all_btn.clicked.connect(lambda: self._set_all(True))
+        self.select_none_btn.clicked.connect(lambda: self._set_all(False))
+
+    def _set_all(self, checked: bool) -> None:
+        for cb in self._row_chk:
+            cb.setChecked(checked)
 
     def _toggle_row(self, item):
         idx = self.list.row(item)
@@ -152,22 +164,13 @@ class RotationViolationDialog(ToolDialog):
         self.list.clearSelection()
 
     def _apply_accent(self):
-        self.select_all_btn.setStyleSheet(
-            "QPushButton {"
-            f"background:{self._accent};"
-            "color:#fff;"
-            "border-radius:8px;"
-            "padding:6px 12px;"
-            "}"
-            "QPushButton:pressed {"
-            "opacity:0.8;"
-            "}"
-        )
+        # Checkbox colours come from the card style (theme-aware); nothing extra.
+        pass
 
     def refresh_accent(self, accent=None):
         if accent:
             self._accent = accent
-        self._apply_accent()
+        super().refresh_accent(accent)
 
     def set_theme(self, theme, accent):
         self._accent = accent

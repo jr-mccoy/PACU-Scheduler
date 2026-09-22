@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import sys
+import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QCalendarWidget,
     QHeaderView,
     QListWidget,
     QMainWindow,
@@ -20,9 +20,10 @@ from PySide6.QtWidgets import (
 
 from scheduler import SharedSettings, build_scheduler_service
 
-from .config import DB_NAME
+from .config import APP_TITLE, DB_NAME
 from .dialogs import CompactSettingsDialog, SettingsDialog, ToolDialog
-from .platform import apply_backend_debug_preferences
+from .messages import show_error
+from .platform import apply_backend_debug_preferences, is_android_platform
 from .screens import (
     AdvancedWeekendStatsScreen,
     AssignmentHistoryScreen,
@@ -38,13 +39,16 @@ from .style import UiStyle
 from .theme import shade_color
 from .widgets.date_pickers import MultiDatePicker, SingleDatePicker
 
+logger = logging.getLogger(__name__)
+
 
 class App(QMainWindow):
     """Top-level window that hosts the stacked screens."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Nurse Scheduler")
+        self.setWindowTitle(APP_TITLE)
+        self.setMinimumSize(720, 560)
 
         # 1) persistent user settings -------------------------------------------------
         self.settings = AppSettings()
@@ -70,7 +74,7 @@ class App(QMainWindow):
             ("view_unavail", ViewAllUnavailableScreen),
             ("weekend_history", WeekendHistoryCalendarScreen),
             ("generate", ScheduleGenerationScreen),
-            ("advanced_stats", AdvancedWeekendStatsScreen),  # <-- Add this line
+            ("advanced_stats", AdvancedWeekendStatsScreen),
         ]
 
         # 5) instantiate & register each page -----------------------------------------
@@ -92,12 +96,22 @@ class App(QMainWindow):
         page_names = [n for n, _ in self._pages]
         if name not in page_names:
             raise ValueError(f"Unknown page: {name}")
-        self.stack.setCurrentIndex(page_names.index(name))
+        page = self.stack.widget(page_names.index(name))
+        # Screens are built once, so each one reloads its data on entry;
+        # otherwise edits made on one screen are invisible on the others.
+        on_show = getattr(page, "on_show", None)
+        if callable(on_show):
+            try:
+                on_show()
+            except Exception:
+                logger.exception("Refreshing screen %r failed", name)
+        self.stack.setCurrentWidget(page)
+        page.setFocus(Qt.OtherFocusReason)
 
     # ─────────────────────────── settings dialog ─────────────────────────────
     def open_settings_dialog(self):
         # Pick compact vs. desktop dialog at runtime
-        if sys.platform == "android" or "ANDROID_ROOT" in os.environ:
+        if is_android_platform():
             dlg = CompactSettingsDialog(self.settings, self)
         else:
             dlg = SettingsDialog(self.settings, self)
@@ -114,7 +128,14 @@ class App(QMainWindow):
         try:
             self.settings.bulk_set(vals or {})
         except Exception as e:
-            print(f"[settings] save failed: {e}")
+            logger.exception("Saving settings failed")
+            show_error(
+                self,
+                "Settings not saved",
+                "Your changes apply to this session but could not be written to disk, "
+                "so they will be lost when the app closes.",
+                details=str(e),
+            )
         self.apply_settings()
         apply_backend_debug_preferences(self.settings)
 
@@ -140,6 +161,7 @@ class App(QMainWindow):
         theme = self.settings.get("theme")
         accent = self.settings.get("accent_color")
         show_gif = self.settings.get("show_gif")
+        show_grid = bool(self.settings.get("calendar_grid"))
 
         # ── 2 · global font
         app.setFont(QFont("Roboto", font_size))
@@ -160,6 +182,10 @@ class App(QMainWindow):
         list_views = self.findChildren(QListWidget)
 
         for view in table_views + list_views:
+            # A QCalendarWidget's day grid is a QTableView too; fixing its row
+            # height squashes the month into a strip, so leave calendars alone.
+            if _inside_calendar(view):
+                continue
             # keep selections readable
             _fix_selection_contrast(view, accent)
 
@@ -190,9 +216,9 @@ class App(QMainWindow):
             if hasattr(dlg, "apply_theme_update"):
                 dlg.apply_theme_update()  # ── 6 · calendar pickers (multi + single)
         for picker in self.findChildren(MultiDatePicker):
-            picker.set_theme(theme, accent)
+            picker.set_theme(theme, accent, grid=show_grid)
         for picker in self.findChildren(SingleDatePicker):
-            picker.set_theme(theme, accent)
+            picker.set_theme(theme, accent, grid=show_grid)
 
         # ── 7 · main-menu GIF toggle
         if hasattr(self, "main"):
@@ -205,4 +231,13 @@ class App(QMainWindow):
                 page.apply_theme_update()
 
 
-__all__ = ["App"]
+def _inside_calendar(widget: QWidget) -> bool:
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QCalendarWidget):
+            return True
+        parent = parent.parentWidget()
+    return False
+
+
+__all__ = ["App", "APP_TITLE"]

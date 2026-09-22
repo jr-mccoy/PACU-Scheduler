@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Any
@@ -14,6 +15,8 @@ from scheduler import (
     configure_assignment_debug_logger,
     configure_pair_variant_debug,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def is_android_platform() -> bool:
@@ -95,7 +98,7 @@ def apply_backend_debug_preferences(settings: Any) -> None:
             default=True,
         )
     except Exception as exc:  # pragma: no cover - defensive guard for GUI use
-        print(f"[debug] failed to read debug settings: {exc}")
+        logger.warning("Could not read debug settings: %s", exc)
         return
 
     backend_mode = "" if debug_mode == "off" else debug_mode
@@ -107,13 +110,13 @@ def apply_backend_debug_preferences(settings: Any) -> None:
     try:
         configure_pair_variant_debug(backend_mode)
     except Exception as exc:  # pragma: no cover - errors shouldn't stop GUI
-        print(f"[debug] unable to configure NSCHED_DEBUG: {exc}")
+        logger.warning("Could not configure NSCHED_DEBUG: %s", exc)
 
     os.environ["DEBUG_SCHED"] = "1" if assignment_enabled else "0"
     try:
         configure_assignment_debug_logger(assignment_enabled)
     except Exception as exc:  # pragma: no cover
-        print(f"[debug] unable to configure assignment logger: {exc}")
+        logger.warning("Could not configure the assignment debug logger: %s", exc)
 
 
 def tune_dialog(root_layout: QLayout, spacing: int = 12) -> None:

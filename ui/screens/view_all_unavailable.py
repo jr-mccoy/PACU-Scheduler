@@ -5,18 +5,19 @@ from __future__ import annotations
 import calendar
 import re
 from collections import defaultdict
+from datetime import date
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QDialogButtonBox,
     QFrame,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QScroller,
     QSizePolicy,
     QVBoxLayout,
@@ -29,6 +30,13 @@ from ..config import DB_NAME
 from ..dialogs.tool_dialog import ToolDialog
 from ..messages import show_error, show_warning
 from ..theme import shade_color
+from ..widgets.common import (
+    action_button,
+    add_shortcut,
+    back_button,
+    install_empty_state,
+    screen_title,
+)
 from ..widgets.date_pickers import MultiDatePicker
 
 
@@ -47,11 +55,18 @@ class ViewAllUnavailableScreen(QWidget):
 
         # ui skeleton ------------------------------------------------------
         main = QVBoxLayout(self)
-        main.setContentsMargins(24, 24, 24, 24)
-        main.setSpacing(16)
+        main.setContentsMargins(16, 16, 16, 16)
+        main.setSpacing(12)
 
-        self.search = QLineEdit(placeholderText="Search by nurse name…", font=QFont("Roboto", 17))
+        main.addWidget(screen_title("Unavailable Dates"))
+
+        self.search = QLineEdit(placeholderText="Search by nurse name…", font=QFont("Roboto", 15))
+        self.search.setClearButtonEnabled(True)
         main.addWidget(self.search)
+
+        self.show_past = QCheckBox("Include past dates")
+        self.show_past.setToolTip("Past time off does not affect new schedules")
+        main.addWidget(self.show_past)
 
         self.list = QListWidget(
             verticalScrollMode=QAbstractItemView.ScrollPerPixel,
@@ -59,28 +74,35 @@ class ViewAllUnavailableScreen(QWidget):
             spacing=6,
             frameShape=QFrame.NoFrame,
         )
+        self._empty = install_empty_state(self.list, "")
         main.addWidget(self.list, 1)
 
         QScroller.grabGesture(self.list.viewport(), QScroller.TouchGesture)
 
-        self.edit_btn = QPushButton("Edit Unavailable", minimumHeight=48, font=QFont("Roboto", 16))
+        self.edit_btn = action_button(
+            "Edit Dates…", "special", tooltip="Change the selected nurse's time off (Enter)"
+        )
         main.addWidget(self.edit_btn)
 
-        back = QPushButton("Back", minimumHeight=48)
-        back.setProperty("role", "special")
-        back.setFont(QFont("Roboto", 16, QFont.Bold))
-        back.clicked.connect(lambda: parent.switch_frame("main"))
-        main.addWidget(back)
+        main.addWidget(back_button(self, parent))
 
         # signals ----------------------------------------------------------
         self.search.textChanged.connect(self._reload_list)
+        self.show_past.toggled.connect(self._reload_list)
         self.list.currentItemChanged.connect(self._on_select_change)
+        self.list.itemDoubleClicked.connect(lambda _i: self._on_edit())
         self.edit_btn.clicked.connect(self._on_edit)
+        add_shortcut(self.list, Qt.Key_Return, self._on_edit)
 
         # data -> first populate ------------------------------------------
-        self._all_data: list[tuple[str, list[str]]] = []
+        self._all_data: list[tuple[str, bool, list[str]]] = []
         self._load_all()
         self._apply_theme()
+
+    def on_show(self):
+        if self.nm:
+            self.nm.refresh_cache()
+        self._load_all()
 
     # ─────────────── theme palette helper ────────────────
     @property
@@ -104,10 +126,12 @@ class ViewAllUnavailableScreen(QWidget):
         return bg, edge, act_bg, act_edge, month_idle, month_sel
 
     # ─────────────── card factory ────────────────────────
-    def _build_card(self, name: str, iso_dates: list[str]) -> QWidget:
+    def _build_card(self, name: str, iso_dates: list[str], prn: bool = False) -> QWidget:
         bg, edge, *_, month_idle, _ = self._colours
 
-        html = [f"<b>{name}</b>"]
+        tag = " &nbsp;<i>(PRN)</i>" if prn else ""
+        count = f" &nbsp;·&nbsp; {len(iso_dates)} day{'s' if len(iso_dates) != 1 else ''}"
+        html = [f"<b>{name}</b>{tag}{count if iso_dates else ''}"]
         if iso_dates:
             groups = defaultdict(list)
             for iso in iso_dates:
@@ -122,7 +146,7 @@ class ViewAllUnavailableScreen(QWidget):
                     chunk = ", ".join(map(str, days[i : i + 8]))
                     html.append(f"{span if i == 0 else '&nbsp;&nbsp;'} {chunk}")
         else:
-            html.append("(no unavailable dates)")
+            html.append("No time off" if self.show_past.isChecked() else "No upcoming time off")
 
         card = QWidget()
         card.setStyleSheet(self._card_css(bg, edge))
@@ -131,7 +155,7 @@ class ViewAllUnavailableScreen(QWidget):
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 10, 10, 10)
         lbl = QLabel(
-            "<br>".join(html), wordWrap=True, textFormat=Qt.RichText, font=QFont("Roboto", 17)
+            "<br>".join(html), wordWrap=True, textFormat=Qt.RichText, font=QFont("Roboto", 15)
         )
         lay.addWidget(lbl)
         return card
@@ -152,30 +176,46 @@ class ViewAllUnavailableScreen(QWidget):
         if not self.nm:
             return
         self._all_data = []
-        for name, info in self.nm.nurses.items():
-            if self.nm.is_prn_nurse(name):
-                continue
+        for name in sorted(self.nm.nurses, key=str.casefold):
+            info = self.nm.nurses[name]
             iso = sorted(d.strftime("%Y-%m-%d") for d in info["unavailable_dates"])
-            self._all_data.append((name, iso))
+            self._all_data.append((name, self.nm.is_prn_nurse(name), iso))
         self._reload_list()
 
-    def _reload_list(self):
+    def _selected_name(self) -> str | None:
+        itm = self.list.currentItem()
+        return itm.data(Qt.UserRole) if itm is not None else None
+
+    def _reload_list(self, *_):
+        keep = self._selected_name()
         term = self.search.text().lower().strip()
+        today = date.today().isoformat()
+        past = self.show_past.isChecked()
         self.list.blockSignals(True)
         self.list.clear()
 
-        for name, iso_list in self._all_data:
+        restore = None
+        for name, prn, iso_list in self._all_data:
             if term and term not in name.lower():
                 continue
-            card = self._build_card(name, iso_list)
+            shown = iso_list if past else [d for d in iso_list if d >= today]
+            card = self._build_card(name, shown, prn)
 
             itm = QListWidgetItem()
             itm.setData(Qt.UserRole, name)
             self.list.addItem(itm)
             self.list.setItemWidget(itm, card)
+            if name == keep:
+                restore = itm
 
+        if not self._all_data:
+            self._empty.text = "No nurses yet. Add them under Manage Nurses."
+        else:
+            self._empty.text = f"No nurse matches “{self.search.text().strip()}”."
         self.list.blockSignals(False)
         self.edit_btn.setEnabled(False)
+        if restore is not None:
+            self.list.setCurrentItem(restore)
 
         QTimer.singleShot(0, self._fix_item_sizes)
 
@@ -189,8 +229,12 @@ class ViewAllUnavailableScreen(QWidget):
                 continue
             card.setFixedWidth(vw)  # enforce exact width
             card.layout().activate()  # recalc wrapping
-            card.adjustSize()
-            itm.setSizeHint(card.sizeHint())
+            # sizeHint ignores word wrap; ask for the height at this width.
+            height = (
+                card.heightForWidth(vw) if card.hasHeightForWidth() else card.sizeHint().height()
+            )
+            card.setFixedHeight(height)
+            itm.setSizeHint(QSize(vw, height))
 
     # also call it on every list resize ------------------
     def resizeEvent(self, ev):
@@ -212,14 +256,8 @@ class ViewAllUnavailableScreen(QWidget):
 
     # ─────────────── theme refresh from App ─────────────
     def apply_theme_update(self):
-        sel = self.list.currentItem().data(Qt.UserRole) if self.list.currentItem() else None
         self._apply_theme()
         self._reload_list()
-        if sel:
-            for i in range(self.list.count()):
-                if self.list.item(i).data(Qt.UserRole) == sel:
-                    self.list.setCurrentRow(i)
-                    break
 
     def _apply_theme(self):
         theme = self.parent.settings.get("theme")
@@ -263,9 +301,13 @@ class ViewAllUnavailableScreen(QWidget):
         accent = self.parent.settings.get("accent_color")
         theme = self.parent.settings.get("theme")
 
-        dlg = ToolDialog(self.parent, f"Unavailable: {name}")
+        dlg = ToolDialog(self.parent, f"Unavailable dates — {name}")
         v = QVBoxLayout()
+        hint = QLabel("Click a date to mark or unmark it.")
+        hint.setProperty("role", "muted")
+        v.addWidget(hint)
         picker = MultiDatePicker(existing, accent=accent, theme=theme)
+        picker.set_theme(theme, accent, grid=bool(self.parent.settings.get("calendar_grid")))
         v.addWidget(picker)
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)

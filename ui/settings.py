@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+from scheduler import DEFAULT_MAX_WEEKEND_VARIANTS
+
 
 class AppSettings:
     DEFAULTS = {
@@ -40,7 +42,7 @@ class AppSettings:
         # (Mon–Wed / Tue–Thu when NOT in a given nurse's pre/post-weekend period)
         "allow_one_day_weekday_gap": False,
         # Beam cap on weekend variant branching (0 = unlimited)
-        "max_weekend_variants": 500,
+        "max_weekend_variants": DEFAULT_MAX_WEEKEND_VARIANTS,
         # Canonical scorer weights
         "scoring_weights": {
             "rotation_rep": 0.30,

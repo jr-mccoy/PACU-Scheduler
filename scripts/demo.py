@@ -131,7 +131,7 @@ def build_demo_config(max_variants: int) -> SchedulerConfig:
 
     Only the beam cap is overridden. Weekend variants grow roughly as
     ``(valid pairs) ^ (weekends)`` and every survivor runs the full evaluation
-    pipeline, so the shipped default of 500 is far more than a demo needs.
+    pipeline, so the shipped default of 1,000 is far more than a demo needs.
     """
     config = build_scheduler_config_from_settings(SharedSettings())
     config.max_weekend_variants = max_variants

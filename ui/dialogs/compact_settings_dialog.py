@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from scheduler import MAX_WEEKEND_VARIANTS_RANGE
+
 from ..widgets.common import WrappedCheck
 from .tool_dialog import ToolDialog
 
@@ -139,6 +141,15 @@ class CompactSettingsDialog(ToolDialog):
         self.avail_penalty = sb(settings.get("availability_penalty"), 0, 100)
         self.hist_window = sb(settings.get("history_window_days"), 1, 365)
         self.hist_duration = sb(settings.get("history_duration_months"), 1, 60)
+        self.variant_cap = sb(settings.get("max_weekend_variants"), *MAX_WEEKEND_VARIANTS_RANGE)
+        self.variant_cap.setSpecialValueText("Unlimited")
+        self.variant_cap.setSingleStep(100)
+        self.variant_cap.setGroupSeparatorShown(True)
+        self.variant_cap.setToolTip(
+            "Weekend combinations kept after each weekend and fully evaluated.\n"
+            "Higher explores more candidate schedules; run time grows roughly\n"
+            "in proportion. Unlimited can take hours on long horizons."
+        )
 
         sched_form.addRow("Weekend gap (days):", self.weekend_gap)
         sched_form.addRow("Min days between:", self.min_between)
@@ -147,6 +158,7 @@ class CompactSettingsDialog(ToolDialog):
         sched_form.addRow("Availability penalty:", self.avail_penalty)
         sched_form.addRow("History window (days):", self.hist_window)
         sched_form.addRow("History duration (mo):", self.hist_duration)
+        sched_form.addRow("Weekend variants:", self.variant_cap)
 
         self.tabs.addTab(sched_tab, "Schedule")
 
@@ -295,6 +307,7 @@ class CompactSettingsDialog(ToolDialog):
             "availability_penalty": self.avail_penalty.value(),
             "history_window_days": self.hist_window.value(),
             "history_duration_months": self.hist_duration.value(),
+            "max_weekend_variants": self.variant_cap.value(),
             "measure_phase_times": self.measure_chk.isChecked(),
             "analyse_initial_weekday_gaps": self.analyse_chk.isChecked(),
             "gap_report_file": self.gap_file.text(),

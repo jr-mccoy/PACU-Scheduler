@@ -62,7 +62,7 @@ constrain everything else:
 1. **Weekend generation.** The scheduler enumerates valid `FSF`/`SFS` pairs for
    each weekend in the horizon, branching on every complete pair. Because the
    variant count grows roughly as `(valid pairs) ^ (weekends)`, the pool is
-   pruned after each weekend to `max_weekend_variants` (default 500), keeping
+   pruned after each weekend to `max_weekend_variants` (default 1,000), keeping
    the variants with the fewest rotation repeats, the most even weekend spread,
    and the largest minimum weekend gap.
 2. **Weekday completion and rebalancing.** Each surviving weekend variant is
@@ -170,11 +170,15 @@ considers (thousands of lines per variant), and `DEBUG_SCHED=1` writes an
 Evaluation cost is dominated by the rebalance and refill passes, and their
 budgets are tunable rather than fixed:
 
-- `SchedulerConfig.max_weekend_variants` — beam cap on weekend branching.
-  Every survivor runs the full evaluation pipeline, so this is the main lever
-  on total run time. Pruning is not feasibility-aware: a cap set too low can
+- `SchedulerConfig.max_weekend_variants` — beam cap on weekend branching
+  (default 1,000; 0 means unlimited). Every survivor runs the full evaluation
+  pipeline, so this is the main lever on total run time, and it grows roughly
+  in proportion. Pruning is not feasibility-aware: a cap set too low can
   discard the branch that would have led to the only workable schedule, and
-  the engine warns when that happens.
+  the engine warns when that happens. Set it per machine as **Weekend
+  variants to evaluate** in the GUI's Settings dialog, or under **Settings**
+  in the terminal UI. Both write `~/.nurse_scheduler/settings.json`, so the
+  value persists between sessions and the two interfaces share it.
 - `SchedulerConfig.max_week_permutations` — cap on the slot orderings tried
   when rebalancing one week. A full week has ten modifiable slots, so an
   exhaustive search is 10! orderings.

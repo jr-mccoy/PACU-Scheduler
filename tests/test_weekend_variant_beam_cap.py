@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from scheduler import NurseScheduler, SchedulerConfig
+from scheduler import DEFAULT_MAX_WEEKEND_VARIANTS, NurseScheduler, SchedulerConfig
 
 
 class _DummyNurseManager:
@@ -62,12 +62,15 @@ def _build_scheduler(config: SchedulerConfig) -> NurseScheduler:
 
 
 def test_config_max_weekend_variants_defaults_and_overrides():
-    assert SchedulerConfig().max_weekend_variants == 500
+    assert SchedulerConfig().max_weekend_variants == DEFAULT_MAX_WEEKEND_VARIANTS
     assert SchedulerConfig(max_weekend_variants=25).max_weekend_variants == 25
     # 0 means unlimited; negatives clamp to 0; None falls back to the default.
     assert SchedulerConfig(max_weekend_variants=0).max_weekend_variants == 0
     assert SchedulerConfig(max_weekend_variants=-5).max_weekend_variants == 0
-    assert SchedulerConfig(max_weekend_variants=None).max_weekend_variants == 500
+    assert (
+        SchedulerConfig(max_weekend_variants=None).max_weekend_variants
+        == DEFAULT_MAX_WEEKEND_VARIANTS
+    )
 
 
 def test_generation_respects_beam_cap():

@@ -21,7 +21,6 @@ def _record(db: str, tracking: dict) -> None:
 
 
 # ── finding 1: regenerating an applied window ─────────────────────────────
-@pytest.mark.xfail(strict=True, reason="audit #1: history inside the window is read")
 def test_regenerating_an_applied_window_can_reproduce_it(tmp_path):
     db = seed_db(tmp_path)
     before = build_scheduler(
@@ -38,7 +37,6 @@ def test_regenerating_an_applied_window_can_reproduce_it(tmp_path):
     assert any(v.state.weekend_tracking == applied for v in again)
 
 
-@pytest.mark.xfail(strict=True, reason="audit #1: last pattern is read from the future")
 def test_rotation_starts_from_the_last_pattern_before_the_window(tmp_path):
     db = seed_db(
         tmp_path,
@@ -53,7 +51,6 @@ def test_rotation_starts_from_the_last_pattern_before_the_window(tmp_path):
     assert scheduler.last_pattern["B"] == WeekendPattern.SFS
 
 
-@pytest.mark.xfail(strict=True, reason="audit #1: weekends in the window count as history")
 def test_a_replaced_weekend_does_not_block_its_neighbours(tmp_path):
     # A and B are recorded on Nov 6. Regenerating November must not treat
     # that as history that blocks them from Nov 13.
@@ -75,8 +72,18 @@ def test_a_manual_pattern_override_still_applies(tmp_path):
     assert scheduler.last_pattern["A"] == WeekendPattern.SFS
 
 
+def test_an_override_does_not_outrank_weekends_recorded_in_the_window(tmp_path):
+    # A worked FSF before the window and SFS inside it; the SFS override was
+    # set after that and describes the replaced weekend, not the window start.
+    db = seed_db(tmp_path, weekends=[("2026-10-02", "A", "B"), ("2026-11-06", "B", "A")])
+    WeekendHistory(db).set_last_pattern("A", WeekendPattern.SFS)
+
+    scheduler = build_scheduler(db, "2026-11-02", "2026-11-29")
+
+    assert scheduler.last_pattern["A"] == WeekendPattern.FSF
+
+
 # ── finding 2: the window's end ───────────────────────────────────────────
-@pytest.mark.xfail(strict=True, reason="audit #2: later recorded weekends are ignored")
 @pytest.mark.parametrize("friday", ["2026-11-20", "2026-11-27"])  # 14 and 7 days before
 def test_weekend_gap_respects_a_recorded_weekend_after_the_window(tmp_path, friday):
     db = seed_db(tmp_path, weekends=[("2026-12-04", "A", "B")])
@@ -88,7 +95,6 @@ def test_weekend_gap_respects_a_recorded_weekend_after_the_window(tmp_path, frid
     )
 
 
-@pytest.mark.xfail(strict=True, reason="audit #2: weekday rules stop at end_date")
 def test_weekdays_before_a_recorded_weekend_after_the_window_are_protected(tmp_path):
     # The window ends Thursday Dec 3; A works the weekend of Friday Dec 4.
     db = seed_db(tmp_path, weekends=[("2026-12-04", "A", "B")])
@@ -99,3 +105,14 @@ def test_weekdays_before_a_recorded_weekend_after_the_window_are_protected(tmp_p
         for role in ("main", "backup"):
             eligible = variant._get_eligible_nurses_for_day(pd.Timestamp(day), role)
             assert "A" not in eligible, (day, role)
+
+
+@pytest.mark.parametrize("source", ["history", "pre_scheduled"])
+def test_spacing_respects_a_committed_shift_after_the_window(tmp_path, source):
+    # The window ends Wednesday Dec 2; A already works Thursday Dec 3.
+    db = seed_db(tmp_path, **{source: [("2026-12-03", "A", "B")]})
+    scheduler = build_scheduler(db, "2026-11-02", "2026-12-02", min_days_between_assignments=2)
+    variant = scheduler.generate_all_weekend_variants()[0]
+
+    for day in ("2026-12-01", "2026-12-02"):
+        assert "A" not in variant._get_eligible_nurses_for_day(pd.Timestamp(day), "main")

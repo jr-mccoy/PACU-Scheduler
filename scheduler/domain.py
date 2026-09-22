@@ -634,6 +634,7 @@ class ScheduleState:
         nurse_weekend_lists: dict | None = None,
         rotation_repeats: int = 0,
         pre_window_worked: dict | None = None,
+        post_window_worked: dict | None = None,
     ):
         # Always own *private* copies of mutable objects
         self.schedule = schedule.copy()
@@ -656,6 +657,9 @@ class ScheduleState:
         # (weekend history plus persisted per-day schedule history). Read-only
         # after construction, so frozensets may be shared across clones.
         self.pre_window_worked = {k: frozenset(v) for k, v in (pre_window_worked or {}).items()}
+        # The same for the days immediately after the window: shifts already
+        # committed there (recorded weekends, pre-scheduled or applied days).
+        self.post_window_worked = {k: frozenset(v) for k, v in (post_window_worked or {}).items()}
 
     def clone(self) -> ScheduleState:
         """
@@ -673,6 +677,7 @@ class ScheduleState:
             nurse_weekend_lists={k: list(v) for k, v in self.nurse_weekend_lists.items()},
             rotation_repeats=self.rotation_repeats,
             pre_window_worked=self.pre_window_worked,
+            post_window_worked=self.post_window_worked,
         )
 
 
@@ -1609,15 +1614,16 @@ class ScheduleVariant:
             min_days_off = max(1, base - 1)
 
         idx_set = self._get_index_set()
-        worked_before_window = self.state.pre_window_worked.get(nurse, ())
+        worked_outside_window = self._worked_outside_window(nurse)
         for offset in range(1, min_days_off + 1):
             for check_date in (date - timedelta(days=offset), date + timedelta(days=offset)):
                 if check_date in idx_set:
                     if self._nurse_assigned_on_date(nurse, check_date):
                         return False
-                elif check_date in worked_before_window:
-                    # Shift worked just before the window start (from weekend
-                    # or per-day history) still counts toward spacing.
+                elif check_date in worked_outside_window:
+                    # Shifts just before the window (weekend or per-day
+                    # history) or just after it (committed weekends,
+                    # pre-scheduled or applied days) still count toward spacing.
                     return False
 
         if relaxed and min_days_off < base and not self.config.allow_one_day_weekday_gap:
@@ -1632,10 +1638,16 @@ class ScheduleVariant:
                             role, other_role
                         ):
                             return False
-                    elif check_date in worked_before_window:
-                        # Role unknown for history before the window.
+                    elif check_date in worked_outside_window:
+                        # Role unknown for shifts outside the window.
                         return False
         return True
+
+    def _worked_outside_window(self, nurse: str) -> frozenset:
+        """Days *nurse* works just outside the window, on either side."""
+        before = self.state.pre_window_worked.get(nurse, frozenset())
+        after = self.state.post_window_worked.get(nurse, frozenset())
+        return before | after if after else before
 
     def _role_on_date(self, nurse: str, date: pd.Timestamp) -> str | None:
         """``"main"``/``"backup"`` if *nurse* works *date* in this schedule, else None."""

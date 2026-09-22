@@ -940,6 +940,40 @@ class WeekendHistory:
         """Get the last pattern for a nurse."""
         return self._last_patterns.get(nurse)
 
+    def get_last_pattern_before(self, nurse: str, before_date) -> WeekendPattern | None:
+        """The pattern of the nurse's last recorded weekend before ``before_date``.
+
+        A schedule generated from ``before_date`` must alternate against the
+        weekend before it, not against weekends recorded inside or after its
+        own window (for example, an earlier run of the same month being
+        replaced). The stored last pattern, which may be a manual
+        ``set_last_pattern`` override, is used only when the nurse has no
+        recorded weekend on or after ``before_date``. Otherwise the override
+        predates those weekends and no longer describes the nurse.
+        """
+        cutoff = self._normalize_date(before_date)
+        last_before: tuple[pd.Timestamp, WeekendPattern] | None = None
+        worked_later = False
+        for weekend_start, (fsf, sfs) in self._assignments.items():
+            if nurse == fsf:
+                pattern = WeekendPattern.FSF
+            elif nurse == sfs:
+                pattern = WeekendPattern.SFS
+            else:
+                continue
+            if weekend_start >= cutoff:
+                worked_later = True
+            elif last_before is None or weekend_start > last_before[0]:
+                last_before = (weekend_start, pattern)
+
+        if not worked_later:
+            return self._last_patterns.get(nurse)
+        return last_before[1] if last_before else None
+
+    def get_assignment(self, weekend_start) -> tuple[str | None, str | None] | None:
+        """The recorded ``(fsf, sfs)`` pair for one weekend, or None."""
+        return self._assignments.get(self._normalize_date(weekend_start))
+
     def get_weekends(self, nurse: str) -> list[pd.Timestamp]:
         """Get all weekend assignments for a nurse."""
         return [

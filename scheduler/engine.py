@@ -183,7 +183,20 @@ class NurseScheduler:
         for nurse in self.nurses:
             last_wk = self.weekend_history.get_last_weekend_before(nurse, self.start_date)
             self.last_assignment[nurse] = last_wk
-            self.last_pattern[nurse] = self.weekend_history.get_last_pattern(nurse)
+            self.last_pattern[nurse] = self._last_pattern_before_window(nurse)
+
+    def _last_pattern_before_window(self, nurse: str) -> WeekendPattern | None:
+        """The nurse's rotation pattern going into ``start_date``.
+
+        Weekends already recorded inside the window belong to the schedule
+        being replaced, so rotation alternates against the last weekend
+        before the window. History objects without the window-relative query
+        (test doubles, older integrations) fall back to the stored pattern.
+        """
+        before = getattr(self.weekend_history, "get_last_pattern_before", None)
+        if before is None:
+            return self.weekend_history.get_last_pattern(nurse)
+        return before(nurse, self.start_date)
 
     def _initialize_historical_data(self):
         """Initialize historical assignment tracking."""
@@ -596,8 +609,9 @@ class NurseScheduler:
     ):
         """
         Earliest *future* weekend (as its Friday) on which nurse is assigned,
-        considering both the current schedule and all pre-scheduled weekends
-        (which may extend beyond the schedule window).
+        considering the current schedule, all pre-scheduled weekends (which
+        may extend beyond the schedule window), and weekends already recorded
+        in weekend history after the window.
         """
         # From the current schedule (within window)
         weekend_mask = schedule["day_of_week"].isin(self.WEEKDAYS)
@@ -616,7 +630,12 @@ class NurseScheduler:
         )
         next_in_pre = self._as_friday(next_in_pre)
 
-        candidates = [d for d in (next_in_schedule, next_in_pre) if d is not None]
+        # Weekends already recorded after the window
+        next_recorded = next(
+            (f for f in self._future_weekends().get(nurse, ()) if f > current_weekend), None
+        )
+
+        candidates = [d for d in (next_in_schedule, next_in_pre, next_recorded) if d is not None]
         return min(candidates) if candidates else None
 
     def _find_next_pre_scheduled_weekend(self, nurse, current_weekend, all_pre_scheduled_weekends):
@@ -668,9 +687,14 @@ class NurseScheduler:
         gap_min = self.config.weekend_gap_days
 
         # ── backward gap: use historic last and any prior worked weekend in this schedule ──
-        # Normalize the history date to its Friday so the day-diff compares
-        # Friday→Friday, matching _weekend_gap_penalty's treatment of history.
-        prev_wk_hist = self._as_friday(self.weekend_history.get_last_weekend_before(nurse, weekend))
+        # History counts only before the window: weekends recorded inside it
+        # belong to the schedule being replaced, and this branch's own earlier
+        # weekends are found in `schedule` below. Normalize the history date to
+        # its Friday so the day-diff compares Friday→Friday, matching
+        # _weekend_gap_penalty's treatment of history.
+        prev_wk_hist = self._as_friday(
+            self.weekend_history.get_last_weekend_before(nurse, min(weekend, self.start_date))
+        )
 
         prev_wk_sched = None
         prior_fridays = [
@@ -1175,11 +1199,14 @@ class NurseScheduler:
 
     def get_state_snapshot(self) -> ScheduleState:
         """Get a snapshot of the current scheduling state."""
+        future = self._future_weekends()
         weekend_lists = {}
         for nurse in self.nurses:
             historic = [w for w in self.weekend_history.get_weekends(nurse) if w < self.start_date]
-            historic.sort()
-            weekend_lists[nurse] = historic
+            # Weekends already committed after the window bound the
+            # pre-weekend window of the window's last days, just as history
+            # bounds the post-weekend window of its first days.
+            weekend_lists[nurse] = sorted(set(historic) | set(future.get(nurse, ())))
 
         return ScheduleState(
             self.schedule,
@@ -1190,6 +1217,7 @@ class NurseScheduler:
             self.weekend_tracking,
             nurse_weekend_lists=weekend_lists,
             pre_window_worked=self._collect_pre_window_worked_days(),
+            post_window_worked=self._collect_post_window_worked_days(),
         )
 
     def _collect_pre_window_worked_days(self) -> dict[str, set[pd.Timestamp]]:
@@ -1205,32 +1233,91 @@ class NurseScheduler:
         lookback = int(getattr(self.config, "min_days_between_assignments", 0) or 0)
         if lookback <= 0:
             return {}
-        window_start = self.start_date - timedelta(days=lookback)
-        window_end = self.start_date - timedelta(days=1)
+        return self._collect_worked_days(
+            self.start_date - timedelta(days=lookback),
+            self.start_date - timedelta(days=1),
+        )
 
+    def _collect_post_window_worked_days(self) -> dict[str, set[pd.Timestamp]]:
+        """
+        Collect the days each nurse is already committed to in the
+        ``min_days_between_assignments`` days immediately after ``end_date``:
+        recorded weekends, pre-scheduled cells and applied per-day history.
+        The mirror of :meth:`_collect_pre_window_worked_days` for the
+        window's end.
+        """
+        lookahead = int(getattr(self.config, "min_days_between_assignments", 0) or 0)
+        if lookahead <= 0:
+            return {}
+        return self._collect_worked_days(
+            self.end_date + timedelta(days=1),
+            self.end_date + timedelta(days=lookahead),
+        )
+
+    def _collect_worked_days(
+        self, first: pd.Timestamp, last: pd.Timestamp
+    ) -> dict[str, set[pd.Timestamp]]:
+        """Days in ``[first, last]`` (outside the window) each nurse works."""
         worked: dict[str, set[pd.Timestamp]] = {n: set() for n in self.nurses}
+
+        def add(nurse, day) -> None:
+            if nurse in worked:
+                worked[nurse].add(DateUtils.normalize_date(day))
 
         # Weekend history: FSF/SFS nurses both work Fri, Sat and Sun.
         for nurse in self.nurses:
             for friday in self.weekend_history.get_weekends(nurse):
                 for offset in range(3):
                     day = friday + timedelta(days=offset)
-                    if window_start <= day <= window_end:
-                        worked[nurse].add(day)
+                    if first <= day <= last:
+                        add(nurse, day)
+
+        # Pre-scheduled cells are fixed commitments on either side.
+        for day, row in self.pre_scheduler.get_assignments_in_range(first, last).items():
+            for nurse in (row.get("main"), row.get("backup")):
+                add(nurse, day)
 
         # Per-day schedule history covers weekday shifts as well.
         if getattr(self, "assignment_history", None):
             try:
-                records = self.assignment_history.get_history(window_start, window_end)
+                records = self.assignment_history.get_history(first, last)
             except Exception:
                 records = []
             for date_str, main, backup in records:
-                day = DateUtils.normalize_date(date_str)
                 for nurse in (main, backup):
-                    if nurse in worked:
-                        worked[nurse].add(day)
+                    add(nurse, date_str)
 
         return {n: days for n, days in worked.items() if days}
+
+    def _future_weekends(self) -> dict[str, list[pd.Timestamp]]:
+        """
+        Fridays each nurse is already committed to after ``end_date``.
+
+        These come from weekend history (a later period applied first) and
+        from pre-scheduled weekends past the window. The forward weekend-gap
+        check and the pre-weekend window of the window's last days must
+        respect them, or the window's end could put a nurse on the weekend
+        before one they already work.
+        """
+        cached = getattr(self, "_future_weekends_cache", None)
+        if cached is not None:
+            return cached
+
+        future: dict[str, set[pd.Timestamp]] = {n: set() for n in self.nurses}
+        for nurse in self.nurses:
+            for weekend in self.weekend_history.get_weekends(nurse):
+                friday = self._as_friday(DateUtils.normalize_date(weekend))
+                if friday > self.end_date:
+                    future[nurse].add(friday)
+        for friday, roles in self._get_pre_scheduled_weekend_assignments().items():
+            if friday <= self.end_date:
+                continue
+            for nurse in roles.values():
+                if nurse in future:
+                    future[nurse].add(friday)
+
+        self._future_weekends_cache = {n: sorted(f) for n, f in future.items() if f}
+        return self._future_weekends_cache
 
     @staticmethod
     def is_empty(value) -> bool:

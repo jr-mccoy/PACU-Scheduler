@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from PySide6.QtCore import Qt, QTimer, QUrl
@@ -19,11 +20,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..messages import confirm, show_info
+from scheduler import apply_schedule
+
+from ..messages import confirm, show_error, show_info
 from ..services.variant_export import export_variants_calendar_html
 from ..style import UiStyle
 from ..widgets.common import add_shortcut, set_role
 from .tool_dialog import ToolDialog
+
+logger = logging.getLogger(__name__)
 
 # (stats key, label, tooltip) — shown for the variant on screen.
 METRICS = [
@@ -81,7 +86,6 @@ class VariantReviewDialog(ToolDialog):
         variants,
         weekend_history,
         assignment_history,
-        backup,
         *,
         out_dir: str | None = None,
         export_error: str | None = None,
@@ -90,7 +94,6 @@ class VariantReviewDialog(ToolDialog):
         self.variants = variants
         self.wh = weekend_history
         self.ah = assignment_history
-        self._backup = backup
         self._out_dir = out_dir
         self._export_error = export_error
         self._cur = 0
@@ -341,11 +344,20 @@ class VariantReviewDialog(ToolDialog):
         )
 
     def _apply(self, df):
-        for dt, row in df.iterrows():
-            main, backup = row.get("main"), row.get("backup")
-            if dt.weekday() == 4 and main and backup and main != backup:
-                self.wh.add_assignment(dt.isoformat(), main, backup)
-            self.ah.update_history(dt.isoformat(), main, backup)
+        try:
+            apply_schedule(self.wh.db_name, df)
+        except Exception as exc:
+            logger.exception("Applying option %d failed", self._cur + 1)
+            show_error(
+                self,
+                "Schedule not applied",
+                f"Option {self._cur + 1} could not be applied, so history was left unchanged.",
+                details=str(exc),
+            )
+            return
+        self.wh.reload()
+        if self.ah is not None:
+            self.ah.reload()
 
         show_info(
             self.parent(),

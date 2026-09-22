@@ -15,7 +15,6 @@ import logging
 import os
 import platform
 import shutil
-import sqlite3
 import subprocess
 import sys
 import traceback
@@ -36,6 +35,7 @@ from scheduler import (
     SharedSettings,
     WeekendHistory,
     WeekendPattern,
+    apply_schedule,
     build_scheduler_from_settings,
     default_worker_count,
 )
@@ -190,36 +190,6 @@ class VisualCalendarUI:
         print(" • Enter day number(s) (comma separated) to toggle selection")
         print(" • [N] Next month | [P] Previous month")
         print(" • [D] Done and Save | [C] Cancel (revert changes)")
-
-    def set_schedule(self, schedule: pd.DataFrame) -> None:
-        """Give the UI a schedule object so it can persist it later."""
-        self.schedule = schedule
-
-    def save_final_schedule(self) -> None:
-        """
-        Persist the schedule currently stored with set_schedule().
-        Call set_schedule() first, or pass the schedule explicitly when you save.
-        """
-        if not hasattr(self, "schedule"):
-            raise AttributeError("No schedule set. Call set_schedule(...) first.")
-
-        with sqlite3.connect(self.nurse_manager.db_name) as conn:
-            cur = conn.cursor()
-            for sched_date, row in self.schedule.iterrows():
-                date_str = pd.to_datetime(sched_date).strftime("%Y-%m-%d")
-                main_nurse = row["main"] if not NurseScheduler.is_empty(row["main"]) else ""
-                backup_nurse = row["backup"] if not NurseScheduler.is_empty(row["backup"]) else ""
-                cur.execute(
-                    """
-                    INSERT OR REPLACE INTO schedule_history
-                    (date, main_nurse_id, backup_nurse_id)
-                    VALUES (?,
-                            (SELECT nurse_id FROM nurses WHERE name = ?),
-                            (SELECT nurse_id FROM nurses WHERE name = ?))
-                    """,
-                    (date_str, main_nurse, backup_nurse),
-                )
-            conn.commit()
 
     def display_calendar(self, nurse_name: str | None = None) -> set[str]:
         """
@@ -1589,10 +1559,10 @@ class NurseSchedulerUI:
 
             # Save if confirmed
             if InputValidator.confirm_action("Save this schedule and update weekend history?", "n"):
-                self._save_selected_schedule(selected_schedule, scheduler)
+                self._save_selected_schedule(selected_schedule)
                 print("Success: schedule saved and weekend history updated.")
             else:
-                print("Changes discarded; weekend history restored.")
+                print("Not saved; history is unchanged.")
 
         except Exception as e:
             logger.error(f"Error generating schedule: {e}")
@@ -1745,60 +1715,24 @@ class NurseSchedulerUI:
 
         return final_sched
 
-    def _save_selected_schedule(self, schedule, scheduler):
-        """Save the selected schedule and update histories."""
-        self._update_weekend_history(schedule, scheduler)
-        self._update_assignment_history(schedule)
-        self.calendar_ui.set_schedule(schedule)
-        self.calendar_ui.save_final_schedule()
+    def _save_selected_schedule(self, schedule) -> None:
+        """Record the chosen schedule in assignment and weekend history.
 
-    def _update_weekend_history(self, schedule, scheduler) -> None:
-        """Update weekend history from schedule."""
-        weekends = scheduler._get_weekends()
-        updated_count = 0
-
-        for weekend in weekends:
-            try:
-                fsf_nurse = schedule.at[weekend, "main"]
-                saturday = weekend + timedelta(days=1)
-                sfs_nurse = schedule.at[saturday, "main"]
-
-                if (
-                    not NurseScheduler.is_empty(fsf_nurse)
-                    and not NurseScheduler.is_empty(sfs_nurse)
-                    and fsf_nurse != sfs_nurse
-                ):
-                    weekend_date = self._normalize_date(weekend)
-                    self.weekend_history_service.modify_assignment(
-                        weekend_date, fsf_nurse, sfs_nurse
-                    )
-                    updated_count += 1
-            except Exception as e:
-                logger.warning(f"Could not update weekend history for {weekend}: {e}")
-                print(
-                    f"Warning: Could not update weekend history for weekend starting {weekend}: {e}"
-                )
-
-        print(f"Updated {updated_count} weekend assignments in history.")
-
-    def _update_assignment_history(self, schedule) -> None:
-        """Update assignment history from schedule."""
-        updated_count = 0
-
-        for sched_date, row in schedule.iterrows():
-            try:
-                date_str_db = pd.to_datetime(sched_date).date().isoformat()
-                main_nurse = row["main"] if not NurseScheduler.is_empty(row["main"]) else ""
-                backup_nurse = row["backup"] if not NurseScheduler.is_empty(row["backup"]) else ""
-
-                if main_nurse or backup_nurse:
-                    self.assignment_history.update_history(date_str_db, main_nurse, backup_nurse)
-                    updated_count += 1
-            except Exception as e:
-                logger.warning(f"Could not update assignment history for {sched_date}: {e}")
-                print(f"Warning: Could not update assignment history for {sched_date}: {e}")
-
-        print(f"Updated {updated_count} assignments in history.")
+        One transaction through :func:`scheduler.apply_schedule`, the same path
+        the GUI uses, so a failure leaves history unchanged.
+        """
+        report = apply_schedule(self.nurse_manager.db_name, schedule)
+        self.weekend_history.reload()
+        self.assignment_history.reload()
+        print(
+            f"Recorded {report.days_recorded} days and "
+            f"{report.weekends_recorded} weekend rotations."
+        )
+        if report.days_cleared or report.weekends_removed:
+            print(
+                f"Removed {report.days_cleared} earlier day records and "
+                f"{report.weekends_removed} earlier weekend rotations this schedule replaces."
+            )
 
 
 def main():

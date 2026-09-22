@@ -37,7 +37,6 @@ def _seed_override(db: str) -> None:
     history.set_last_pattern("A", WeekendPattern.SFS)  # manual override
 
 
-@pytest.mark.xfail(strict=True, reason="audit #3: ending a run rebuilds weekend history")
 @pytest.mark.parametrize("outcome", ["cancelled", "error", "no results"])
 def test_ending_a_run_without_applying_keeps_manual_overrides(app_window, outcome):
     from ui.config import DB_NAME

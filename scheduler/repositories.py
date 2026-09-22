@@ -176,6 +176,10 @@ class AssignmentHistory(DatabaseMixin):
         """Refresh the in-memory cache from database."""
         self._history = self._load_history()
 
+    def reload(self) -> None:
+        """Re-read history written by other instances (for example, an apply)."""
+        self._refresh_cache()
+
     def get_all_history(self) -> list[tuple[str, str | None, str | None]]:
         """Return all history records as a list of tuples."""
         return [

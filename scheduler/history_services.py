@@ -140,6 +140,15 @@ class WeekendHistoryService:
         self._run_override("set_last_pattern", _write)
         self._history._last_patterns[nurse] = pattern
 
+    def run_in_transaction(self, command_name: str, write) -> None:
+        """Run ``write(conn)`` and the derived-state rebuild as one transaction.
+
+        For callers that change weekend assignments together with other
+        tables (applying a schedule writes per-day history too), so either
+        everything is written and rebuilt, or nothing is.
+        """
+        self._run_command(command_name, write)
+
     def _run_command(self, command_name: str, canonical_write) -> None:
         with sqlite3.connect(self._history.db_name) as conn:
             try:

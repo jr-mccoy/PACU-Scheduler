@@ -4,6 +4,7 @@ Implementations are owned by focused modules; no public package import routes
 through the deprecated ``legacy_core`` compatibility facade.
 """
 
+from .apply import ApplyReport, apply_schedule
 from .debug import (
     _DEBUG,
     _LOG_FILE_CACHE,
@@ -74,6 +75,8 @@ from .runtime import is_empty
 from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
+    "ApplyReport",
+    "apply_schedule",
     "AssignmentDebugLogger",
     "ASSIGNMENT_DEBUG_LOGGER",
     "AssignmentHistory",

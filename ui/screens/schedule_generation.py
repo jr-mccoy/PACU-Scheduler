@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from scheduler import AssignmentHistory, WeekendHistory
+from scheduler import AssignmentHistory
 from scheduler.exporters import write_gap_report
 
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
@@ -108,7 +108,7 @@ class ScheduleGenerationScreen(QWidget):
 
         # placeholders
         self._running = False
-        self.wh = self.ah = self.backup = None
+        self.ah = None
         self._progress: QProgressDialog | None = None
         self.worker: ScheduleProgressWorker | None = None
         self._variant_dialog = None
@@ -155,9 +155,9 @@ class ScheduleGenerationScreen(QWidget):
         if end < start or self._running:
             return
 
-        # backup histories ---------------------------------------------------
-        self.wh, self.ah = WeekendHistory(DB_NAME), AssignmentHistory(DB_NAME)
-        self.backup = self.wh.backup()
+        # Generation only reads history; nothing is written until an option
+        # is applied, so there is nothing to back up or restore here.
+        self.ah = AssignmentHistory(DB_NAME)
 
         theme = self.parent.settings.get("theme")
         accent = self.parent.settings.get("accent_color")
@@ -284,10 +284,6 @@ class ScheduleGenerationScreen(QWidget):
             self._progress.close()
             self._progress = None
 
-    def _restore_backup(self):
-        if self.wh and self.backup:
-            self.wh.restore(self.backup)
-
     def _finish_run(self):
         self._running = False
         self._close_progress()
@@ -295,12 +291,10 @@ class ScheduleGenerationScreen(QWidget):
 
     def _on_worker_cancelled(self):
         self._finish_run()
-        self._restore_backup()
         show_info(self, "Generation cancelled", "No schedule was generated. Nothing was changed.")
 
     def _on_worker_error(self, trace: str):
         self._finish_run()
-        self._restore_backup()
         show_error(
             self,
             "Schedule generation failed",
@@ -327,7 +321,6 @@ class ScheduleGenerationScreen(QWidget):
         # Guard: no feasible candidates
         if not variants:
             self._finish_run()
-            self._restore_backup()
             show_info(
                 self,
                 "No feasible schedules",
@@ -371,11 +364,9 @@ class ScheduleGenerationScreen(QWidget):
             variants,
             wh,
             self.ah,
-            self.backup,
             out_dir=out_dir,
             export_error=export_error,
         )
-        self._variant_dialog.rejected.connect(self._restore_backup)
         self._variant_dialog.open()
 
     def _write_diagnostics(self, scheduler, out_dir: str) -> None:

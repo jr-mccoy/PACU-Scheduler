@@ -94,8 +94,15 @@ facades; neither contains application logic, and a test enforces that.
 | --- | --- |
 | ![Manage Nurses](docs/images/nurse-management.png) | ![Schedule Generation](docs/images/schedule-generation.png) |
 | Roster management, with PRN and late-shift eligibility | Picking the horizon to schedule |
+| ![Weekend History](docs/images/weekend-history.png) | ![Rotation Violation Stats](docs/images/rotation-stats.png) |
+| Who worked each weekend, and in which pattern | Per-nurse rotation violations, with manual overrides |
 
 Regenerate these from the demo seed with `python scripts/screenshots.py`.
+
+Every screen follows the same conventions: Esc goes back, Enter edits the
+selected row, Delete removes it, and Ctrl+N adds. Dialogs cancel on Esc.
+Generation can be cancelled. [`docs/ui-ux-audit.md`](docs/ui-ux-audit.md)
+records the UI/UX audit behind these conventions.
 
 ## Setup
 
@@ -265,6 +272,8 @@ for operator control.
 - [`docs/original_monolithic_scheduler_rules.md`](docs/original_monolithic_scheduler_rules.md)
   — the pre-refactor rules, kept as an architectural decision record and pinned
   by characterization tests.
+- [`docs/ui-ux-audit.md`](docs/ui-ux-audit.md) — GUI audit findings, the
+  conventions adopted, which settings were connected, and what was deferred.
 
 ## License
 

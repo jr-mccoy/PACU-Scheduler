@@ -35,11 +35,8 @@ SCREENS: list[tuple[str, str]] = [
     ("manage", "nurse-management"),
     ("generate", "schedule-generation"),
     ("weekend_history", "weekend-history"),
+    ("advanced_stats", "rotation-stats"),
 ]
-# The Advanced Weekend Stats screen is deliberately not captured here: the
-# offscreen platform plugin does not implement propagateSizeHints(), so its
-# table columns collapse and the screenshot misrepresents the screen. Grab
-# that one from a real display if it is needed.
 
 
 def _seed_database(directory: Path) -> None:
@@ -49,6 +46,15 @@ def _seed_database(directory: Path) -> None:
 
     start = _next_friday(date.today()) + timedelta(days=3)
     seed(str(directory / DB_NAME), start)
+
+
+def _show_latest_recorded_month(screen) -> None:
+    """The demo's weekend history sits weeks before today; show that month."""
+    recorded = screen.wh.get_assignments()
+    if recorded:
+        latest = recorded[-1][0]
+        screen.month, screen.year = latest.month, latest.year
+        screen._refresh_all()
 
 
 def capture() -> list[Path]:
@@ -75,6 +81,8 @@ def capture() -> list[Path]:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         for page, stem in SCREENS:
             window.switch_frame(page)
+            if page == "weekend_history":
+                _show_latest_recorded_month(window.weekend_history)
             app.processEvents()
             target = OUTPUT_DIR / f"{stem}.png"
             if not window.grab().save(str(target)):

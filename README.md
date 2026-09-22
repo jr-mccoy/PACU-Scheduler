@@ -225,10 +225,10 @@ for operator control.
   rewrites derived state — `weekend_rotation_history`, violation dates and
   stats, in-memory last patterns — from `weekend_assignments`, so assignments,
   patterns, and violations cannot drift apart.
-- **Manual violation overrides are temporary by design.**
-  `set_violation_count` writes an operator override directly, and it stands
-  until an explicit rebuild (`_recalculate_violation_counts` / "Rebuild
-  Violation History").
+- **Manual overrides are temporary by design.**
+  `set_violation_count` and `set_last_pattern` write operator overrides
+  directly. They stand until the next canonical rebuild: any weekend
+  assignment edit, applying a schedule, or "Rebuild Violation History".
 - **Weekend generation defaults to strict-then-relaxed.** Strict alternation is
   attempted across the whole horizon first. If no variants survive, the relaxed
   retry runs only after `confirm_rotation_callback` approves it — and the
@@ -243,11 +243,35 @@ for operator control.
 - **Pre-scheduled weekend conflicts are hard-blocking.** Candidate `FSF`/`SFS`
   pairs are rejected outright when they contradict a non-empty prefilled
   Friday, Saturday, or Sunday cell.
-- **Pre-window history counts toward weekday spacing.** Days worked in the
-  `min_days_between_assignments` window immediately before the schedule start —
-  drawn from weekend history and the `schedule_history` table — are seeded into
-  each snapshot, so spacing is enforced across the window boundary rather than
-  only inside it.
+- **History is read relative to the window.** Rotation alternates against
+  the last weekend recorded *before* the start date, and only weekends
+  before it count as history. Weekends already recorded inside the range
+  are the schedule being replaced. They are ignored while generating, the
+  screen and the CLI say how many there are, and applying an option
+  replaces them. A manual `set_last_pattern` override counts only while
+  the nurse has no recorded weekend on or after the start date.
+- **Committed work on both sides of the window is respected.** Days worked
+  in the `min_days_between_assignments` window just before the start, or
+  already committed just after the end, count toward weekday spacing. These
+  come from weekend history, pre-scheduled cells and the
+  `schedule_history` table. Weekends recorded or pre-scheduled after the
+  end count toward the weekend gap and the pre-weekend window.
+- **Weekends are scheduled whole.** A range that starts on a Saturday or
+  Sunday, or ends on a Friday or Saturday, is widened to cover the whole
+  weekend, and the screen shows the widened range. The exception is a cut
+  weekend that is already recorded (usually by the previous month's run).
+  Its days inside the range keep their recorded roles, so consecutive
+  months never reshuffle each other's boundary weekend.
+- **Generation only reads; applying writes everything at once.**
+  Generating, cancelling or closing the review never touches history.
+  Applying an option goes through `scheduler.apply_schedule()`, from both
+  the GUI and the CLI. That records the per-day and weekend history for
+  the option's dates in one transaction, replacing what was there, and
+  rebuilds rotation state once.
+- **A crash is an error, never "no feasible schedule".**
+  `generate_weekend_candidates()` reports `ok`, `infeasible` or `error`,
+  and `generate_schedule()` raises `GenerationError` instead of offering
+  to relax rotation because of a bug.
 
 ## Known limitations
 

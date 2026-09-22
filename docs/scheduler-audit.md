@@ -6,8 +6,12 @@ point at that commit. The goal was to find logic errors and oversights:
 places where the scheduler does something other than what its rules, docs,
 or settings say, or where its search wastes its budget.
 
-Nothing here is fixed yet. Each finding ends with the fix it needs, and
-[the plan](#fix-plan) orders those fixes into phases.
+Each finding ends with the fix it needs, and [the plan](#fix-plan) orders
+those fixes into phases. Phases 0 and 1 are done: findings 1–5, 7 and 22
+are **Fixed**, and each fixed finding says how. Every other finding
+that could be reproduced has a strict-xfail test in
+`tests/test_known_issues.py`, which fails loudly (as an unexpected pass)
+when its fix lands.
 
 Severity:
 
@@ -32,31 +36,31 @@ finding). "Code reading" means it follows directly from the cited lines.
 
 ## Summary
 
-| # | Sev | Finding | Evidence |
-|---|---|---|---|
-| 1 | P1 | Regenerating a period that is already in weekend history reads its own future | Reproduced |
-| 2 | P1 | The window's end ignores weekends already committed after it | Reproduced |
-| 3 | P1 | Cancelling, or closing the review dialog, wipes manual rotation overrides | Reproduced |
-| 4 | P1 | Saving from the CLI never records new weekends | Reproduced |
-| 5 | P1 | Weekends cut by the window's edges are left blank, silently | Reproduced |
-| 6 | P1 | Final ranking can put a schedule with unfilled shifts first | Reproduced |
-| 7 | P1 | Crashes are reported as "no feasible schedule"; unevaluated variants are shown as results | Code reading |
-| 8 | P2 | PRN nurses are never scheduled at all | Reproduced |
-| 9 | P2 | The 30-day history tie-breaker never runs | Code reading |
-| 10 | P2 | Fairness metrics ignore how available each nurse was | Code reading |
-| 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading |
-| 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading |
-| 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading |
-| 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading |
-| 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading |
-| 16 | P2 | Gap-fill tries every ordering of a week's empty slots, uncapped | Reproduced (591 s) |
-| 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading |
-| 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced |
-| 19 | P3 | Local search cannot see long-term fairness | Code reading |
-| 20 | P3 | `consec_violations` can never exceed 1 | Reproduced |
-| 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading |
-| 22 | P3 | Applying a schedule is not atomic | Code reading |
-| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading |
+| # | Sev | Finding | Evidence | Status |
+|---|---|---|---|---|
+| 1 | P1 | Regenerating a period that is already in weekend history reads its own future | Reproduced | Fixed |
+| 2 | P1 | The window's end ignores weekends already committed after it | Reproduced | Fixed |
+| 3 | P1 | Cancelling, or closing the review dialog, wipes manual rotation overrides | Reproduced | Fixed |
+| 4 | P1 | Saving from the CLI never records new weekends | Reproduced | Fixed |
+| 5 | P1 | Weekends cut by the window's edges are left blank, silently | Reproduced | Fixed |
+| 6 | P1 | Final ranking can put a schedule with unfilled shifts first | Reproduced | Open (xfail test) |
+| 7 | P1 | Crashes are reported as "no feasible schedule"; unevaluated variants are shown as results | Code reading | Fixed |
+| 8 | P2 | PRN nurses are never scheduled at all | Reproduced | Open (xfail test) |
+| 9 | P2 | The 30-day history tie-breaker never runs | Code reading | Open (xfail test) |
+| 10 | P2 | Fairness metrics ignore how available each nurse was | Code reading | Open |
+| 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading | Open |
+| 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading | Open |
+| 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading | Open |
+| 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading | Open |
+| 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading | Open |
+| 16 | P2 | Gap-fill tries every ordering of a week's empty slots, uncapped | Reproduced (591 s) | Open (xfail test) |
+| 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading | Open |
+| 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced | Open (xfail test) |
+| 19 | P3 | Local search cannot see long-term fairness | Code reading | Open |
+| 20 | P3 | `consec_violations` can never exceed 1 | Reproduced | Open (xfail test) |
+| 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading | Open |
+| 22 | P3 | Applying a schedule is not atomic | Code reading | Fixed |
+| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading | Open |
 
 ## P1 — wrong schedules, lost data, or misreporting
 
@@ -93,6 +97,14 @@ keep. Tell the user before generating that the range overlaps applied
 history. See [Phase 1](#phase-1--stop-wrong-schedules-and-data-loss) for how
 manual pattern overrides fit in.
 
+**Status: Fixed.** `WeekendHistory.get_last_pattern_before()` gives the
+pattern of the last weekend recorded before `start_date`. A stored manual
+override counts only when the nurse has no recorded weekend on or after
+that date. The backward gap check reads history strictly before
+`start_date`. Before generating, the generation screen and the CLI say how
+many recorded weekends the range will replace
+(`recorded_weekends_in_range`). Tests: `tests/test_window_history.py`.
+
 ### 2. The window's end ignores weekends already committed after it
 
 **Where.** `scheduler/engine.py:594-630` (`_get_next_weekend_assignment`),
@@ -120,6 +132,12 @@ and `schedule_history` rows for `end_date + max(weekend_gap_days,
 min_days_between_assignments, 6)`. Include them in the forward gap check, in
 `nurse_weekend_lists` (for the pre-weekend window), and in the spacing check.
 
+**Status: Fixed.** Weekends recorded or pre-scheduled after `end_date` feed
+the forward gap check and each nurse's weekend list, which bounds the
+pre-weekend window. Shifts committed just after the window
+(`post_window_worked`) count toward spacing. Pre-scheduled cells now count
+on both sides of the window. Tests: `tests/test_window_history.py`.
+
 ### 3. Cancelling, or closing the review dialog, wipes manual rotation overrides
 
 **Where.** `ui/screens/schedule_generation.py:159-160` (backup),
@@ -143,6 +161,9 @@ in another window during the run.
 Generation is read-only. Protect Apply by making it a single transaction
 instead (finding 22).
 
+**Status: Fixed.** The generation screen no longer snapshots or restores
+weekend history. Tests: `tests/test_generation_screen.py`.
+
 ### 4. Saving from the CLI never records new weekends
 
 **Where.** `cli/nurse_scheduler_ui.py:1755-1782`.
@@ -162,6 +183,9 @@ weekends either.
 
 **Fix.** Save through one shared, transactional apply service in `scheduler/`
 used by both front ends. It uses insert-or-replace, like the GUI's fixed path.
+
+**Status: Fixed.** The CLI saves through `scheduler.apply_schedule()`, the
+same path as the GUI. Tests: `tests/test_apply_schedule.py`.
 
 ### 5. Weekends cut by the window's edges are left blank, silently
 
@@ -188,6 +212,15 @@ or ends on Friday or Saturday, extend the internal horizon to cover the whole
 Friday–Sunday block. Treat any cells already recorded for the overhang as
 pre-scheduled. Show the adjusted range on the screen, or have the date
 pickers snap to it. Make `describe_range` count only complete weekends.
+
+**Status: Fixed**, as recommended (open decision 5).
+`whole_weekend_range()` widens the range to whole weekends. The exception
+is a cut weekend that is already recorded, usually by the previous month's
+run: the range is not widened over it, and its days inside the range are
+pinned to their recorded roles, so consecutive months never reshuffle each
+other's boundary weekend. The screen and the CLI show the widened range,
+and the screen counts weekends over it. Tests:
+`tests/test_edge_weekends.py`.
 
 ### 6. Final ranking can put a schedule with unfilled shifts first
 
@@ -232,6 +265,15 @@ distinguishes *infeasible* from *error*. This is the first step of the
 `WeekendGenerationResult` in `docs/weekend-candidate-generation.md`. Remove
 the unevaluated-variant fallback. If no variant evaluates, that is an error
 with a traceback.
+
+**Status: Fixed.** `generate_weekend_candidates()` returns a
+`WeekendGenerationResult` whose status is `ok`, `infeasible` or `error`.
+`generate_all_weekend_variants()` keeps its list return. `generate_schedule()`
+raises `GenerationError` on a crash, before any relaxation prompt, and
+when no variant could be evaluated. The GUI worker reports both cases
+through its error signal, the unevaluated-variant fallback is gone, and
+a ranking failure is an error too. Tests:
+`tests/test_generation_outcomes.py` and `tests/test_generation_screen.py`.
 
 ## P2 — rules not applied as documented
 
@@ -490,6 +532,16 @@ them. **Fix:** a shared `apply_schedule()` service that writes the whole
 window in one transaction, rebuilds rotation history once, and removes
 weekends in the window that the new schedule doesn't keep (finding 1).
 
+**Status: Fixed.** `scheduler.apply_schedule()` does all of this in one
+transaction with a single rotation rebuild, after checking every name:
+- replaces the per-day history for the schedule's dates, removing the
+  record for a day nobody works instead of writing an empty row;
+- records each Friday's rotation;
+- removes any recorded weekend the schedule leaves unpaired.
+
+Tests: `tests/test_apply_schedule.py`, including rollback after a failed
+rebuild.
+
 ### 23. Smaller issues
 
 - `generate_schedule` always writes `schedule_variant_N.pdf` into the
@@ -527,6 +579,18 @@ tests.
 
 **Done when** the test suite encodes every finding above that is marked
 Reproduced.
+
+**Status: Done.**
+- The helper is `tests/scheduling_fixtures.py`: eight regular nurses and
+  one PRN, a 14-day weekend gap, and a 25-variant beam, so each test runs
+  in seconds.
+- The finding-16 guard counts slot orderings instead of timing a run. It
+  fails as soon as gap-fill passes `max_week_permutations`, which is fast
+  and not flaky on a busy CI runner.
+- Findings still open are strict-xfail tests in
+  `tests/test_known_issues.py`. Finding 8's test encodes the recommended
+  policy (open decision 1) and should be revisited if that decision goes
+  another way.
 
 ### Phase 1 — stop wrong schedules and data loss
 
@@ -570,6 +634,19 @@ Findings 1, 2, 3, 4, 5, 7, and 22.
 - a CLI save records new weekends;
 - a Saturday-to-Friday range has no blank weekend cells;
 - a forced exception surfaces as an error, not as infeasibility.
+
+**Status: Done.** Every item above holds and is tested. Differences from
+the plan as written:
+- The query is `get_last_pattern_before()`, alongside the existing
+  `get_last_pattern()`.
+- `apply_schedule(db, schedule)` takes its range from the schedule's own
+  index.
+- For recorded edge weekends, the fix pins their days instead of seeding
+  the overhang (see finding 5).
+- A range that overlaps recorded weekends is flagged in the generation
+  screen's summary and in the CLI.
+- The GUI worker also covers the success path with a real
+  generate-evaluate-rank run under tight budgets.
 
 ### Phase 2 — rank and optimize what the rules say
 
@@ -669,7 +746,9 @@ before the phases that depend on them.
    28) or exclusive (today)? Either way the label will say exactly which.
 5. **Edge weekends** (Phase 1): extend the horizon automatically
    (recommended), or require ranges to start on a Monday and end on a
-   Sunday?
+   Sunday? *Phase 1 implemented the recommendation, keeping already
+   recorded edge weekends as they are.*
 6. **Manual pattern overrides** (Phase 1): is the proposed rule (an override
    applies only when no later weekend is recorded) right, or should
-   overrides carry an explicit effective date?
+   overrides carry an explicit effective date? *Phase 1 implemented the
+   proposed rule; an effective date can still replace it.*

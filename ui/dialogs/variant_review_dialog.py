@@ -82,7 +82,7 @@ class VariantReviewDialog(ToolDialog):
         nav.setSpacing(16)
         nav.addStretch()
         theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
         )
 
         self.prev_btn = QPushButton("Previous")
@@ -161,7 +161,7 @@ class VariantReviewDialog(ToolDialog):
             return
 
         theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
         )
         fg = QColor("#E8EAF0") if theme == "dark" else QColor("#2C2A27")
 
@@ -227,7 +227,7 @@ class VariantReviewDialog(ToolDialog):
     def apply_theme_update(self):
         """Refresh navigation button icons when theme changes."""
         theme = (
-            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "pink"
+            self.parent().settings.get("theme") if hasattr(self.parent(), "settings") else "dark"
         )
         self.prev_btn.setIcon(themed_icon("arrowL.png", theme))
         self.next_btn.setIcon(themed_icon("arrowR.png", theme))

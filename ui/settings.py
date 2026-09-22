@@ -11,7 +11,7 @@ from scheduler import DEFAULT_MAX_WEEKEND_VARIANTS
 class AppSettings:
     DEFAULTS = {
         # UI
-        "theme": "pink",
+        "theme": "dark",
         "font_size": 12,
         "accent_color": "#5C8DBC",
         "show_gif": True,

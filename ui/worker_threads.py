@@ -171,18 +171,25 @@ class ScheduleProgressWorker(QThread):
             )
 
             self.stage.emit("Building weekend rotation variants…")
-            variants = sched.generate_all_weekend_variants(
+            result = sched.generate_weekend_candidates(
                 allow_rotation_violations=self.allow_rotation_violations
             )
             if self.isInterruptionRequested():
                 self.cancelled.emit()
                 return
+            if result.status == "error":
+                # A crash, not infeasibility: report it as an error so the
+                # user is not told to relax rules to work around a bug.
+                self.error.emit(result.error or "Weekend generation failed.")
+                return
+            variants = result.variants
             if not variants:
                 self.finished.emit([], sched, wh)
                 return
 
             total = len(variants)
             candidate_schedules = []
+            failures: list[str] = []
             profiling = self.profiling_enabled
             evaluate = _evaluate_variant_worker_profiled if profiling else _evaluate_variant_worker
 
@@ -231,6 +238,7 @@ class ScheduleProgressWorker(QThread):
                                 res = fut.result()
                             except Exception:
                                 logger.exception("Evaluating a variant failed")
+                                failures.append(traceback.format_exc())
                                 res = None
                             if res is not None:
                                 if profiling:
@@ -246,6 +254,7 @@ class ScheduleProgressWorker(QThread):
                         pool.shutdown(wait=True)
             except Exception:
                 logger.exception("Variant evaluation pool failed")
+                failures.append(traceback.format_exc())
                 candidate_schedules.clear()
 
             if cancelled:
@@ -253,38 +262,18 @@ class ScheduleProgressWorker(QThread):
                 return
 
             if not candidate_schedules:
-                logger.warning("No variant evaluated cleanly; ranking unevaluated variants")
-                for i, var in enumerate(variants):
-                    try:
-                        df = var.state.schedule.copy()
-                        counts = {}
-                        for n in getattr(var, "nurses", []):
-                            m = int((df["main"] == n).sum()) if "main" in df.columns else 0
-                            b = int((df["backup"] == n).sum()) if "backup" in df.columns else 0
-                            counts[n] = {"main": m, "backup": b, "total": m + b}
-                        mains = list(counts[n]["main"] for n in counts) or [0]
-                        backs = list(counts[n]["backup"] for n in counts) or [0]
-                        stats = {
-                            "gaps": int(df[["main", "backup"]].isna().sum().sum())
-                            if not df.empty
-                            else 0,
-                            "balance_main": int(max(mains) - min(mains)) if len(mains) > 1 else 0,
-                            "balance_backup": int(max(backs) - min(backs)) if len(backs) > 1 else 0,
-                            "rotation_rep": int(getattr(var.state, "rotation_repeats", 0)),
-                        }
-                        candidate_schedules.append((i, stats, counts, df))
-                    except Exception:
-                        logger.exception("Building fallback stats for variant %d failed", i)
-
-            if not candidate_schedules:
-                self.finished.emit([], sched, wh)
+                # Weekend variants existed, so an empty result here is a
+                # failure. Offering the unevaluated variants instead would
+                # present schedules with every weekday blank as real options.
+                detail = failures[0] if failures else "No details were logged."
+                self.error.emit(
+                    f"None of the {total} candidate schedules could be evaluated.\n\n"
+                    f"First failure:\n{detail}"
+                )
                 return
 
             self.stage.emit("Ranking variants…")
-            try:
-                sched._score_and_rank_variants(candidate_schedules)
-            except Exception:
-                logger.exception("Ranking variants failed; keeping evaluation order")
+            sched._score_and_rank_variants(candidate_schedules)
 
             if DEBUG_SAVE_VARIANTS:
                 try:

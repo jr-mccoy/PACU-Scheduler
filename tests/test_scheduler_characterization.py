@@ -11,6 +11,7 @@ from scheduler import (
     SchedulerConfig,
     ScheduleState,
     ScheduleVariant,
+    WeekendGenerationResult,
     WeekendHistory,
     WeekendPattern,
 )
@@ -443,9 +444,9 @@ def test_strict_then_relaxed_gate_declined_aborts(monkeypatch, scheduler_for_mod
 
     def fake_generate(*, allow_rotation_violations=False):
         calls.append(allow_rotation_violations)
-        return []
+        return WeekendGenerationResult("infeasible", [])
 
-    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
+    monkeypatch.setattr(scheduler_for_modes, "generate_weekend_candidates", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: False,
@@ -462,9 +463,11 @@ def test_strict_then_relaxed_gate_accepted_retries_relaxed(monkeypatch, schedule
 
     def fake_generate(*, allow_rotation_violations=False):
         calls.append(allow_rotation_violations)
-        return sentinel if allow_rotation_violations else []
+        if allow_rotation_violations:
+            return WeekendGenerationResult("ok", sentinel)
+        return WeekendGenerationResult("infeasible", [])
 
-    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
+    monkeypatch.setattr(scheduler_for_modes, "generate_weekend_candidates", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: True,

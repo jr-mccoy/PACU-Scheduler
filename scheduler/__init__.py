@@ -39,7 +39,9 @@ from .domain import (
 )
 from .engine import (
     WORKER_TUNING,
+    GenerationError,
     NurseScheduler,
+    WeekendGenerationResult,
     WorkerTuningConfig,
     _evaluate_variant_worker,
     _evaluate_variant_worker_profiled,
@@ -75,6 +77,8 @@ from .runtime import is_empty
 from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
+    "GenerationError",
+    "WeekendGenerationResult",
     "ApplyReport",
     "apply_schedule",
     "AssignmentDebugLogger",

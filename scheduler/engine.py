@@ -10,6 +10,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
 from itertools import pairwise
@@ -53,6 +54,28 @@ logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
 PERFORMANCE_PROFILING_REQUESTED = _runtime.PERFORMANCE_PROFILING_REQUESTED
 PERFORMANCE_PROFILE_JSON_DEFAULT = _runtime.PERFORMANCE_PROFILE_JSON_DEFAULT
+
+
+class GenerationError(RuntimeError):
+    """Schedule generation failed for a reason other than infeasibility."""
+
+
+@dataclass
+class WeekendGenerationResult:
+    """How weekend generation ended, and the variants it produced.
+
+    ``status`` is ``"ok"``, ``"infeasible"`` or ``"error"``. For
+    ``"infeasible"``, ``failed_weekend`` is the Friday no branch could staff;
+    for ``"error"``, ``error`` is the traceback. ``pruned`` records that the
+    ``max_weekend_variants`` beam discarded branches, so infeasibility may be
+    an artefact of the cap.
+    """
+
+    status: str
+    variants: list[ScheduleVariant] = field(default_factory=list)
+    error: str | None = None
+    failed_weekend: pd.Timestamp | None = None
+    pruned: bool = False
 
 
 def whole_weekend_range(
@@ -1079,7 +1102,27 @@ class NurseScheduler:
         self, *, allow_rotation_violations: bool = False
     ) -> list[ScheduleVariant]:
         """
-        Build every feasible schedule variant. Logs branching and state to debug_variants.txt.
+        Build every feasible weekend variant, or ``[]``.
+
+        ``[]`` means either that no weekend assignment satisfies the rules or
+        that generation crashed (logged with its traceback). Callers that must
+        tell those apart use :meth:`generate_weekend_candidates`.
+        """
+        return self.generate_weekend_candidates(
+            allow_rotation_violations=allow_rotation_violations
+        ).variants
+
+    def generate_weekend_candidates(
+        self, *, allow_rotation_violations: bool = False
+    ) -> WeekendGenerationResult:
+        """
+        Build every feasible weekend variant and say how generation ended.
+
+        The result's ``status`` is ``"ok"``, ``"infeasible"`` (some weekend
+        has no valid pair on any surviving branch) or ``"error"`` (generation
+        raised; ``error`` holds the traceback). A crash is never reported as
+        infeasibility, which would send the user off relaxing rules to work
+        around a bug. Logs branching and state to debug_variants.txt.
         """
         if _runtime._DBG_FILE_VARIANTS:
             _runtime._DBG_FILE_VARIANTS.seek(0)
@@ -1121,22 +1164,25 @@ class NurseScheduler:
                             friday.date(),
                             max_variants,
                         )
-                    return []
+                    return WeekendGenerationResult(
+                        "infeasible", [], failed_weekend=friday, pruned=pruned_any
+                    )
                 if max_variants and len(variants) > max_variants:
                     variants = self._prune_weekend_variants(variants, max_variants, friday)
                     pruned_any = True
 
             self._collect_rotation_violations(variants)
             _dbg_variants(f"\nFinal total variants: {len(variants)}")
-            return variants
+            return WeekendGenerationResult("ok", variants, pruned=pruned_any)
 
         except Exception:
             # Log unconditionally so a genuine crash is not silently reported as
             # "no feasible schedule" (the debug sink is off unless NSCHED_DEBUG).
-            logger.error("generate_all_weekend_variants failed:\n%s", traceback.format_exc())
+            trace = traceback.format_exc()
+            logger.error("generate_all_weekend_variants failed:\n%s", trace)
             _dbg_variants("EXCEPTION:\n")
-            _dbg_variants(traceback.format_exc())
-            return []
+            _dbg_variants(trace)
+            return WeekendGenerationResult("error", [], error=trace)
 
     def _prune_weekend_variants(self, variants, max_variants, friday):
         """
@@ -1574,8 +1620,11 @@ class NurseScheduler:
                 worker_metrics = []
 
             if not candidate_schedules:
-                logger.error("❌ No candidate schedules after evaluation.")
-                return []
+                # Variants existed, so this is a failure, not infeasibility.
+                raise GenerationError(
+                    f"None of the {len(variants)} candidate schedules could be evaluated; "
+                    "the log has each failure."
+                )
 
             # Score and rank variants
             self._score_and_rank_variants(candidate_schedules)
@@ -1605,28 +1654,41 @@ class NurseScheduler:
         return confirm_rotation_callback
 
     def _generate_weekend_variants(self, confirm_rotation_callback, weekend_variant_mode):
-        """Generate weekend variants based on the selected fallback mode."""
+        """Generate weekend variants based on the selected fallback mode.
+
+        Raises :class:`GenerationError` if generation crashes, so a bug is
+        never mistaken for infeasibility (and never prompts the user to allow
+        rotation repeats).
+        """
         mode = self._normalize_weekend_variant_mode(weekend_variant_mode)
 
+        def generate(allow_rotation_violations: bool) -> list[ScheduleVariant]:
+            result = self.generate_weekend_candidates(
+                allow_rotation_violations=allow_rotation_violations
+            )
+            if result.status == "error":
+                raise GenerationError(f"Weekend generation failed:\n{result.error}")
+            return result.variants
+
         if mode == self.WeekendVariantMode.STRICT_ONLY:
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
+            variants = generate(False)
             if not variants:
                 logger.info("No feasible variants with strict rotation mode.")
             return variants
 
         if mode == self.WeekendVariantMode.RELAXED_ALLOWED:
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=True)
+            variants = generate(True)
             if not variants:
                 logger.error("No feasible variants with relaxed rotation mode.")
             return variants
 
         # STRICT_THEN_RELAXED
-        variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
+        variants = generate(False)
         if not variants:
             if not confirm_rotation_callback():
                 logger.info("User declined to allow rotation repeats – abort.")
                 return []
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=True)
+            variants = generate(True)
             if not variants:
                 logger.error("Still no feasible variants with repeats allowed.")
                 return []
@@ -1803,7 +1865,9 @@ class NurseScheduler:
 __all__ = [
     "WorkerTuningConfig",
     "WORKER_TUNING",
+    "GenerationError",
     "NurseScheduler",
+    "WeekendGenerationResult",
     "whole_weekend_range",
     "_evaluate_variant_worker",
     "_evaluate_variant_worker_profiled",

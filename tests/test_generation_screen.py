@@ -76,7 +76,6 @@ def _run_worker(tmp_path, monkeypatch):
     return errors, finished
 
 
-@pytest.mark.xfail(strict=True, reason="audit #7: a crash reads as no feasible schedule")
 def test_worker_reports_a_generation_crash_as_an_error(qapp, tmp_path, monkeypatch):
     from scheduler import NurseScheduler
 
@@ -91,7 +90,6 @@ def test_worker_reports_a_generation_crash_as_an_error(qapp, tmp_path, monkeypat
     assert errors and "simulated malformed data" in errors[0]
 
 
-@pytest.mark.xfail(strict=True, reason="audit #7: unevaluated variants are offered")
 def test_worker_reports_an_error_when_no_variant_evaluates(qapp, tmp_path, monkeypatch):
     import ui.worker_threads as worker_threads
 

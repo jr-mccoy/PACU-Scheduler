@@ -192,6 +192,17 @@ def test_describe_range():
     assert describe_range(date(2026, 9, 21), date(2026, 9, 20)) == ""
 
 
+def test_describe_range_explains_a_widened_range():
+    from ui.screens.schedule_generation import describe_range
+
+    text = describe_range(
+        date(2026, 10, 3), date(2026, 10, 30), (date(2026, 10, 2), date(2026, 11, 1))
+    )
+    assert "28 days" in text
+    assert "5 weekends" in text
+    assert "Scheduling Fri Oct 02 – Sun Nov 01, 2026 so no weekend is split." in text
+
+
 def test_stats_items_sort_numerically(qapp):
     from PySide6.QtWidgets import QTableWidget
 

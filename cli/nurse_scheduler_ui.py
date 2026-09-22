@@ -1547,6 +1547,14 @@ class NurseSchedulerUI:
 
             # Generate and display schedule options
             scheduler = self._create_scheduler(start_date, end_date)
+            if (scheduler.start_date, scheduler.end_date) != (
+                scheduler.requested_start_date,
+                scheduler.requested_end_date,
+            ):
+                print(
+                    f"Scheduling {scheduler.start_date:%a %b %d} – "
+                    f"{scheduler.end_date:%a %b %d, %Y} so no weekend is split."
+                )
             top_schedules = self._generate_schedule_with_violations(scheduler, nurses_allowed)
 
             if not top_schedules:

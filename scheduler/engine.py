@@ -55,6 +55,33 @@ PERFORMANCE_PROFILING_REQUESTED = _runtime.PERFORMANCE_PROFILING_REQUESTED
 PERFORMANCE_PROFILE_JSON_DEFAULT = _runtime.PERFORMANCE_PROFILE_JSON_DEFAULT
 
 
+def whole_weekend_range(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    is_recorded: Callable[[pd.Timestamp], bool] = lambda friday: False,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Widen ``[start, end]`` so it does not cut a weekend in two.
+
+    A start on Saturday or Sunday moves back to that weekend's Friday, and an
+    end on Friday or Saturday moves on to its Sunday, so the FSF/SFS pair is
+    generated for all three days. A weekend that ``is_recorded`` already
+    belongs to the period that recorded it, so the range is left as is there
+    and the recorded days inside it are kept instead.
+    """
+    start = DateUtils.normalize_date(start)
+    end = DateUtils.normalize_date(end)
+    if start.weekday() in (5, 6):
+        friday = start - timedelta(days=start.weekday() - 4)
+        if not is_recorded(friday):
+            start = friday
+    if end.weekday() in (4, 5):
+        friday = end - timedelta(days=end.weekday() - 4)
+        if not is_recorded(friday) and friday >= start:
+            end = friday + timedelta(days=2)
+    return start, end
+
+
 def _sync_worker_compatibility_overrides() -> None:
     """Honor monkeypatches made through the deprecated legacy module."""
     legacy = sys.modules.get("scheduler.legacy_core")
@@ -153,9 +180,6 @@ class NurseScheduler:
         config,
     ):
         """Initialize the core attributes of the scheduler (now with deterministic nurse order)."""
-        self.start_date = DateUtils.normalize_date(start_date)
-        self.end_date = DateUtils.normalize_date(end_date)
-
         # Deterministic ordering across processes/runs
         self.nurses = sorted(list(nurses), key=str.casefold)
         self.prn_nurses = sorted(list(prn_nurses), key=str.casefold)
@@ -164,6 +188,18 @@ class NurseScheduler:
         self.weekend_history = weekend_history
         self.pre_scheduler = pre_scheduler
         self.config = config if config is not None else SchedulerConfig()
+
+        # A weekend is one FSF/SFS unit, so a range that cuts one is widened to
+        # cover it whole, unless that weekend is already recorded (then its
+        # days inside the range are kept as they are; see
+        # _recorded_edge_weekend_slots).
+        self.requested_start_date = DateUtils.normalize_date(start_date)
+        self.requested_end_date = DateUtils.normalize_date(end_date)
+        self.start_date, self.end_date = whole_weekend_range(
+            self.requested_start_date,
+            self.requested_end_date,
+            is_recorded=lambda friday: self._recorded_weekend(friday) is not None,
+        )
 
     def _initialize_scheduling_data(self):
         """Initialize the main scheduling data structures."""
@@ -479,6 +515,54 @@ class NurseScheduler:
         for day_str, row in raw.items():
             ts = DateUtils.normalize_date(day_str)
             slots[ts] = {"main": row.get("main"), "backup": row.get("backup")}
+
+        # Days of an already-recorded weekend that the range cuts are fixed,
+        # like pre-scheduled cells; an explicit pre-scheduled name wins.
+        for day, roles in self._recorded_edge_weekend_slots().items():
+            slot = slots.setdefault(day, {"main": None, "backup": None})
+            for role, nurse in roles.items():
+                if self.is_empty(slot.get(role)):
+                    slot[role] = nurse
+        return slots
+
+    def _recorded_weekend(self, friday: pd.Timestamp) -> tuple[str, str] | None:
+        """The recorded ``(fsf, sfs)`` pair for a weekend, or None.
+
+        Falls back to "some nurse worked it" (with unknown roles) for history
+        objects without ``get_assignment``.
+        """
+        lookup = getattr(self.weekend_history, "get_assignment", None)
+        if lookup is not None:
+            pair = lookup(friday)
+            if pair and not self.is_empty(pair[0]) and not self.is_empty(pair[1]):
+                return pair[0], pair[1]
+            return None
+        for nurse in self.nurses:
+            if friday in self.weekend_history.get_weekends(nurse):
+                return (None, None)
+        return None
+
+    def _recorded_edge_weekend_slots(self) -> dict[pd.Timestamp, dict[str, str]]:
+        """Cells of recorded weekends that straddle the window's start or end.
+
+        :func:`whole_weekend_range` leaves such a weekend out of the widened
+        range because it belongs to the period that recorded it; the days of
+        it that do fall inside this window keep their recorded roles.
+        """
+        slots: dict[pd.Timestamp, dict[str, str]] = {}
+        edge_fridays = {self._as_friday(self.start_date), self._as_friday(self.end_date)}
+        for friday in edge_fridays:
+            if self.start_date <= friday and friday + timedelta(days=2) <= self.end_date:
+                continue  # a whole weekend inside the window: generated normally
+            pair = self._recorded_weekend(friday)
+            if not pair or self.is_empty(pair[0]):
+                continue
+            fsf, sfs = pair
+            pattern = ((fsf, sfs), (sfs, fsf), (fsf, sfs))  # Fri, Sat, Sun (main, backup)
+            for offset, (main, backup) in enumerate(pattern):
+                day = friday + timedelta(days=offset)
+                if self.start_date <= day <= self.end_date:
+                    slots[day] = {"main": main, "backup": backup}
         return slots
 
     # --- Replace in NurseScheduler ---------------------------------------------
@@ -1720,6 +1804,7 @@ __all__ = [
     "WorkerTuningConfig",
     "WORKER_TUNING",
     "NurseScheduler",
+    "whole_weekend_range",
     "_evaluate_variant_worker",
     "_evaluate_variant_worker_profiled",
 ]

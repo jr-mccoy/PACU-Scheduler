@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import date, timedelta
 
+import pandas as pd
 from PySide6.QtCore import QDate, QElapsedTimer, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,7 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from scheduler import AssignmentHistory
+from scheduler import AssignmentHistory, WeekendHistory
+from scheduler.engine import whole_weekend_range
 from scheduler.exporters import write_gap_report
 
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
@@ -33,19 +35,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_SPAN_DAYS = 28  # four weeks, start day included
 
 
-def describe_range(start: date, end: date) -> str:
-    """One-line summary of a scheduling horizon, e.g. for the screen footer."""
+def describe_range(start: date, end: date, scheduled: tuple[date, date] | None = None) -> str:
+    """Summary of a scheduling horizon, e.g. for the screen footer.
+
+    ``scheduled`` is the range the scheduler will actually cover, which is
+    wider when ``start``..``end`` cuts a weekend in two (see
+    :func:`scheduler.engine.whole_weekend_range`). Weekends are counted over
+    it, and a second line says why it differs.
+    """
     if end < start:
         return ""
+    first_day, last_day = scheduled or (start, end)
     days = (end - start).days + 1
-    weekends = sum(1 for i in range(days) if (start + timedelta(days=i)).weekday() == 5)
-    same_year = start.year == end.year
-    first = start.strftime("%a %b %d") if same_year else start.strftime("%a %b %d, %Y")
-    last = end.strftime("%a %b %d, %Y")
-    return (
-        f"{first} – {last}  ·  {days} day{'s' if days != 1 else ''}"
+    weekends = sum(
+        1
+        for i in range((last_day - first_day).days + 1)
+        if (first_day + timedelta(days=i)).weekday() == 5
+    )
+    text = (
+        f"{_span(start, end)}  ·  {days} day{'s' if days != 1 else ''}"
         f"  ·  {weekends} weekend{'s' if weekends != 1 else ''}"
     )
+    if (first_day, last_day) != (start, end):
+        text += f"\nScheduling {_span(first_day, last_day)} so no weekend is split."
+    return text
+
+
+def _span(start: date, end: date) -> str:
+    first = start.strftime("%a %b %d") if start.year == end.year else start.strftime("%a %b %d, %Y")
+    return f"{first} – {end.strftime('%a %b %d, %Y')}"
 
 
 def _qdate_to_date(qd: QDate) -> date:
@@ -109,6 +127,7 @@ class ScheduleGenerationScreen(QWidget):
         # placeholders
         self._running = False
         self.ah = None
+        self._weekend_history: WeekendHistory | None = None
         self._progress: QProgressDialog | None = None
         self.worker: ScheduleProgressWorker | None = None
         self._variant_dialog = None
@@ -125,6 +144,23 @@ class ScheduleGenerationScreen(QWidget):
     def selected_range(self) -> tuple[date, date]:
         return _qdate_to_date(self._start_cal.qdate()), _qdate_to_date(self._end_cal.qdate())
 
+    def on_show(self):
+        """Re-read weekend history, which decides how edge weekends are handled."""
+        self._weekend_history = None
+        self._update_summary()
+
+    def _scheduled_range(self, start: date, end: date) -> tuple[date, date]:
+        """The range generation will cover, with split weekends made whole."""
+        if self._weekend_history is None:
+            self._weekend_history = WeekendHistory(DB_NAME)
+        history = self._weekend_history
+        first, last = whole_weekend_range(
+            pd.Timestamp(start),
+            pd.Timestamp(end),
+            is_recorded=lambda friday: history.get_assignment(friday) is not None,
+        )
+        return first.date(), last.date()
+
     def _update_summary(self, *_):
         start, end = self.selected_range()
         running = self._running
@@ -133,7 +169,7 @@ class ScheduleGenerationScreen(QWidget):
             self.summary.setProperty("role", "error")
             self.gen_btn.setEnabled(False)
         else:
-            self.summary.setText(describe_range(start, end))
+            self.summary.setText(describe_range(start, end, self._scheduled_range(start, end)))
             self.summary.setProperty("role", None)
             self.gen_btn.setEnabled(not running)
         self.summary.style().unpolish(self.summary)

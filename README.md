@@ -186,6 +186,24 @@ budgets are tunable rather than fixed:
 The shipped defaults are generous enough that a single variant can take
 minutes; see **Known limitations**.
 
+### Parallelism
+
+Variants are evaluated in a process pool, and evaluation is CPU-bound pure
+Python, so wall-clock time falls almost linearly with worker count (the
+4-week demo: 86 s on one worker, 47 s on two, 27 s on four). By default the
+GUI, the terminal UI, and `generate_schedule()` size the pool to the machine:
+one worker per physical core, less one core kept free for the desktop, and
+never more than free memory allows at 256 MB per worker (a worker actually
+peaks near 70 MB). Hyper-threaded siblings are not counted because they add
+little to this workload.
+
+Override the choice with an environment variable, or per call with
+`generate_schedule(max_workers=...)`:
+
+```bash
+PACU_MAX_WORKERS=8 python main.py
+```
+
 ## Scheduling policies
 
 The scheduler applies these policies deliberately; each one trades automation

@@ -50,7 +50,7 @@ from .factory import (
     build_scheduler_service,
 )
 from .history_services import ViolationHistoryService, WeekendHistoryService
-from .platform import allow_sleep, inhibit_sleep
+from .platform import allow_sleep, default_worker_count, inhibit_sleep
 from .profiling import (
     MetricsCollector,
     PerformanceProfiler,
@@ -126,6 +126,7 @@ __all__ = [
     "build_scheduler_service",
     "configure_assignment_debug_logger",
     "configure_pair_variant_debug",
+    "default_worker_count",
     "ensure_schema",
     "inhibit_sleep",
     "is_empty",

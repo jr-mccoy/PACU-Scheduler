@@ -43,7 +43,7 @@ from .exporters.pdf import (
 from .exporters.pdf import (
     export_variant_pdf as _export_variant_pdf_fn,
 )
-from .platform import allow_sleep, inhibit_sleep
+from .platform import allow_sleep, default_worker_count, inhibit_sleep, usable_cpu_count
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
 from .runtime import is_empty
@@ -1342,7 +1342,7 @@ class NurseScheduler:
     def generate_schedule(
         self,
         top_n: int = 10,
-        max_workers: int = 2,
+        max_workers: int | None = None,
         *,
         confirm_rotation_callback: Callable[[], bool] | None = None,
         weekend_variant_mode: str
@@ -1350,7 +1350,11 @@ class NurseScheduler:
         profile_performance: bool | None = None,
         profile_output_path: str | os.PathLike[str] | None = None,
     ) -> list:
-        """Generate schedules and optionally capture detailed performance metrics."""
+        """Generate schedules and optionally capture detailed performance metrics.
+
+        ``max_workers`` caps the variant-evaluation process pool; ``None`` sizes
+        it to the machine (see :func:`scheduler.platform.default_worker_count`).
+        """
         sleep_handle = inhibit_sleep()
 
         try:
@@ -1450,10 +1454,19 @@ class NurseScheduler:
                 return []
         return variants
 
-    def _evaluate_variants(self, variants, max_workers):
+    @staticmethod
+    def _resolve_worker_count(max_workers: int | None, variant_count: int) -> int:
+        """Pool size for evaluating ``variant_count`` variants."""
+        if max_workers is None:
+            max_workers = default_worker_count()
+        workers = max(1, min(max_workers, usable_cpu_count(), variant_count))
+        logger.info("Evaluating %d variants on %d worker processes.", variant_count, workers)
+        return workers
+
+    def _evaluate_variants(self, variants, max_workers=None):
         """Evaluate all variants either in parallel or serially."""
         candidate_schedules: list = []
-        workers = min(max_workers, os.cpu_count() or 1, len(variants))
+        workers = self._resolve_worker_count(max_workers, len(variants))
 
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -1486,11 +1499,11 @@ class NurseScheduler:
 
         return candidate_schedules
 
-    def _evaluate_variants_with_profiling(self, variants, max_workers):
+    def _evaluate_variants_with_profiling(self, variants, max_workers=None):
         """Evaluate all variants while collecting profiling metrics."""
         candidate_schedules: list = []
         all_worker_metrics: list[WorkerMetrics] = []
-        workers = min(max_workers, os.cpu_count() or 1, len(variants))
+        workers = self._resolve_worker_count(max_workers, len(variants))
 
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:

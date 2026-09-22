@@ -57,6 +57,10 @@ DEFAULT_PRE_WEEKEND_WINDOW = 4
 DEFAULT_POST_WEEKEND_WINDOW = 6
 MAX_MAIN_ASSIGNMENTS_PER_WEEK = 1
 MAX_TOTAL_ASSIGNMENTS_PER_WEEK = 2
+# Weekend variants kept after each weekend's branching. Every survivor runs the
+# full evaluation pipeline, so this is the main lever on run time; users tune
+# it for their machine through the settings file.
+DEFAULT_MAX_WEEKEND_VARIANTS = 1000
 ANALYSE_INITIAL_WEEKDAY_GAPS = True
 GAP_REPORT_FILE = "weekday_gap_report.txt"
 
@@ -143,7 +147,7 @@ class SchedulerConfig:
         # NEW:
         allow_one_day_weekday_gap: bool = False,
         max_plateau_depth: int = 10,
-        max_weekend_variants: int | None = 500,
+        max_weekend_variants: int | None = DEFAULT_MAX_WEEKEND_VARIANTS,
         max_week_permutations: int | None = 200,
         **extra,
     ):
@@ -161,7 +165,7 @@ class SchedulerConfig:
         # (valid pairs)^(weekends), and every survivor runs the full heavy
         # evaluation pipeline. 0 means unlimited.
         if max_weekend_variants is None:
-            max_weekend_variants = 500
+            max_weekend_variants = DEFAULT_MAX_WEEKEND_VARIANTS
         self.max_weekend_variants = max(0, int(max_weekend_variants))
         # Cap on the slot orderings tried when rebalancing one week. The
         # rebalance pass permutes a week's modifiable (date, role) slots and
@@ -2731,6 +2735,7 @@ class ScheduleVariant:
 
 
 __all__ = [
+    "DEFAULT_MAX_WEEKEND_VARIANTS",
     "WeekendPattern",
     "WeekendAssignment",
     "Role",

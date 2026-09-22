@@ -13,6 +13,7 @@ from scheduler import (
     PreScheduler,
     WeekendHistory,
     _evaluate_variant_worker,
+    default_worker_count,
 )
 
 DB_NAME = "nurse_schedule.db"
@@ -146,19 +147,20 @@ class ScheduleProgressWorker(QThread):
             maxw = (
                 min(4, os.cpu_count() or 1, total)
                 if use_threads
-                else min(8, os.cpu_count() or 1, total)
+                else min(default_worker_count(), total)
             )
             Executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
             print(
                 "[progress-worker] using"
                 f" {'ThreadPoolExecutor' if use_threads else 'ProcessPoolExecutor'}"
+                f" with {maxw} workers"
                 f" (android={detected_android}, override={override_env!r})"
             )
 
             try:
                 with Executor(max_workers=maxw) as pool:
                     futures = [
-                        pool.submit(_evaluate_variant_worker, (i, v))
+                        pool.submit(_evaluate_variant_worker, (i, v, sched.worker_tuning))
                         for i, v in enumerate(variants)
                     ]
                     for done, fut in enumerate(as_completed(futures), start=1):

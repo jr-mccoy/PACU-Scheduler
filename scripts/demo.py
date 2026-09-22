@@ -131,7 +131,7 @@ def build_demo_config(max_variants: int) -> SchedulerConfig:
 
     Only the beam cap is overridden. Weekend variants grow roughly as
     ``(valid pairs) ^ (weekends)`` and every survivor runs the full evaluation
-    pipeline, so the shipped default of 500 is far more than a demo needs.
+    pipeline, so the shipped default of 1,000 is far more than a demo needs.
     """
     config = build_scheduler_config_from_settings(SharedSettings())
     config.max_weekend_variants = max_variants
@@ -139,7 +139,7 @@ def build_demo_config(max_variants: int) -> SchedulerConfig:
 
 
 def generate(
-    db_path: str, start: date, end: date, top_n: int, config: SchedulerConfig, workers: int
+    db_path: str, start: date, end: date, top_n: int, config: SchedulerConfig, workers: int | None
 ):
     """Run the real generation pipeline against the demo database."""
     nurse_manager = NurseManager(db_path)
@@ -200,7 +200,10 @@ def main(argv: list[str] | None = None) -> int:
         help="beam cap on weekend variants; every survivor is fully evaluated (default: 8)",
     )
     parser.add_argument(
-        "--workers", type=int, default=2, help="parallel evaluation workers (default: 2)"
+        "--workers",
+        type=int,
+        default=None,
+        help="parallel evaluation workers (default: sized to this machine's cores)",
     )
     parser.add_argument("--db", default=DEFAULT_DB, help=f"database path (default: {DEFAULT_DB})")
     parser.add_argument(

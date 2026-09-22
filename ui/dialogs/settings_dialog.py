@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from scheduler import MAX_WEEKEND_VARIANTS_RANGE
+
 from .tool_dialog import ToolDialog
 
 
@@ -84,6 +86,15 @@ class SettingsDialog(ToolDialog):
         self.avail_penalty = sb(settings.get("availability_penalty"), 0, 100)
         self.hist_window = sb(settings.get("history_window_days"), 1, 365)
         self.hist_duration = sb(settings.get("history_duration_months"), 1, 60)
+        self.variant_cap = sb(settings.get("max_weekend_variants"), *MAX_WEEKEND_VARIANTS_RANGE)
+        self.variant_cap.setSpecialValueText("Unlimited")
+        self.variant_cap.setSingleStep(100)
+        self.variant_cap.setGroupSeparatorShown(True)
+        self.variant_cap.setToolTip(
+            "Weekend combinations kept after each weekend and fully evaluated.\n"
+            "Higher explores more candidate schedules; run time grows roughly\n"
+            "in proportion. Unlimited can take hours on long horizons."
+        )
         r = 0
         for label, w in [
             ("Weekend gap (days):", self.weekend_gap),
@@ -93,6 +104,7 @@ class SettingsDialog(ToolDialog):
             ("Availability penalty:", self.avail_penalty),
             ("History window (days):", self.hist_window),
             ("History duration (months):", self.hist_duration),
+            ("Weekend variants to evaluate:", self.variant_cap),
         ]:
             sched_layout.addWidget(QLabel(label), r, 0)
             sched_layout.addWidget(w, r, 1)
@@ -235,6 +247,7 @@ class SettingsDialog(ToolDialog):
             "availability_penalty": self.avail_penalty.value(),
             "history_window_days": self.hist_window.value(),
             "history_duration_months": self.hist_duration.value(),
+            "max_weekend_variants": self.variant_cap.value(),
             "measure_phase_times": self.measure_chk.isChecked(),
             "analyse_initial_weekday_gaps": self.analyse_chk.isChecked(),
             "gap_report_file": self.gap_file.text(),

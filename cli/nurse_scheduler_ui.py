@@ -26,6 +26,8 @@ import pandas as pd
 
 from scheduler import (
     ASSIGNMENT_DEBUG_LOGGER,
+    DEFAULT_MAX_WEEKEND_VARIANTS,
+    MAX_WEEKEND_VARIANTS_RANGE,
     AssignmentHistory,
     DateUtils,
     NurseManager,
@@ -35,6 +37,7 @@ from scheduler import (
     WeekendHistory,
     WeekendPattern,
     build_scheduler_from_settings,
+    default_worker_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -1015,13 +1018,14 @@ class NurseSchedulerUI:
                 "Sync Assignment History / Weekend History",
                 self._handle_sync_assignment_history_with_weekend,
             ),
-            "10": ("Exit         (⁠ಠ⁠_⁠ಠ⁠)⁠>⁠⌐⁠■⁠-⁠■         (⁠⌐⁠■⁠-⁠■⁠)", None),
+            "10": ("Settings", self.settings_menu),
+            "11": ("Exit         (⁠ಠ⁠_⁠ಠ⁠)⁠>⁠⌐⁠■⁠-⁠■         (⁠⌐⁠■⁠-⁠■⁠)", None),
         }
 
         self._run_menu_loop(
             "Nurse Scheduler System",
             menu_options,
-            exit_option="10",
+            exit_option="11",
             exit_message="Thank you for using the Nurse Scheduler System. Goodbye!",
         )
 
@@ -1090,6 +1094,15 @@ class NurseSchedulerUI:
 
         self._run_menu_loop("Advanced Weekend Stats", menu_options, exit_option="7")
 
+    def settings_menu(self) -> None:
+        """Menu for settings saved to the settings file the GUI shares."""
+        menu_options = {
+            "1": ("Weekend Variants to Evaluate", self._handle_set_max_weekend_variants),
+            "2": ("Return to Main Menu", None),
+        }
+
+        self._run_menu_loop("Settings", menu_options, exit_option="2")
+
     def _run_menu_loop(self, title: str, options: dict, exit_option: str, exit_message: str = None):
         """Generic menu loop handler."""
         while True:
@@ -1111,6 +1124,51 @@ class NurseSchedulerUI:
                 logger.error(f"Error in {title} menu handling option {choice}: {e}")
                 print(f"An error occurred: {e}")
                 CLIHelper.pause()
+
+    # ============================================================================
+    # SETTINGS HANDLERS
+    # ============================================================================
+
+    def _handle_set_max_weekend_variants(self) -> None:
+        """Change how many weekend variants survive pruning, and save it."""
+        lo, hi = MAX_WEEKEND_VARIANTS_RANGE
+        current = int(self.settings.get("max_weekend_variants"))
+        print(
+            f"Weekend variants to evaluate: {current:,}" + (" (unlimited)" if current == 0 else "")
+        )
+        print(
+            f"Default: {DEFAULT_MAX_WEEKEND_VARIANTS:,}. "
+            f"This machine evaluates {default_worker_count()} variants at a time."
+        )
+        print(
+            "Each weekend combination kept gets a full weekday evaluation, so run time\n"
+            "grows roughly in proportion to this number. Higher values explore more\n"
+            "candidate schedules. 0 means unlimited.\n"
+        )
+        raw = input(f"New value ({lo}-{hi:,}, blank to keep): ").strip().replace(",", "")
+        if not raw:
+            print("Unchanged.")
+            CLIHelper.pause()
+            return
+        if not raw.isdigit() or not lo <= int(raw) <= hi:
+            print(f"Invalid input. Please enter a whole number from {lo} to {hi:,}.")
+            CLIHelper.pause()
+            return
+
+        value = int(raw)
+        if value == 0 and not InputValidator.confirm_action(
+            "Unlimited can run for hours on long horizons. Continue?", "n"
+        ):
+            print("Unchanged.")
+            CLIHelper.pause()
+            return
+
+        self._safe_execute(
+            "save settings",
+            lambda: self.settings.update({"max_weekend_variants": value}),
+            f"Weekend variants set to {value:,}; saved for future sessions.",
+        )
+        CLIHelper.pause()
 
     # ============================================================================
     # PRE-SCHEDULED ASSIGNMENT HANDLERS

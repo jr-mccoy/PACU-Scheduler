@@ -27,7 +27,7 @@ class MultiDatePickerGrid(QCalendarWidget):
 
     ACCENT = "#5C8DBC"
 
-    def __init__(self, selected=None, *, accent=None, theme="pink", parent=None):
+    def __init__(self, selected=None, *, accent=None, theme="dark", parent=None):
         super().__init__(parent)
         if accent:
             self.ACCENT = accent
@@ -177,7 +177,7 @@ class MultiDatePicker(QWidget):
     _HEADER_FONT = QFont("Roboto", 20, QFont.Bold)
     _DOW_FONT = QFont("Roboto", 15, QFont.Bold)
 
-    def __init__(self, selected=None, *, accent="#5C8DBC", theme="pink", parent=None):
+    def __init__(self, selected=None, *, accent="#5C8DBC", theme="dark", parent=None):
         super().__init__(parent)
         self._ACCENT = accent
         self._THEME = theme
@@ -263,7 +263,7 @@ class SingleDatePicker(QWidget):
     FONT_DOW = QFont("Roboto", 15, QFont.Bold)
     FONT_GRID = QFont("Roboto", 15)
 
-    def __init__(self, *, accent="#5C8DBC", parent=None, initial=None, theme="pink"):
+    def __init__(self, *, accent="#5C8DBC", parent=None, initial=None, theme="dark"):
         super().__init__(parent)
         self.ACCENT = accent
         self._theme = theme

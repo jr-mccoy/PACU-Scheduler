@@ -2,7 +2,8 @@
 
 Non-blocking dialog that shows a darkened scrim and a rounded card.
 The card border colour is the current accent colour taken from the
-parent App (falls back to pink when no settings are available).
+parent App (falls back to the default blue accent when no settings are
+available).
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ class ToolDialog(QWidget):
         self._scrim.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._scrim.setStyleSheet("QWidget#scrim { background:rgba(0,0,0,0.18); }")
 
-        accent = "#EFA8C0"
+        accent = "#5C8DBC"
         if parent is not None:
             accent = parent.palette().color(QPalette.Highlight).name()
 

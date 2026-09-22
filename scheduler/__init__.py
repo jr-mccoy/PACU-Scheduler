@@ -20,6 +20,7 @@ from .debug import (
     log,
 )
 from .domain import (
+    DEFAULT_MAX_WEEKEND_VARIANTS,
     BestStateTracker,
     Comparison,
     NurseManagerProtocol,
@@ -50,7 +51,7 @@ from .factory import (
     build_scheduler_service,
 )
 from .history_services import ViolationHistoryService, WeekendHistoryService
-from .platform import allow_sleep, inhibit_sleep
+from .platform import allow_sleep, default_worker_count, inhibit_sleep
 from .profiling import (
     MetricsCollector,
     PerformanceProfiler,
@@ -70,7 +71,7 @@ from .repositories import (
     ensure_schema,
 )
 from .runtime import is_empty
-from .settings import SharedSettings
+from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
     "AssignmentDebugLogger",
@@ -80,9 +81,11 @@ __all__ = [
     "BestStateTracker",
     "Comparison",
     "DBColumns",
+    "DEFAULT_MAX_WEEKEND_VARIANTS",
     "DBTables",
     "DatabaseMixin",
     "DateUtils",
+    "MAX_WEEKEND_VARIANTS_RANGE",
     "MetricsCollector",
     "NurseManager",
     "NurseManagerProtocol",
@@ -126,6 +129,7 @@ __all__ = [
     "build_scheduler_service",
     "configure_assignment_debug_logger",
     "configure_pair_variant_debug",
+    "default_worker_count",
     "ensure_schema",
     "inhibit_sleep",
     "is_empty",

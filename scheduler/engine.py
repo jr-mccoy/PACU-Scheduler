@@ -113,6 +113,14 @@ class GenerationRun:
     search_capped: bool = False
 
 
+@dataclass(frozen=True)
+class PreScheduleIssue:
+    """One problem with the pinned cells, from :meth:`NurseScheduler.validate_pre_schedule`."""
+
+    day: pd.Timestamp
+    message: str
+
+
 class GenerationError(RuntimeError):
     """Schedule generation failed for a reason other than infeasibility."""
 
@@ -674,98 +682,136 @@ class NurseScheduler:
 
     # --- Replace in NurseScheduler ---------------------------------------------
 
+    # Which pattern each pinned weekend cell implies: FSF works Fri main,
+    # Sat backup and Sun main; SFS the mirror cells.
+    _PINNED_PATTERN_CELLS = (
+        (0, "main", WeekendPattern.FSF),
+        (0, "backup", WeekendPattern.SFS),
+        (1, "main", WeekendPattern.SFS),
+        (1, "backup", WeekendPattern.FSF),
+        (2, "main", WeekendPattern.FSF),
+        (2, "backup", WeekendPattern.SFS),
+    )
+
     def _get_pre_scheduled_weekend_assignments(self) -> dict:
         """
-        Extract pre-scheduled weekend assignments for:
-          • the schedule window, and
-          • an additional forward horizon = weekend_gap_days (+2 for Sat/Sun)
-        so forward-gap checks can block end-of-window conflicts.
+        Pinned FSF/SFS nurse per weekend, ``{friday: {FSF: name|None, SFS: name|None}}``.
+
+        Covers the schedule window and a forward horizon of weekend_gap_days
+        (+2 for Sat/Sun) so forward-gap checks can block end-of-window
+        conflicts. A weekend's pattern nurse is derived from *any* pinned cell
+        of that weekend, not only Friday's: a Saturday Main pin fixes the SFS
+        nurse just as a Friday Backup pin does, so both are force-included the
+        same way. When a weekend's pins contradict each other the pattern is
+        left unset; no pair then matches the pinned cells, and
+        :meth:`validate_pre_schedule` explains why.
         """
-        # extend scan to capture the first full weekend after gap_min
+        return self._pinned_weekends()[0]
+
+    def _pinned_weekends(self) -> tuple[dict, dict[pd.Timestamp, str]]:
+        """``(assignments, conflicts)`` for pinned weekend cells (cached)."""
+        cached = getattr(self, "_pinned_weekends_cache", None)
+        if cached is not None:
+            return cached
+
         horizon_end = (self.end_date + timedelta(days=self.config.weekend_gap_days + 2)).normalize()
-
-        # pull pre-scheduled rows across the extended range
-        pre_scheduled = self.pre_scheduler.get_assignments_in_range(self.start_date, horizon_end)
-        pre_scheduled_df = pd.DataFrame.from_dict(pre_scheduled, orient="index")
-        if not pre_scheduled_df.empty:
-            pre_scheduled_df.index = pd.DatetimeIndex(
-                [DateUtils.normalize_date(idx) for idx in pre_scheduled_df.index]
-            )
-
-        # build Friday keys for both the in-window weekends and the forward horizon
-        fridays = self._fridays_in_range(self.start_date, horizon_end)
-        weekend_assignments = {
-            friday: {WeekendPattern.FSF: None, WeekendPattern.SFS: None} for friday in fridays
+        rows = {
+            DateUtils.normalize_date(day): row
+            for day, row in self.pre_scheduler.get_assignments_in_range(
+                self.start_date, horizon_end
+            ).items()
         }
 
-        # direct Friday hints (Fri main → FSF, Fri backup → SFS)
-        if not pre_scheduled_df.empty:
-            friday_rows = pre_scheduled_df.loc[
-                pre_scheduled_df.index.weekday == self.FRIDAY_WEEKDAY
-            ]
-            for friday in fridays:
-                if friday in friday_rows.index:
-                    fri_main = (
-                        friday_rows.at[friday, "main"] if "main" in friday_rows.columns else None
+        assignments: dict = {}
+        conflicts: dict[pd.Timestamp, str] = {}
+        for friday in self._fridays_in_range(self.start_date, horizon_end):
+            implied: dict[WeekendPattern, set[str]] = {
+                WeekendPattern.FSF: set(),
+                WeekendPattern.SFS: set(),
+            }
+            for offset, role, pattern in self._PINNED_PATTERN_CELLS:
+                nurse = (rows.get(friday + timedelta(days=offset)) or {}).get(role)
+                if not self.is_empty(nurse):
+                    implied[pattern].add(nurse)
+
+            fsf, sfs = implied[WeekendPattern.FSF], implied[WeekendPattern.SFS]
+            problems = []
+            if len(fsf) > 1:
+                problems.append(f"FSF cells name {', '.join(sorted(fsf))}")
+            if len(sfs) > 1:
+                problems.append(f"SFS cells name {', '.join(sorted(sfs))}")
+            both = fsf & sfs
+            if both:
+                problems.append(f"{', '.join(sorted(both))} pinned to both patterns")
+            if problems:
+                conflicts[friday] = (
+                    f"The pinned cells of the weekend of {friday:%a %b %d} contradict each "
+                    f"other ({'; '.join(problems)}), so no weekend pair can match them."
+                )
+            assignments[friday] = {
+                WeekendPattern.FSF: next(iter(fsf)) if len(fsf) == 1 and not both else None,
+                WeekendPattern.SFS: next(iter(sfs)) if len(sfs) == 1 and not both else None,
+            }
+
+        self._pinned_weekends_cache = (assignments, conflicts)
+        return self._pinned_weekends_cache
+
+    def validate_pre_schedule(self) -> list[PreScheduleIssue]:
+        """
+        Problems with the pinned (pre-scheduled) cells in the window.
+
+        Pinned cells are fixed commitments that generation never questions,
+        so a mistake in one silently shapes or sinks every option. This lists:
+        the same nurse pinned to both roles on a day; a nurse pinned on a day
+        they have off; a nurse who is not active; two late-shift nurses
+        pinned together; and weekends whose pinned cells contradict each
+        other. Callers show these before generating.
+        """
+        issues: list[PreScheduleIssue] = []
+        roster = set(self.nurses) | set(self.prn_nurses)
+        rows = self.pre_scheduler.get_assignments_in_range(self.start_date, self.end_date)
+        for raw_day, row in rows.items():
+            day = DateUtils.normalize_date(raw_day)
+            main, backup = row.get("main"), row.get("backup")
+            main = None if self.is_empty(main) else main
+            backup = None if self.is_empty(backup) else backup
+            when = f"{day:%a %b %d}"
+            for role, nurse in (("Main", main), ("Backup", backup)):
+                if nurse is None:
+                    continue
+                if nurse not in roster:
+                    issues.append(
+                        PreScheduleIssue(day, f"{when}: {role} {nurse} is not an active nurse.")
                     )
-                    fri_backup = (
-                        friday_rows.at[friday, "backup"]
-                        if "backup" in friday_rows.columns
-                        else None
+                elif day in self._unavailable_days(nurse):
+                    issues.append(
+                        PreScheduleIssue(day, f"{when}: {role} {nurse} has that day off.")
                     )
-                    if fri_main and not self.is_empty(fri_main):
-                        weekend_assignments[friday][WeekendPattern.FSF] = fri_main
-                    if fri_backup and not self.is_empty(fri_backup):
-                        weekend_assignments[friday][WeekendPattern.SFS] = fri_backup
-
-            # infer FSF/SFS when whole-weekend is prefilled but Friday wasn't explicit
-            self._infer_weekend_patterns_from_whole_weekend(
-                weekend_assignments, pre_scheduled_df, fridays
-            )
-
-        return weekend_assignments
-
-    def _infer_weekend_patterns_from_whole_weekend(
-        self, weekend_assignments, pre_scheduled_df, fridays
-    ):
-        """Infer FSF/SFS patterns from whole weekend assignments when not explicitly set."""
-        for friday in fridays:
-            if self.is_empty(weekend_assignments[friday][WeekendPattern.FSF]) and self.is_empty(
-                weekend_assignments[friday][WeekendPattern.SFS]
+            if main is not None and main == backup:
+                issues.append(
+                    PreScheduleIssue(day, f"{when}: {main} is pinned as both Main and Backup.")
+                )
+            elif (
+                main is not None
+                and backup is not None
+                and self.nurse_manager.is_late_shift_nurse(main)
+                and self.nurse_manager.is_late_shift_nurse(backup)
             ):
-                weekend_dates = [
-                    friday,
-                    friday + pd.Timedelta(days=1),
-                    friday + pd.Timedelta(days=2),
-                ]
-                weekend_df = pre_scheduled_df.loc[pre_scheduled_df.index.isin(weekend_dates)]
-                nurse_counts = {}
+                issues.append(
+                    PreScheduleIssue(
+                        day, f"{when}: {main} and {backup} are both late-shift nurses."
+                    )
+                )
 
-                for _, row in weekend_df.iterrows():
-                    self._count_nurse_assignments(row, nurse_counts)
+        for friday, message in self._pinned_weekends()[1].items():
+            if friday <= self.end_date:
+                issues.append(PreScheduleIssue(friday, message))
+        return sorted(issues, key=lambda issue: (issue.day, issue.message))
 
-                # Only assign if a nurse is not assigned to both roles
-                for nurse, counts in nurse_counts.items():
-                    if (
-                        counts["main"] + counts["backup"] >= 2
-                        and counts["main"] != counts["backup"]
-                    ):
-                        pattern = (
-                            WeekendPattern.FSF
-                            if counts["main"] > counts["backup"]
-                            else WeekendPattern.SFS
-                        )
-                        weekend_assignments[friday][pattern] = nurse
-
-    def _count_nurse_assignments(self, row, nurse_counts):
-        """Count main and backup assignments for nurses in a given row."""
-        main_nurse = row.get("main")
-        backup_nurse = row.get("backup")
-
-        if main_nurse and not self.is_empty(main_nurse):
-            nurse_counts.setdefault(main_nurse, {"main": 0, "backup": 0})["main"] += 1
-        if backup_nurse and not self.is_empty(backup_nurse):
-            nurse_counts.setdefault(backup_nurse, {"main": 0, "backup": 0})["backup"] += 1
+    def _unavailable_days(self, nurse: str) -> set[pd.Timestamp]:
+        return {
+            DateUtils.normalize_date(d) for d in self.nurse_manager.get_unavailable_dates(nurse)
+        }
 
     # =====================================================================
     # WEEKEND MANAGEMENT METHODS
@@ -2138,6 +2184,7 @@ __all__ = [
     "GenerationError",
     "GenerationRun",
     "NurseScheduler",
+    "PreScheduleIssue",
     "WeekendGenerationResult",
     "recorded_weekends_in_range",
     "search_capped_note",

@@ -1548,6 +1548,14 @@ class NurseSchedulerUI:
 
             # Generate and display schedule options
             scheduler = self._create_scheduler(start_date, end_date)
+            issues = scheduler.validate_pre_schedule()
+            if issues:
+                print("\nSome pinned (pre-scheduled) cells in this range look wrong:")
+                for issue in issues:
+                    print(f"  • {issue.message}")
+                if not InputValidator.confirm_action("Generate anyway?", "n"):
+                    CLIHelper.pause()
+                    return
             if (scheduler.start_date, scheduler.end_date) != (
                 scheduler.requested_start_date,
                 scheduler.requested_end_date,

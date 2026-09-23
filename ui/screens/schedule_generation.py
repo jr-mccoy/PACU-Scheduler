@@ -18,7 +18,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from scheduler import AssignmentHistory, WeekendHistory
+from scheduler import (
+    AssignmentHistory,
+    NurseManager,
+    PreScheduler,
+    WeekendHistory,
+    build_scheduler_from_settings,
+)
 from scheduler.engine import (
     recorded_weekends_in_range,
     search_capped_note,
@@ -29,7 +35,7 @@ from scheduler.exporters import write_gap_report
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
 from ..dialogs.rotation_violation_dialog import RotationViolationDialog
 from ..dialogs.variant_review_dialog import VariantReviewDialog
-from ..messages import show_error, show_info
+from ..messages import confirm, show_error, show_info
 from ..widgets.common import action_button, back_button, screen_title
 from ..widgets.date_pickers import MultiDatePicker, SingleDatePicker
 from ..worker_threads import ScheduleProgressWorker
@@ -209,6 +215,44 @@ class ScheduleGenerationScreen(QWidget):
         if end < start or self._running:
             return
 
+        issues = self.pre_schedule_issues(start, end)
+        if issues:
+            shown = issues[:12]
+            more = len(issues) - len(shown)
+            text = "\n".join(f"• {issue.message}" for issue in shown)
+            if more:
+                text += f"\n• …and {more} more."
+            confirm(
+                self,
+                "Check the pre-schedule",
+                "Some pinned (pre-scheduled) cells in this range look wrong. Generation "
+                "keeps pinned cells as they are, so these will shape every option:\n\n"
+                f"{text}\n\nFix them under Pre-Scheduled Assignments, or generate anyway.",
+                yes_cb=lambda: self._choose_rotation_and_start(start, end),
+                yes_text="Generate Anyway",
+            )
+            return
+        self._choose_rotation_and_start(start, end)
+
+    def pre_schedule_issues(self, start: date, end: date) -> list:
+        """Problems with pinned cells in the range (empty if they cannot be checked)."""
+        try:
+            settings = self.parent.settings
+            values = settings.all() if hasattr(settings, "all") else dict(settings)
+            scheduler = build_scheduler_from_settings(
+                start,
+                end,
+                NurseManager(DB_NAME),
+                WeekendHistory(DB_NAME),
+                PreScheduler(DB_NAME),
+                values,
+            )
+            return scheduler.validate_pre_schedule()
+        except Exception:
+            logger.exception("Checking the pre-schedule failed")
+            return []
+
+    def _choose_rotation_and_start(self, start: date, end: date):
         # Generation only reads history; nothing is written until an option
         # is applied, so there is nothing to back up or restore here.
         self.ah = AssignmentHistory(DB_NAME)

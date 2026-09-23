@@ -127,3 +127,35 @@ def test_worker_reports_an_error_when_no_variant_evaluates(qapp, tmp_path, monke
 
     assert finished == []
     assert errors and "simulated evaluation failure" in errors[0]
+
+
+def test_generate_asks_before_running_over_bad_pins(app_window, monkeypatch):
+    from PySide6.QtCore import QDate
+
+    from scheduler import PreScheduler
+    from ui.config import DB_NAME
+
+    NurseManager(DB_NAME).add_nurse("A")
+    screen = app_window.generate
+    screen._end_cal.set_date(QDate(2026, 11, 29))
+    screen._start_cal.set_date(QDate(2026, 11, 2))  # a Monday: no weekend pins
+    start, end = screen.selected_range()
+    PreScheduler(DB_NAME).add_assignment(start.isoformat(), "A", "A")
+    started = []
+    monkeypatch.setattr(screen, "_choose_rotation_and_start", lambda *a: started.append(a))
+
+    issues = screen.pre_schedule_issues(start, end)
+    screen._on_generate()
+
+    assert [i.message.split(": ", 1)[1] for i in issues] == ["A is pinned as both Main and Backup."]
+    assert started == []  # waits for "Generate Anyway"
+
+
+def test_generate_goes_straight_on_with_clean_pins(app_window, monkeypatch):
+    screen = app_window.generate
+    started = []
+    monkeypatch.setattr(screen, "_choose_rotation_and_start", lambda *a: started.append(a))
+
+    screen._on_generate()
+
+    assert len(started) == 1

@@ -42,6 +42,7 @@ from .engine import (
     GenerationError,
     GenerationRun,
     NurseScheduler,
+    PreScheduleIssue,
     WeekendGenerationResult,
     WorkerTuningConfig,
     _evaluate_variant_worker,
@@ -78,6 +79,7 @@ from .runtime import is_empty
 from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
+    "PreScheduleIssue",
     "GenerationRun",
     "GenerationError",
     "WeekendGenerationResult",

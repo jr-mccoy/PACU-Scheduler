@@ -27,7 +27,7 @@ def _allowed(tmp_path, gap_days: int, friday: str) -> bool:
     scheduler = build_scheduler(db, "2026-11-02", "2026-11-29", weekend_gap_days=gap_days)
     pre = scheduler._get_pre_scheduled_weekend_assignments()
     return scheduler._check_weekend_gap_constraints(
-        "A", pd.Timestamp(friday), {}, scheduler.schedule, pre
+        "A", pd.Timestamp(friday), scheduler.schedule, pre
     )
 
 

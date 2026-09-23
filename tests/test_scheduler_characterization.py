@@ -227,7 +227,6 @@ def _build_variant(nurses=("Alice", "Bob"), periods=5) -> ScheduleVariant:
         schedule=schedule,
         main_assignment_counts=pd.Series(0, index=counts_idx),
         backup_assignment_counts=pd.Series(0, index=counts_idx),
-        last_assignment={n: None for n in nurses},
         last_pattern={n: None for n in nurses},
         weekend_tracking={},
         nurse_weekend_lists={n: [] for n in nurses},
@@ -304,7 +303,6 @@ def test_get_valid_nurse_pairs_rejects_prefilled_weekend_conflict():
 
     pairs = scheduler._get_valid_nurse_pairs(
         weekend=weekend,
-        last_assignment=scheduler.last_assignment,
         last_pattern=scheduler.last_pattern,
         pre_scheduled={},
         weekend_tracking=scheduler.weekend_tracking,
@@ -720,7 +718,6 @@ def test_window_refill_restores_global_best_after_mutation(monkeypatch: pytest.M
     second_day = variant.state.schedule.index[1]
     variant.state.schedule.at[first_day, "main"] = "Alice"
     variant._recalculate_assignment_counts()
-    variant._update_last_assignment_dates()
 
     baseline = variant.state.schedule.copy(deep=True)
 

@@ -260,14 +260,12 @@ class SchedulerConfig:
 
 class WeekBackup(NamedTuple):
     """
-    Immutable snapshot of the four objects a week-permutation may have
-    to roll back to.
+    Immutable snapshot of what a week-permutation may have to roll back to.
     """
 
     rows: pd.DataFrame  # schedule slice - columns ["main","backup"]
     main_counts: pd.Series  # copy of main_assignment_counts
     backup_counts: pd.Series  # copy of backup_assignment_counts
-    last_assignment: dict  # deepcopy of last_assignment
 
 
 class Comparison(Enum):
@@ -410,7 +408,6 @@ class StateSnapshot:
     schedule_index: pd.Index
     main_counts: pd.Series
     backup_counts: pd.Series
-    last_assignment: dict
     rotation_repeats: int
     weekend_tracking: dict
     nurse_weekend_lists: dict
@@ -437,7 +434,6 @@ class StateSnapshot:
             schedule_index=idx,
             main_counts=variant.state.main_assignment_counts.copy(),
             backup_counts=variant.state.backup_assignment_counts.copy(),
-            last_assignment=dict(variant.state.last_assignment),
             rotation_repeats=variant.state.rotation_repeats,
             weekend_tracking=dict(variant.state.weekend_tracking),
             nurse_weekend_lists={k: list(v) for k, v in variant.state.nurse_weekend_lists.items()},
@@ -459,7 +455,6 @@ class StateSnapshot:
 
         variant.state.main_assignment_counts = self.main_counts.copy()
         variant.state.backup_assignment_counts = self.backup_counts.copy()
-        variant.state.last_assignment = dict(self.last_assignment)
         variant.state.rotation_repeats = self.rotation_repeats
         variant.state.weekend_tracking = dict(self.weekend_tracking)
         variant.state.nurse_weekend_lists = {
@@ -498,7 +493,6 @@ class BestStateTracker:
 
     def initialize(self) -> ScheduleQuality:
         self.variant._recalculate_assignment_counts()
-        self.variant._update_last_assignment_dates()
 
         quality = ScheduleQuality.from_variant(self.variant, self.scheduler)
         snapshot = StateSnapshot.capture(self.variant, quality)
@@ -628,7 +622,6 @@ class ScheduleState:
         schedule: pd.DataFrame,
         main_assignment_counts: pd.Series,
         backup_assignment_counts: pd.Series,
-        last_assignment: dict,
         last_pattern: dict,
         weekend_tracking: dict,
         nurse_weekend_lists: dict | None = None,
@@ -640,7 +633,6 @@ class ScheduleState:
         self.schedule = schedule.copy()
         self.main_assignment_counts = main_assignment_counts.copy()
         self.backup_assignment_counts = backup_assignment_counts.copy()
-        self.last_assignment = dict(last_assignment)
         self.last_pattern = dict(last_pattern)
         self.weekend_tracking = dict(weekend_tracking)
 
@@ -671,7 +663,6 @@ class ScheduleState:
             self.schedule.copy(),
             self.main_assignment_counts.copy(),
             self.backup_assignment_counts.copy(),
-            dict(self.last_assignment),
             dict(self.last_pattern),
             dict(self.weekend_tracking),
             nurse_weekend_lists={k: list(v) for k, v in self.nurse_weekend_lists.items()},
@@ -957,9 +948,6 @@ class ScheduleVariant:
     def recalculate_assignment_counts(self) -> None:
         return self._recalculate_assignment_counts()
 
-    def update_last_assignment_dates(self) -> None:
-        return self._update_last_assignment_dates()
-
     def get_total_counts(self) -> pd.Series:
         return self._get_total_counts()
 
@@ -996,7 +984,6 @@ class ScheduleVariant:
         self._invalidate_weekday_cache()
         # Ensure counters & last-assignment dictionaries reflect the seeding
         self._recalculate_assignment_counts()
-        self._update_last_assignment_dates()
 
         # After placing pre-scheduled cells, ensure our per-nurse Friday lists
         # include any weekend already seeded (Fri/Sat/Sun).
@@ -1091,7 +1078,6 @@ class ScheduleVariant:
         self._update_nurse_weekend_lists(fsf_nurse, sfs_nurse, weekend_start)
         self._update_pattern_tracking(fsf_nurse, sfs_nurse)
         self._recalculate_assignment_counts()
-        self._update_last_assignment_dates()
 
     def _weekday_relaxation_applicable(self, nurse: str, date: pd.Timestamp) -> bool:
         """
@@ -1270,7 +1256,6 @@ class ScheduleVariant:
             self._assign_roles_for_date(date)
 
         self._recalculate_assignment_counts()
-        self._update_last_assignment_dates()
 
     def _assign_roles_for_date(self, date: pd.Timestamp) -> None:
         roles_and_counts = [
@@ -1358,7 +1343,6 @@ class ScheduleVariant:
             pick = self._select_best_candidate(eligible, role, date)
             self.state.schedule.at[date, role] = pick
             counts[pick] += 1
-            self.state.last_assignment[pick] = date
             self._invalidate_weekday_cache()
 
             self._log_assignment_debug(
@@ -1568,7 +1552,6 @@ class ScheduleVariant:
             schedule_df=self.state.schedule,
             main_counts=self.state.main_assignment_counts,
             backup_counts=self.state.backup_assignment_counts,
-            last_assignment=self.state.last_assignment,
             date=date,
             role=role,
             nurse=nurse,
@@ -1591,7 +1574,6 @@ class ScheduleVariant:
             schedule_df=self.state.schedule,
             main_counts=self.state.main_assignment_counts,
             backup_counts=self.state.backup_assignment_counts,
-            last_assignment=self.state.last_assignment,
             mutation=AssignmentMutation(
                 date=date,
                 role=role,
@@ -1900,14 +1882,6 @@ class ScheduleVariant:
             self.state.main_assignment_counts[nurse] = mains.get(nurse, 0)
             self.state.backup_assignment_counts[nurse] = backups.get(nurse, 0)
 
-    def _update_last_assignment_dates(self) -> None:
-        """Recompute last-assignment exactly from the schedule (can move backward)."""
-        sched = self.state.schedule
-        # Iterate over a stable list of keys in case callers mutate the dict elsewhere
-        for nurse in list(self.state.last_assignment.keys()):
-            assigned = sched.index[(sched["main"] == nurse) | (sched["backup"] == nurse)]
-            self.state.last_assignment[nurse] = assigned.max() if len(assigned) else None
-
     def _days_to(self, start: pd.Timestamp, end: pd.Timestamp) -> int:
         """Return number of days between dates."""
         return (end - start).days
@@ -2031,7 +2005,6 @@ class ScheduleVariant:
 
         if update_state:
             self._recalculate_assignment_counts()
-            self._update_last_assignment_dates()
         return not had_failure
 
     def assign_nurses_to_weekdays(
@@ -2159,7 +2132,6 @@ class ScheduleVariant:
             rows=self.state.schedule.loc[week_days, ["main", "backup"]].copy(),
             main_counts=self.state.main_assignment_counts.copy(),
             backup_counts=self.state.backup_assignment_counts.copy(),
-            last_assignment=dict(self.state.last_assignment),
         )
 
     # ===== REBALANCING =====
@@ -2278,7 +2250,7 @@ class ScheduleVariant:
     def _clear_window_assignments(self, days: list[pd.Timestamp]) -> None:
         """
         Clear non-pre-scheduled assignments for the given 'days' for both roles.
-        Uses _dec_assign to keep counts/last_assignment consistent.
+        Uses _dec_assign to keep the counts consistent.
         """
         for d in days:
             for role in ("main", "backup"):
@@ -2803,7 +2775,6 @@ class ScheduleVariant:
         sched.loc[week_days, ["main", "backup"]] = state.rows
         self.state.main_assignment_counts = state.main_counts.copy()
         self.state.backup_assignment_counts = state.backup_counts.copy()
-        self.state.last_assignment = dict(state.last_assignment)
         self._invalidate_weekday_cache()
 
     def _fill_week_with_permutation(
@@ -2899,12 +2870,6 @@ class ScheduleVariant:
         print("\nAssignment Counts:")
         print(f"Main: {dict(self.state.main_assignment_counts)}")
         print(f"Backup: {dict(self.state.backup_assignment_counts)}")
-
-        print("\nLast Assignment Dates:")
-        last_assign_dict = {
-            k: (v.date() if v is not None else None) for k, v in self.state.last_assignment.items()
-        }
-        print(last_assign_dict)
 
         print("\nLast Patterns:")
         print(self.state.last_pattern)

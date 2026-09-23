@@ -311,11 +311,9 @@ class WindowRefillOptimizer:
         if success_rows is not None:
             ctx.state.schedule.loc[days, ["main", "backup"]] = success_rows
             ctx.recalculate_assignment_counts()
-            ctx.update_last_assignment_dates()
         elif not required_spread and improved and best_rows is not None:
             ctx.state.schedule.loc[days, ["main", "backup"]] = best_rows
             ctx.recalculate_assignment_counts()
-            ctx.update_last_assignment_dates()
         else:
             ctx.restore_from_backup(days, backup)
 

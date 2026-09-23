@@ -84,12 +84,12 @@ def test_backward_gap_invariant_to_friday_vs_sunday_history():
 
     history.last_weekend = friday
     allowed_friday = scheduler._check_weekend_gap_constraints(
-        "Alice", weekend, {}, scheduler.schedule, {}
+        "Alice", weekend, scheduler.schedule, {}
     )
 
     history.last_weekend = sunday
     allowed_sunday = scheduler._check_weekend_gap_constraints(
-        "Alice", weekend, {}, scheduler.schedule, {}
+        "Alice", weekend, scheduler.schedule, {}
     )
 
     # A legal 16-day Friday->Friday gap must be allowed regardless of encoding.

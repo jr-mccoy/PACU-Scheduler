@@ -60,7 +60,7 @@ def test_a_replaced_weekend_does_not_block_its_neighbours(tmp_path):
     pre = scheduler._get_pre_scheduled_weekend_assignments()
 
     assert scheduler._check_weekend_gap_constraints(
-        "A", pd.Timestamp("2026-11-13"), {}, scheduler.schedule, pre
+        "A", pd.Timestamp("2026-11-13"), scheduler.schedule, pre
     )
 
 
@@ -96,9 +96,7 @@ def test_weekend_gap_respects_a_recorded_weekend_after_the_window(tmp_path, frid
     pre = scheduler._get_pre_scheduled_weekend_assignments()
 
     assert (
-        scheduler._check_weekend_gap_constraints(
-            "A", pd.Timestamp(friday), {}, scheduler.schedule, pre
-        )
+        scheduler._check_weekend_gap_constraints("A", pd.Timestamp(friday), scheduler.schedule, pre)
         is allowed
     )
 

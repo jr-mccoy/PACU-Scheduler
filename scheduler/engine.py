@@ -326,14 +326,11 @@ class NurseScheduler:
     def _initialize_nurse_tracking(self):
         """Initialize tracking data for nurse assignments and patterns."""
         self.weekend_tracking = {}
-        self.last_assignment = {}
         self.last_pattern = {}
         self.rotation_violation_history = defaultdict(list)
         self._rotation_violations = []
 
         for nurse in self.nurses:
-            last_wk = self.weekend_history.get_last_weekend_before(nurse, self.start_date)
-            self.last_assignment[nurse] = last_wk
             self.last_pattern[nurse] = self._last_pattern_before_window(nurse)
 
     def _last_pattern_before_window(self, nurse: str) -> WeekendPattern | None:
@@ -910,7 +907,6 @@ class NurseScheduler:
         self,
         nurse: str,
         weekend: pd.Timestamp,
-        last_assignment: dict,  # kept for signature compatibility; not used
         schedule: pd.DataFrame,
         all_pre_scheduled_weekends: dict,
     ) -> bool:
@@ -1014,7 +1010,6 @@ class NurseScheduler:
     def _get_valid_nurse_pairs(
         self,
         weekend: pd.Timestamp,
-        last_assignment: dict,
         last_pattern: dict,
         pre_scheduled: dict,
         weekend_tracking: dict,
@@ -1049,7 +1044,6 @@ class NurseScheduler:
         # Get valid nurses for each pattern
         valid_fsf, valid_sfs = self._get_valid_nurses_for_patterns(
             weekend,
-            last_assignment,
             last_pattern,
             schedule,
             all_pre_scheduled_weekends,
@@ -1107,7 +1101,6 @@ class NurseScheduler:
     def _get_valid_nurses_for_patterns(
         self,
         weekend,
-        last_assignment,
         last_pattern,
         schedule,
         all_pre_scheduled_weekends,
@@ -1130,7 +1123,6 @@ class NurseScheduler:
             if not self._is_nurse_eligible_for_weekend(
                 nurse,
                 weekend_dates_in_idx,
-                last_assignment,
                 weekend,
                 schedule,
                 all_pre_scheduled_weekends,
@@ -1153,7 +1145,6 @@ class NurseScheduler:
         self,
         nurse,
         weekend_dates_in_idx,
-        last_assignment,
         weekend,
         schedule,
         all_pre_scheduled_weekends,
@@ -1181,7 +1172,7 @@ class NurseScheduler:
 
         # Weekend gap constraints (backward via history/schedule, forward via schedule/pre-scheduled)
         if not self._check_weekend_gap_constraints(
-            nurse, weekend, last_assignment, schedule, all_pre_scheduled_weekends
+            nurse, weekend, schedule, all_pre_scheduled_weekends
         ):
             return False
 
@@ -1451,10 +1442,7 @@ class NurseScheduler:
         _dbg_variants(f"  starting variants count: {len(variants)}")
 
         for i, var in enumerate(variants):
-            _dbg_variants(
-                f"    VAR#{i} last_assign: {var.state.last_assignment}  "
-                f"last_pat: {var.state.last_pattern}"
-            )
+            _dbg_variants(f"    VAR#{i} last_pat: {var.state.last_pattern}")
 
         next_vars: list[ScheduleVariant] = []
         fixed = pre_weekend_assignments.get(friday, {})
@@ -1484,7 +1472,6 @@ class NurseScheduler:
         def pairs_for(var):
             return self._get_valid_nurse_pairs(
                 friday,
-                var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
@@ -1515,7 +1502,6 @@ class NurseScheduler:
             )
             args = (
                 friday,
-                var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
@@ -1574,7 +1560,6 @@ class NurseScheduler:
             self.schedule,
             self.main_assignment_counts,
             self.backup_assignment_counts,
-            self.last_assignment,
             self.last_pattern,
             self.weekend_tracking,
             nurse_weekend_lists=weekend_lists,

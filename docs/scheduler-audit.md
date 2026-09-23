@@ -7,7 +7,7 @@ places where the scheduler does something other than what its rules, docs,
 or settings say, or where its search wastes its budget.
 
 Each finding ends with the fix it needs, and [the plan](#fix-plan) orders
-those fixes into phases. Phases 0, 1 and 2 are done. Findings 1–7, 9, 13, 15, 19
+those fixes into phases. Phases 0–3 are done. Findings 1–7, 9, 13–19
 and 22 are **Fixed**, and each fixed finding says how. Finding 10 is closed
 as **Won't fix**: fairness keeps raw counts by decision. Every other finding
 that could be reproduced has a strict-xfail test in
@@ -52,11 +52,11 @@ finding). "Code reading" means it follows directly from the cited lines.
 | 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading | Open |
 | 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading | Open |
 | 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading | Fixed |
-| 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading | Open |
+| 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading | Fixed |
 | 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading | Fixed |
-| 16 | P2 | Gap-fill tries every ordering of a week's empty slots, uncapped | Reproduced (591 s) | Open (xfail test) |
-| 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading | Open |
-| 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced | Open (xfail test) |
+| 16 | P2 | Gap-fill tries every ordering of a week's empty slots, uncapped | Reproduced (591 s) | Fixed |
+| 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading | Fixed |
+| 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced | Fixed |
 | 19 | P3 | Local search cannot see long-term fairness | Code reading | Fixed |
 | 20 | P3 | `consec_violations` can never exceed 1 | Reproduced | Open (xfail test) |
 | 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading | Open |
@@ -460,6 +460,19 @@ pair) child before cloning it, keep the best `max_weekend_variants` in a
 bounded heap, and clone only the survivors. Record in the result that the
 search was capped, as the design doc requires.
 
+**Status: Fixed.**
+- Balance counts weekends from four weekend gaps before the start onward.
+- The minimum-gap term considers only gaps ending inside or after the
+  window.
+- Children are scored from parent and pair before cloning
+  (`_child_beam_key`, checked against real clones), and only the best
+  `max_weekend_variants` are cloned.
+- `GenerationRun.search_capped` carries the cap through, and the review
+  dialog, the no-results dialog and the CLI tell the user when the cap
+  discarded branches.
+
+Tests: `tests/test_weekend_beam.py`.
+
 ### 15. `rot_viol` does not measure new rotation violations
 
 **Where.** `scheduler/engine.py:298-329`.
@@ -511,6 +524,12 @@ from the search, and report them as unfillable. Then replace the exhaustive
 permutation loop with the MRV backtracking the window optimizer already has,
 under a node budget.
 
+**Status: Fixed.** A week is first filled by MRV backtracking under
+`gap_fill_node_limit` and `gap_fill_time_limit_ms`. Failing that, the best
+partial fill over at most `max_week_permutations` orderings is kept.
+Unfillable slots (finding 17) are skipped entirely. Tests:
+`tests/test_search_budgets.py`.
+
 ### 17. One unfillable slot disables rebalancing for its whole week or window
 
 **Where.** `scheduler/domain.py:2484` (rebalance uses a non-partial
@@ -527,6 +546,14 @@ Each attempt still spends its node budget re-proving the same impossibility.
 those slots out of every "must fill" variable list, so the optimizers
 rebalance everything around them.
 
+**Status: Fixed.** `ScheduleVariant.compute_unfillable_slots()` runs
+once the weekends are fixed. It records the slots with an empty domain
+even when every other weekday is cleared; eligibility only shrinks as
+cells fill, so these slots can never be filled. Every search skips them.
+Each variant reports them as `unfillable`, and they appear in the gap
+report, the review dialog ("Impossible slots") and the CLI. Tests:
+`tests/test_search_budgets.py`.
+
 ### 18. The rebalance permutation cap only varies the end of the week
 
 **Where.** `scheduler/domain.py:2468-2471`.
@@ -541,6 +568,11 @@ reshuffles the end of the week.
 varies, and keep the result deterministic. Better still, replace the
 permutation search with swap/move local search. That searches the same space
 at a fraction of the cost.
+
+**Status: Fixed.** `slot_orderings()` yields every ordering when there
+are no more than the cap. Otherwise it yields the given order, then
+distinct shuffles, seeded per week so runs are deterministic. Rebalance
+and gap-fill both use it. Tests: `tests/test_search_budgets.py`.
 
 ## P3 — dead state, diagnostics, and hygiene
 

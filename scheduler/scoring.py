@@ -27,6 +27,24 @@ class QualityMetrics:
     weighted_score: float = 0.0
 
 
+def long_term_score(nurse_counts: dict[str, dict[str, int]], overage: dict[str, int]) -> int:
+    """
+    Penalty for giving previously over-used nurses more than the minimum.
+
+    For each nurse, ``max(0, overage[n] + total_n - min_total)``, summed.
+    Lower is better: nurses who worked more than the median in the recent
+    history window should land at or below this schedule's minimum total.
+    """
+    if not nurse_counts:
+        return 0
+
+    min_total = min(c["total"] for c in nurse_counts.values())
+    return sum(
+        max(0, overage.get(n, 0) + counts["total"] - min_total)
+        for n, counts in nurse_counts.items()
+    )
+
+
 def compute_quality_metrics(
     *,
     schedule_df: pd.DataFrame,

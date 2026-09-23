@@ -53,14 +53,6 @@ def test_a_prn_nurse_covers_a_day_no_regular_nurse_can(tmp_path):
     assert variant.state.schedule.at[pd.Timestamp(wednesday), "main"] == "P"
 
 
-@pytest.mark.xfail(strict=True, reason="audit #9: the history tie-breaker gets no history")
-def test_variants_carry_the_recent_assignment_history(tmp_path):
-    db = seed_db(tmp_path, history=[("2026-10-20", "A", "B"), ("2026-10-22", "A", "C")])
-    scheduler = build_scheduler(db, "2026-11-02", "2026-11-08")
-    variant = scheduler.generate_all_weekend_variants()[0]
-    assert variant.hist_main.get("A") == 2
-
-
 @pytest.mark.xfail(strict=True, reason="audit #16: gap-fill orderings are uncapped")
 def test_gap_fill_on_an_unfillable_week_stays_within_the_ordering_cap(tmp_path):
     wednesday = "2026-11-04"

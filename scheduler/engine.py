@@ -48,7 +48,7 @@ from .platform import allow_sleep, default_worker_count, inhibit_sleep, usable_c
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
 from .runtime import is_empty
-from .scoring import weighted_scores_from_rows
+from .scoring import long_term_score, weighted_scores_from_rows
 
 logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
@@ -347,22 +347,8 @@ class NurseScheduler:
 
     @staticmethod
     def _long_term_score(nurse_counts: dict[str, dict[str, int]], overage: dict[str, int]) -> int:
-        """
-        Penalty used when sorting variants.
-        For each nurse:
-            extra = max(0, overage[n] + variant_total - min_total)
-        We sum those extras.  Lower score = variant that helps previously
-        over-used nurses land at or below the minimum total in this run.
-        """
-        if not nurse_counts:
-            return 0
-
-        min_total = min(c["total"] for c in nurse_counts.values())
-
-        penalty = 0
-        for n, counts in nurse_counts.items():
-            penalty += max(0, overage.get(n, 0) + counts["total"] - min_total)
-        return penalty
+        """Delegate to :func:`scheduler.scoring.long_term_score`."""
+        return long_term_score(nurse_counts, overage)
 
     # --- Add inside NurseScheduler ---------------------------------------------
 
@@ -1163,6 +1149,9 @@ class NurseScheduler:
                 self.config,
                 self.nurse_manager,
                 pre_scheduled_slots,
+                historical_main=self._historical_main,
+                historical_backup=self._historical_backup,
+                historic_overage=self._historic_overage(),
             )
             variants = [initial]
             max_variants = int(getattr(self.config, "max_weekend_variants", 0) or 0)

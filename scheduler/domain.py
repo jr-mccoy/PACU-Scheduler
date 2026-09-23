@@ -40,6 +40,7 @@ from .scoring import (
     QualityMetrics,
     compare_quality,
     compute_quality_metrics,
+    long_term_score,
 )
 
 if TYPE_CHECKING:
@@ -306,26 +307,17 @@ class ScheduleQuality:
                 weekend_penalty = 0.0
 
         history_penalty = 0.0
-        if (
-            scheduler
-            and hasattr(scheduler, "_long_term_score")
-            and hasattr(scheduler, "_historic_overage")
-        ):
-            try:
-                nurse_counts: dict[str, dict[str, int]] = {}
-                for nurse in variant.state.main_assignment_counts.index:
-                    m = int(variant.state.main_assignment_counts.get(nurse, 0))
-                    b = int(variant.state.backup_assignment_counts.get(nurse, 0))
-                    nurse_counts[str(nurse)] = {
-                        "main": m,
-                        "backup": b,
-                        "total": m + b,
-                    }
-
-                overage = scheduler._historic_overage()
-                history_penalty = float(scheduler._long_term_score(nurse_counts, overage))
-            except Exception:  # pragma: no cover - defensive guard
-                history_penalty = 0.0
+        if scheduler is not None and hasattr(scheduler, "_historic_overage"):
+            overage = scheduler._historic_overage()
+        else:
+            overage = getattr(variant, "historic_overage", None)
+        if overage:
+            nurse_counts: dict[str, dict[str, int]] = {}
+            for nurse in variant.state.main_assignment_counts.index:
+                m = int(variant.state.main_assignment_counts.get(nurse, 0))
+                b = int(variant.state.backup_assignment_counts.get(nurse, 0))
+                nurse_counts[str(nurse)] = {"main": m, "backup": b, "total": m + b}
+            history_penalty = float(long_term_score(nurse_counts, overage))
 
         weighted_score = variant._rebalance_score(alpha=1.0, beta=1.0)
         metrics = compute_quality_metrics(
@@ -699,6 +691,7 @@ class ScheduleVariant:
         historical_backup: dict | None = None,
         console_debug: bool | None = None,
         _skip_copy: bool = False,
+        historic_overage: dict | None = None,
     ):
         # All *mutable* arguments are copied so the caller keeps ownership
         # _skip_copy=True is used by clone() to avoid redundant copies of read-only data
@@ -720,6 +713,11 @@ class ScheduleVariant:
         else:
             self.hist_main = (historical_main or {}).copy()
             self.hist_backup = (historical_backup or {}).copy()
+
+        # Each nurse's recent-history total minus the median (read-only). It
+        # travels with the variant so worker processes can score long-term
+        # fairness during local search without the scheduler object.
+        self.historic_overage = dict(historic_overage or {})
 
         # Cache of late-shift staff
         self._late_set = {n for n in self.nurses if nurse_manager.is_late_shift_nurse(n)}
@@ -967,6 +965,7 @@ class ScheduleVariant:
             historical_backup=self.hist_backup,
             console_debug=self._console_debug,
             _skip_copy=True,
+            historic_overage=self.historic_overage,
         )
         new_variant.rotation_violations = list(self.rotation_violations)
         return new_variant

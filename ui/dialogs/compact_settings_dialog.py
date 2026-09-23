@@ -155,7 +155,7 @@ class CompactSettingsDialog(ToolDialog):
         self.variant_cap.setSingleStep(100)
         self.variant_cap.setGroupSeparatorShown(True)
 
-        sched_form.addRow("Weekend gap (days):", self.weekend_gap)
+        sched_form.addRow("Minimum days between weekends:", self.weekend_gap)
         sched_form.addRow("Days off between shifts:", self.min_between)
         sched_form.addRow("Fairness window (days):", self.hist_window)
         sched_form.addRow("History to load (months):", self.hist_duration)

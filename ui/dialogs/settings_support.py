@@ -104,7 +104,10 @@ TOOLTIPS = {
     "accent_color": "Highlight colour as #RRGGBB, e.g. #5C8DBC.",
     "show_gif": "Play GIF.gif on the main menu when the file is present.",
     "calendar_grid": "Draw lines between days in every calendar.",
-    "weekend_gap_days": "Preferred minimum days between two weekends for the same nurse.",
+    "weekend_gap_days": (
+        "Hard rule: the fewest days between the Fridays of two weekends one nurse works. "
+        "Weekends exactly this far apart are allowed (28 = every fourth weekend at most)."
+    ),
     "min_days_between_assignments": (
         "Days a nurse must have off between two weekday shifts. The one-day gap "
         "options below can relax this by a day when nobody else can work."

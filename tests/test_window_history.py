@@ -85,14 +85,21 @@ def test_an_override_does_not_outrank_weekends_recorded_in_the_window(tmp_path):
 
 
 # ── finding 2: the window's end ───────────────────────────────────────────
-@pytest.mark.parametrize("friday", ["2026-11-20", "2026-11-27"])  # 14 and 7 days before
-def test_weekend_gap_respects_a_recorded_weekend_after_the_window(tmp_path, friday):
+@pytest.mark.parametrize(
+    ("friday", "allowed"),
+    [("2026-11-13", True), ("2026-11-20", True), ("2026-11-27", False)],  # 21, 14, 7 days
+)
+def test_weekend_gap_respects_a_recorded_weekend_after_the_window(tmp_path, friday, allowed):
+    # The gap is inclusive: exactly weekend_gap_days apart is allowed.
     db = seed_db(tmp_path, weekends=[("2026-12-04", "A", "B")])
     scheduler = build_scheduler(db, "2026-11-02", "2026-11-29", weekend_gap_days=14)
     pre = scheduler._get_pre_scheduled_weekend_assignments()
 
-    assert not scheduler._check_weekend_gap_constraints(
-        "A", pd.Timestamp(friday), {}, scheduler.schedule, pre
+    assert (
+        scheduler._check_weekend_gap_constraints(
+            "A", pd.Timestamp(friday), {}, scheduler.schedule, pre
+        )
+        is allowed
     )
 
 

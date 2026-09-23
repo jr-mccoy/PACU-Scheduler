@@ -869,8 +869,9 @@ class NurseScheduler:
         all_pre_scheduled_weekends: dict,
     ) -> bool:
         """
-        Hard rule: a nurse must have strictly more than config.weekend_gap_days
-        between Fridays of two worked weekends — both backward and forward.
+        Hard rule: the Fridays of two weekends a nurse works must be at least
+        config.weekend_gap_days apart, both backward and forward. The bound is
+        inclusive: at 28, a nurse may work every fourth weekend.
 
         This uses weekend history and the current schedule (including any
         pre-scheduled weekends) to decide.
@@ -912,7 +913,7 @@ class NurseScheduler:
 
         if prev_wk is not None:
             # Compare Friday→Friday
-            if (weekend - prev_wk).days <= gap_min:
+            if (weekend - prev_wk).days < gap_min:
                 return False
 
         # ── forward gap: first future worked weekend from schedule or pre-scheduled ──
@@ -922,7 +923,7 @@ class NurseScheduler:
         if next_wk is not None:
             # Ensure we compare Friday→Friday regardless of which day was assigned
             next_friday = self._as_friday(next_wk)
-            if (next_friday - weekend).days <= gap_min:
+            if (next_friday - weekend).days < gap_min:
                 return False
 
         return True

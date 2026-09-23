@@ -117,7 +117,7 @@ class SettingsDialog(ToolDialog):
         self.variant_cap.setGroupSeparatorShown(True)
         for r, (label, w) in enumerate(
             [
-                ("Minimum gap between weekends:", self.weekend_gap),
+                ("Minimum days between weekends:", self.weekend_gap),
                 ("Days off between weekday shifts:", self.min_between),
                 ("Fairness history window:", self.hist_window),
                 ("History to load:", self.hist_duration),

@@ -139,7 +139,9 @@ class PreSchedulerProtocol(Protocol):
 class SchedulerConfig:
     def __init__(
         self,
-        weekend_gap_days: int = 14,
+        # Keep every default here equal to SharedSettings.DEFAULTS, so library
+        # callers and the apps apply the same policy (a test checks this).
+        weekend_gap_days: int = 28,
         main_score_factor: int = 10,
         backup_score_factor: int = 10,
         availability_penalty: int = 10,

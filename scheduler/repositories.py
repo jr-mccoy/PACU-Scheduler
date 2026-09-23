@@ -147,16 +147,25 @@ class AssignmentHistory(DatabaseMixin):
         WHERE sh.date=?
     """
 
-    def __init__(self, db_name: str = "nurse_schedule.db", history_duration_months: int = 6):
+    def __init__(
+        self,
+        db_name: str = "nurse_schedule.db",
+        history_duration_months: int = 6,
+        *,
+        anchor=None,
+    ):
         super().__init__(db_name)
         self.history_duration_months = history_duration_months
+        # The cached history reaches back history_duration_months from the
+        # anchor: today by default, or a schedule's start date, so a schedule
+        # generated for a period long ago still sees the history before it.
+        self.anchor = None if anchor is None else DateUtils.normalize_date(anchor)
         self._history = self._load_history()
 
     def _get_cutoff_date(self) -> pd.Timestamp:
-        """Calculate the cutoff date for history retention."""
-        return DateUtils.normalize_date(
-            pd.Timestamp.today() - pd.DateOffset(months=self.history_duration_months)
-        )
+        """The earliest date the cached history covers."""
+        anchor = self.anchor if self.anchor is not None else pd.Timestamp.today()
+        return DateUtils.normalize_date(anchor - pd.DateOffset(months=self.history_duration_months))
 
     def _load_history(self) -> dict[pd.Timestamp, dict[str, str | None]]:
         """Load assignment history from the database."""
@@ -266,8 +275,10 @@ class AssignmentHistory(DatabaseMixin):
         self._history.pop(normalized_date, None)
 
     def prune_old_records(self) -> None:
-        """Remove records older than the cutoff date."""
-        cutoff_date = self._get_cutoff_date()
+        """Remove records older than history_duration_months before today."""
+        cutoff_date = DateUtils.normalize_date(
+            pd.Timestamp.today() - pd.DateOffset(months=self.history_duration_months)
+        )
         cutoff_date_str = cutoff_date.strftime("%Y-%m-%d")
 
         self.execute_update("DELETE FROM schedule_history WHERE date < ?", (cutoff_date_str,))

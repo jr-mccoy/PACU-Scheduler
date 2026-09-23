@@ -57,3 +57,13 @@ def test_local_search_scores_long_term_fairness_without_the_scheduler(tmp_path):
         )
     )
     assert ScheduleQuality.from_variant(shipped).history_penalty > 0
+
+
+def test_history_is_read_relative_to_the_schedule_not_today(tmp_path):
+    # A schedule for a period long past (more than history_duration_months
+    # before today) still sees the 30 days of history before it (finding 23).
+    db = seed_db(tmp_path, history=[("2024-01-20", "A", "B"), ("2024-01-22", "A", "C")])
+    scheduler = build_scheduler(db, "2024-02-05", "2024-02-11")
+
+    assert scheduler._historical_main["A"] == 2
+    assert scheduler._historical_backup["B"] == 1

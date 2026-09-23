@@ -352,6 +352,7 @@ class NurseScheduler:
             self.assignment_history = AssignmentHistory(
                 self.nurse_manager.db_name,
                 history_duration_months=getattr(self, "history_duration_months", 6),
+                anchor=self.start_date,
             )
         except Exception:
             # DB is missing or table empty – proceed with empty history
@@ -885,23 +886,6 @@ class NurseScheduler:
     # =====================================================================
     # NURSE VALIDATION METHODS
     # =====================================================================
-
-    def _is_nurse_available_for_weekend(self, nurse: str, weekend: pd.Timestamp) -> bool:
-        """Check if a nurse is available for all three days of a weekend."""
-        if self.nurse_manager.is_prn_nurse(nurse):
-            return False
-
-        weekend_dates = self._weekend_dates(weekend)
-        weekend_dates_in_idx = [d for d in weekend_dates if d in self.availability.index]
-        if len(weekend_dates_in_idx) != self.WEEKEND_DAYS_COUNT:
-            return False
-
-        try:
-            vals = self.availability.loc[weekend_dates_in_idx, nurse]
-        except KeyError:
-            return False
-
-        return bool(vals.apply(lambda v: (not pd.isna(v)) and bool(v)).all())
 
     def _check_weekend_gap_constraints(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import logging
 import os
@@ -100,12 +101,16 @@ class GenerationRun:
     ``(idx, stats, nurse_counts, schedule)``, ranked best first;
     ``failures`` holds the tracebacks of variants that could not be
     evaluated, and ``worker_metrics`` the profiling data when requested.
+    ``search_capped`` says the weekend beam was cut to ``max_weekend_variants``.
     """
 
     status: str
     candidates: list = field(default_factory=list)
     worker_metrics: list = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    # The max_weekend_variants beam discarded branches: other workable
+    # schedules (or, when infeasible, a feasible one) may exist.
+    search_capped: bool = False
 
 
 class GenerationError(RuntimeError):
@@ -155,6 +160,15 @@ def whole_weekend_range(
         if not is_recorded(friday) and friday >= start:
             end = friday + timedelta(days=2)
     return start, end
+
+
+def search_capped_note(max_variants: int) -> str:
+    """What to tell the user when the weekend beam discarded branches."""
+    return (
+        f"The weekend search kept only the best {max_variants} weekend variants at each "
+        "weekend (Settings: Weekend variants to evaluate), so other workable schedules "
+        "may exist. Raise that setting to search more widely."
+    )
 
 
 def recorded_weekends_in_range(weekend_history, start, end) -> list[pd.Timestamp]:
@@ -1221,12 +1235,17 @@ class NurseScheduler:
             )
             variants = [initial]
             max_variants = int(getattr(self.config, "max_weekend_variants", 0) or 0)
-            pruned_any = False
+            self._beam_pruned = False
 
             for friday in weekends:
                 variants = self._process_weekend_variants(
-                    friday, variants, pre_weekend_assignments, allow_rotation_violations
+                    friday,
+                    variants,
+                    pre_weekend_assignments,
+                    allow_rotation_violations,
+                    limit=max_variants,
                 )
+                pruned_any = self._beam_pruned
                 if not variants:
                     _dbg_variants(f"  ERROR: no variants left after {friday.date()}")
                     if pruned_any:
@@ -1241,9 +1260,11 @@ class NurseScheduler:
                         "infeasible", [], failed_weekend=friday, pruned=pruned_any
                     )
                 if max_variants and len(variants) > max_variants:
+                    # Generators select children before cloning; this catches
+                    # any that return more than the cap.
                     variants = self._prune_weekend_variants(variants, max_variants, friday)
-                    pruned_any = True
 
+            pruned_any = self._beam_pruned
             self._collect_rotation_violations(variants)
             _dbg_variants(f"\nFinal total variants: {len(variants)}")
             return WeekendGenerationResult("ok", variants, pruned=pruned_any)
@@ -1257,48 +1278,128 @@ class NurseScheduler:
             _dbg_variants(trace)
             return WeekendGenerationResult("error", [], error=trace)
 
+    # ── beam ─────────────────────────────────────────────────────────────
+    # Growth is roughly (valid pairs)^(weekends), and each survivor later runs
+    # the full clone → assign → gap-fill → rebalance pipeline, so the beam is
+    # capped at max_weekend_variants after each weekend. Branches are kept by
+    # a cheap weekend-only preference: fewest rotation repeats introduced on
+    # the branch, then the most even spread of *recent* weekends across
+    # nurses, then the largest minimum Friday-to-Friday gap ending inside or
+    # after the window. Lifetime history would make tenure dominate (a new
+    # hire is always the minimum), and an old short gap would pin the minimum.
+
+    def _recent_weekend_cutoff(self) -> pd.Timestamp:
+        """Weekends before this date do not count toward beam balance."""
+        return self.start_date - timedelta(days=4 * int(self.config.weekend_gap_days))
+
+    def _beam_profile(self, lists: dict) -> tuple[dict[str, int], list[int]]:
+        """Recent weekend count per nurse, and the sorted gaps that count."""
+        cutoff = self._recent_weekend_cutoff()
+        counts = {n: sum(1 for f in lists.get(n, ()) if f >= cutoff) for n in self.nurses}
+        gaps = sorted(
+            (nxt - prev).days
+            for fridays in lists.values()
+            for prev, nxt in pairwise(fridays)
+            if nxt >= self.start_date
+        )
+        return counts, gaps
+
+    @staticmethod
+    def _beam_key(violations: int, counts: dict[str, int], min_gap: int | None) -> tuple:
+        values = list(counts.values())
+        imbalance = (max(values) - min(values)) if values else 0
+        return (violations, imbalance, -(min_gap if min_gap is not None else 10**6))
+
+    def _variant_beam_key(self, variant) -> tuple:
+        counts, gaps = self._beam_profile(variant.state.nurse_weekend_lists)
+        return self._beam_key(len(variant.rotation_violations), counts, gaps[0] if gaps else None)
+
     def _prune_weekend_variants(self, variants, max_variants, friday):
+        """Trim already-built variants to the best ``max_variants`` (see above).
+
+        Sorting is stable, so ties keep their original deterministic order.
         """
-        Trim the variant beam to ``max_variants`` after one weekend's branching.
+        self._log_beam_prune(friday, len(variants), max_variants)
+        return sorted(variants, key=self._variant_beam_key)[:max_variants]
 
-        Growth is roughly (valid pairs)^(weekends) and each survivor later runs
-        the full clone → assign → gap-fill → rebalance pipeline, so an
-        unbounded beam can stall a whole generation run. Variants are kept by
-        a cheap weekend-only preference: fewest rotation repeats introduced on
-        the branch, then most even spread of weekends across nurses (history
-        included), then the largest minimum Friday-to-Friday gap. Sorting is
-        stable, so ties keep their original deterministic order.
-        """
-
-        def prune_key(variant):
-            lists = variant.state.nurse_weekend_lists
-            counts = [len(lists.get(n, ())) for n in self.nurses]
-            imbalance = (max(counts) - min(counts)) if counts else 0
-            min_gap = None
-            for fridays in lists.values():
-                for prev, nxt in pairwise(fridays):
-                    gap = (nxt - prev).days
-                    if min_gap is None or gap < min_gap:
-                        min_gap = gap
-            return (
-                len(variant.rotation_violations),
-                imbalance,
-                -(min_gap if min_gap is not None else 10**6),
-            )
-
+    def _log_beam_prune(self, friday, produced: int, kept: int) -> None:
+        self._beam_pruned = True
         logger.warning(
             "Weekend %s produced %d variants; pruning beam to best %d (max_weekend_variants).",
             friday.date(),
-            len(variants),
-            max_variants,
+            produced,
+            kept,
         )
-        _dbg_variants(f"  pruning {len(variants)} variants to {max_variants} after {friday.date()}")
-        return sorted(variants, key=prune_key)[:max_variants]
+        _dbg_variants(f"  pruning {produced} variants to {kept} after {friday.date()}")
+
+    def _branch(self, variants, pairs_for, friday, limit: int = 0) -> list[ScheduleVariant]:
+        """Clone one child per (parent, pair), keeping only the best ``limit``.
+
+        Children are scored from their parent and pair before any clone is
+        made, so a capped weekend never materializes more than ``limit``
+        schedules (instead of every parent × pair, often tens of thousands).
+        """
+        children = [(var, pair) for var in variants for pair in pairs_for(var)]
+        if limit and len(children) > limit:
+            profiles = {
+                id(var): self._beam_profile(var.state.nurse_weekend_lists) for var in variants
+            }
+            keys = [
+                self._child_beam_key(var, profiles[id(var)], friday, fsf, sfs)
+                for var, (fsf, sfs) in children
+            ]
+            best = sorted(range(len(children)), key=lambda i: (keys[i], i))[:limit]
+            self._log_beam_prune(friday, len(children), limit)
+            children = [children[i] for i in best]
+
+        next_vars = []
+        for var, (fsf, sfs) in children:
+            clone = var.clone()
+            # assign_weekend records any rotation repeat on the clone itself,
+            # so violations stay attributable to the branch that contains them.
+            clone.assign_weekend(friday, fsf, sfs)
+            next_vars.append(clone)
+        return next_vars
+
+    def _child_beam_key(self, parent, profile, friday, fsf, sfs) -> tuple:
+        """The beam key ``parent.clone().assign_weekend(friday, fsf, sfs)`` would have."""
+        last = parent.state.last_pattern
+        violations = (
+            len(parent.rotation_violations)
+            + int(last.get(fsf) == WeekendPattern.FSF)
+            + int(last.get(sfs) == WeekendPattern.SFS)
+        )
+        counts, gaps = profile
+        counts = dict(counts)
+        removed: list[int] = []
+        added: list[int] = []
+        lists = parent.state.nurse_weekend_lists
+        for nurse in (fsf, sfs):
+            fridays = lists.get(nurse, [])
+            if friday in fridays:
+                continue
+            if friday >= self._recent_weekend_cutoff():
+                counts[nurse] = counts.get(nurse, 0) + 1
+            pos = bisect.bisect_left(fridays, friday)
+            prev = fridays[pos - 1] if pos > 0 else None
+            nxt = fridays[pos] if pos < len(fridays) else None
+            if prev is not None and nxt is not None and nxt >= self.start_date:
+                removed.append((nxt - prev).days)  # split by the new weekend
+            if prev is not None and friday >= self.start_date:
+                added.append((friday - prev).days)
+            if nxt is not None:
+                added.append((nxt - friday).days)
+
+        remaining = list(gaps)
+        for gap in removed:
+            remaining.remove(gap)
+        candidates = remaining[:1] + added
+        return self._beam_key(violations, counts, min(candidates) if candidates else None)
 
     def _process_weekend_variants(
-        self, friday, variants, pre_weekend_assignments, allow_rotation_violations
+        self, friday, variants, pre_weekend_assignments, allow_rotation_violations, *, limit=0
     ):
-        """Process variants for a specific weekend."""
+        """Branch every variant on this weekend's valid pairs (at most ``limit`` kept)."""
         _dbg_variants(f"\n--- Weekend {friday.date()} ---")
         _dbg_variants(f"  starting variants count: {len(variants)}")
 
@@ -1317,22 +1418,24 @@ class NurseScheduler:
             # allow_rotation_violations=True (the STRICT_THEN_RELAXED flow does
             # this after the confirm_rotation_callback gate approves it).
             next_vars = self._generate_strict_variants(
-                variants, friday, fixed, pre_weekend_assignments
+                variants, friday, fixed, pre_weekend_assignments, limit=limit
             )
             _dbg_variants(f"  after strict pass: {len(next_vars)} variants")
         else:
             next_vars = self._generate_relaxed_variants(
-                variants, friday, fixed, pre_weekend_assignments, next_vars
+                variants, friday, fixed, pre_weekend_assignments, next_vars, limit=limit
             )
             _dbg_variants(f"  after repeat-allowed pass: {len(next_vars)} variants")
 
         return next_vars
 
-    def _generate_strict_variants(self, variants, friday, fixed, pre_weekend_assignments):
+    def _generate_strict_variants(
+        self, variants, friday, fixed, pre_weekend_assignments, *, limit=0
+    ):
         """Generate variants with strict rotation enforcement."""
-        next_vars = []
-        for var in variants:
-            pairs = self._get_valid_nurse_pairs(
+
+        def pairs_for(var):
+            return self._get_valid_nurse_pairs(
                 friday,
                 var.state.last_assignment,
                 var.state.last_pattern,
@@ -1342,14 +1445,11 @@ class NurseScheduler:
                 all_pre_scheduled_weekends=pre_weekend_assignments,
                 enforce_rotation=True,
             )
-            for fsf, sfs in pairs:
-                clone = var.clone()
-                clone.assign_weekend(friday, fsf, sfs)
-                next_vars.append(clone)
-        return next_vars
+
+        return self._branch(variants, pairs_for, friday, limit)
 
     def _generate_relaxed_variants(
-        self, variants, friday, fixed, pre_weekend_assignments, next_vars
+        self, variants, friday, fixed, pre_weekend_assignments, next_vars, *, limit=0
     ):
         """Generate variants for a weekend, admitting repeats only where needed.
 
@@ -1360,38 +1460,30 @@ class NurseScheduler:
         otherwise, never merely because relaxation was switched on.
         """
         self._rotation_enforced = False
-        for var in variants:
+
+        def pairs_for(var):
             common = dict(
                 schedule=var.state.schedule,
                 all_pre_scheduled_weekends=pre_weekend_assignments,
             )
-            pairs = self._get_valid_nurse_pairs(
+            args = (
                 friday,
                 var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
-                enforce_rotation=True,
+            )
+            pairs = self._get_valid_nurse_pairs(*args, enforce_rotation=True, **common)
+            if pairs:
+                return pairs
+            return self._get_valid_nurse_pairs(
+                *args,
+                enforce_rotation=False,
+                nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
                 **common,
             )
-            if not pairs:
-                pairs = self._get_valid_nurse_pairs(
-                    friday,
-                    var.state.last_assignment,
-                    var.state.last_pattern,
-                    fixed,
-                    var.state.weekend_tracking,
-                    enforce_rotation=False,
-                    nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
-                    **common,
-                )
-            for fsf, sfs in pairs:
-                clone = var.clone()
-                # assign_weekend records any rotation repeat on the clone
-                # itself, so violations stay attributable to the branch that
-                # actually contains them.
-                clone.assign_weekend(friday, fsf, sfs)
-                next_vars.append(clone)
+
+        next_vars.extend(self._branch(variants, pairs_for, friday, limit))
         return next_vars
 
     def _collect_rotation_violations(self, variants) -> None:
@@ -1743,15 +1835,18 @@ class NurseScheduler:
             profile = False
 
         sleep_handle = inhibit_sleep()
+        self.last_weekend_generation = None
         try:
             stage("Building weekend rotation variants…")
             variants = self._generate_weekend_variants(
                 self._setup_rotation_callback(confirm_rotation_callback), weekend_variant_mode
             )
+            weekend_result = getattr(self, "last_weekend_generation", None)
+            capped = bool(weekend_result and weekend_result.pruned)
             if cancelled():
                 return GenerationRun("cancelled")
             if not variants:
-                return GenerationRun("infeasible")
+                return GenerationRun("infeasible", search_capped=capped)
 
             total = len(variants)
             stage(f"Evaluating {total} variant{'s' if total != 1 else ''}…")
@@ -1780,6 +1875,7 @@ class NurseScheduler:
                 candidates=evaluation.candidates,
                 worker_metrics=evaluation.worker_metrics,
                 failures=evaluation.failures,
+                search_capped=capped,
             )
         finally:
             allow_sleep(sleep_handle)
@@ -1807,6 +1903,7 @@ class NurseScheduler:
             result = self.generate_weekend_candidates(
                 allow_rotation_violations=allow_rotation_violations
             )
+            self.last_weekend_generation = result
             if result.status == "error":
                 raise GenerationError(f"Weekend generation failed:\n{result.error}")
             return result.variants
@@ -2042,6 +2139,7 @@ __all__ = [
     "NurseScheduler",
     "WeekendGenerationResult",
     "recorded_weekends_in_range",
+    "search_capped_note",
     "whole_weekend_range",
     "_evaluate_variant_worker",
     "_evaluate_variant_worker_profiled",

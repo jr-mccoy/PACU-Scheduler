@@ -116,6 +116,7 @@ class ScheduleProgressWorker(QThread):
             self.settings = {}
         self.all_candidates: list = []
         self.worker_metrics: list = []
+        self.search_capped = False
 
     @property
     def profiling_enabled(self) -> bool:
@@ -170,6 +171,7 @@ class ScheduleProgressWorker(QThread):
             if run.status == "cancelled":
                 self.cancelled.emit()
                 return
+            self.search_capped = run.search_capped
             if run.status == "infeasible":
                 self.finished.emit([], sched, wh)
                 return

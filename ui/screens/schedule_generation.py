@@ -19,7 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from scheduler import AssignmentHistory, WeekendHistory
-from scheduler.engine import recorded_weekends_in_range, whole_weekend_range
+from scheduler.engine import (
+    recorded_weekends_in_range,
+    search_capped_note,
+    whole_weekend_range,
+)
 from scheduler.exporters import write_gap_report
 
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
@@ -371,10 +375,16 @@ class ScheduleGenerationScreen(QWidget):
         # Guard: no feasible candidates
         if not variants:
             self._finish_run()
+            capped = (
+                "The weekend search was capped this run, so raising “Weekend variants to "
+                "evaluate” is the first thing to try.\n\n"
+                if self.worker is not None and self.worker.search_capped
+                else ""
+            )
             show_info(
                 self,
                 "No feasible schedules",
-                "No schedule satisfies every rule for this date range. Things to try:\n\n"
+                capped + "No schedule satisfies every rule for this date range. Things to try:\n\n"
                 "• Raise “Weekend variants to evaluate” in Settings (or set it to "
                 "Unlimited); a low cap can prune the only workable weekend pattern.\n"
                 "• Allow rotation violations for some nurses when you generate.\n"
@@ -416,10 +426,17 @@ class ScheduleGenerationScreen(QWidget):
             self.ah,
             out_dir=out_dir,
             export_error=export_error,
+            notice=self._capped_note(scheduler),
         )
         # Applying records weekends in this range; refresh the summary's count.
         self._variant_dialog.accepted.connect(self.on_show)
         self._variant_dialog.open()
+
+    def _capped_note(self, scheduler) -> str | None:
+        """The beam-capped notice for this run, if the cap discarded branches."""
+        if self.worker is None or not self.worker.search_capped:
+            return None
+        return search_capped_note(scheduler.config.max_weekend_variants)
 
     def _write_diagnostics(self, scheduler, out_dir: str) -> None:
         """Write the opt-in diagnostics from Settings next to the exported PDFs."""

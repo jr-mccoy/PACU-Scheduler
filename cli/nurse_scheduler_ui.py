@@ -39,7 +39,7 @@ from scheduler import (
     build_scheduler_from_settings,
     default_worker_count,
 )
-from scheduler.engine import recorded_weekends_in_range
+from scheduler.engine import recorded_weekends_in_range, search_capped_note
 
 logger = logging.getLogger(__name__)
 
@@ -1566,6 +1566,9 @@ class NurseSchedulerUI:
                 )
             top_schedules = self._generate_schedule_with_violations(scheduler, nurses_allowed)
 
+            weekend_result = getattr(scheduler, "last_weekend_generation", None)
+            if weekend_result is not None and weekend_result.pruned:
+                print(search_capped_note(scheduler.config.max_weekend_variants))
             if not top_schedules:
                 print("No valid schedules could be generated with the current constraints.")
                 CLIHelper.pause()

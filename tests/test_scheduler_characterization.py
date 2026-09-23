@@ -401,7 +401,7 @@ def test_generation_mode_strict_only(monkeypatch, scheduler_for_modes):
     monkeypatch.setattr(
         scheduler_for_modes,
         "_generate_strict_variants",
-        lambda variants, friday, fixed, pre: calls.append("strict") or ["strict"],
+        lambda variants, friday, fixed, pre, **_kw: calls.append("strict") or ["strict"],
     )
     monkeypatch.setattr(
         scheduler_for_modes,

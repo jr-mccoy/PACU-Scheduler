@@ -96,6 +96,7 @@ class VariantReviewDialog(ToolDialog):
         *,
         out_dir: str | None = None,
         export_error: str | None = None,
+        notice: str | None = None,
     ):
         super().__init__(parent, title="Review Schedules")
         self.variants = variants
@@ -103,6 +104,7 @@ class VariantReviewDialog(ToolDialog):
         self.ah = assignment_history
         self._out_dir = out_dir
         self._export_error = export_error
+        self._notice = notice
         self._cur = 0
         self._build_ui()
         QTimer.singleShot(0, self._update_page)
@@ -116,6 +118,12 @@ class VariantReviewDialog(ToolDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 20)
         outer.setSpacing(12)
+
+        if self._notice:
+            notice = QLabel(self._notice)
+            notice.setWordWrap(True)
+            notice.setProperty("role", "muted")
+            outer.addWidget(notice)
 
         # Where the automatic export went, with a way to get there.
         if self._out_dir or self._export_error:

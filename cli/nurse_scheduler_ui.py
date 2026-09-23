@@ -1702,11 +1702,16 @@ class NurseSchedulerUI:
 
     def _display_and_select_schedule(self, top_schedules):
         """Display schedule candidates and get user selection (1-based and clear)."""
-        print("\nTop candidate schedules:")
+        print(
+            "\nTop candidate schedules (ranked by fewest rotation repeats, "
+            "then fewest unfilled slots, then score):"
+        )
         for rank, candidate in enumerate(top_schedules, start=1):
             idx, stats, nurse_counts, sched = candidate
             print(
-                f"\nCandidate {rank}: Gaps={stats['gaps']}, "
+                f"\nCandidate {rank}: Rotation repeats={stats['rotation_rep']}, "
+                f"Unfilled slots={stats['gaps']}, "
+                f"Score={stats.get('weighted_score', 0.0):.3f}, "
                 f"Balance Main={stats['balance_main']}, "
                 f"Balance Backup={stats['balance_backup']}"
             )

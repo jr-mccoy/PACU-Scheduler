@@ -196,10 +196,11 @@ class SchedulerConfig:
         self.allow_post_weekend_thursday_backup = allow_post_weekend_thursday_backup
 
         # ── per-metric weights for the composite schedule score ───
+        # Pattern repeats and unfilled slots are not weighted: final ranking
+        # orders by them first (scheduler.scoring.RANK_FIRST), and these
+        # weights only order candidates that tie on both.
         default_weights = {
-            "rotation_rep": 0.30,  # pattern repeat count
-            "gaps": 0.20,  # weekday gap-fill penalty
-            "rot_viol": 0.15,  # historic rotation violations
+            "rot_viol": 0.15,  # new repeats, weighted by past violations
             "weekend_gap": 0.15,  # fairness of “time-since-last-wknd”
             "balance": 0.10,  # main/backup daily balance
             "long_term": 0.10,  # 30-day over/under utilisation

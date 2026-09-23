@@ -26,6 +26,7 @@ from .settings_support import (
     LABELS,
     ONE_DAY_GAP_HELP,
     WEIGHTS,
+    WEIGHTS_HELP,
     add_restore_defaults,
     apply_tooltips,
     is_valid_accent,
@@ -160,7 +161,7 @@ class SettingsDialog(ToolDialog):
         score_group = QGroupBox("Ranking weights")
         score_layout = QGridLayout()
         score_layout.addWidget(
-            _help("How much each factor counts when ranking options. Only the ratios matter."),
+            _help(WEIGHTS_HELP),
             0,
             0,
             1,

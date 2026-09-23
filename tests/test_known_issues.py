@@ -11,8 +11,7 @@ import pandas as pd
 import pytest
 from scheduling_fixtures import REGULAR, build_scheduler, seed_db
 
-from scheduler import SchedulerConfig, WeekendHistory
-from scheduler.scoring import weighted_scores_from_rows
+from scheduler import WeekendHistory
 
 
 class _TooManyOrderings(Exception):
@@ -32,16 +31,6 @@ def _count_orderings(variant, limit: int):
 
     variant._assign_slot_sequence = counting
     return calls
-
-
-@pytest.mark.xfail(strict=True, reason="audit #6: ranking trades coverage away")
-def test_a_fully_covered_schedule_ranks_above_one_with_a_gap():
-    rows = [
-        dict(idx=0, rotation_rep=0, gaps=1, rot_viol=0, weekend_gap=40, balance=2, long_term=0),
-        dict(idx=1, rotation_rep=0, gaps=0, rot_viol=0, weekend_gap=41, balance=3, long_term=0),
-    ]
-    scores = weighted_scores_from_rows(rows, weights=SchedulerConfig().scoring_weights)
-    assert scores["weighted_score"].idxmin() == 1
 
 
 @pytest.mark.xfail(strict=True, reason="audit #8: PRN nurses are never scheduled")

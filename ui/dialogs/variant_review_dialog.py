@@ -33,15 +33,22 @@ logger = logging.getLogger(__name__)
 # (stats key, label, tooltip) — shown for the variant on screen.
 METRICS = [
     (
-        "weighted_score",
-        "Score",
-        "Overall ranking score combining every metric below with the scoring weights "
-        "from Settings. Lower is better; options are listed best first.",
+        "rotation_rep",
+        "Rotation repeats",
+        "Weekends where a nurse repeats the pattern (FSF/SFS) they worked last time "
+        "instead of alternating. Options are ranked by this first. Ideally 0.",
     ),
     (
         "gaps",
         "Unfilled slots",
-        "Main/Backup slots the scheduler could not fill. Ideally 0.",
+        "Main/Backup slots the scheduler could not fill. Options are ranked by this "
+        "second. Ideally 0.",
+    ),
+    (
+        "weighted_score",
+        "Score",
+        "Combines the remaining metrics with the ranking weights from Settings, and "
+        "orders options that tie on repeats and unfilled slots. Lower is better.",
     ),
     (
         "balance_main",
@@ -52,12 +59,6 @@ METRICS = [
         "balance_backup",
         "Backup spread",
         "Difference between the most and fewest Backup shifts any nurse gets. Lower is fairer.",
-    ),
-    (
-        "rotation_rep",
-        "Rotation repeats",
-        "Weekends where a nurse repeats the pattern (FSF/SFS) they worked last time "
-        "instead of alternating. Ideally 0.",
     ),
 ]
 

@@ -48,7 +48,7 @@ from .platform import allow_sleep, default_worker_count, inhibit_sleep, usable_c
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
 from .runtime import is_empty
-from .scoring import long_term_score, weighted_scores_from_rows
+from .scoring import long_term_score, rank_rows
 
 logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
@@ -373,36 +373,50 @@ class NurseScheduler:
 
     def _rotation_violation_score(
         self,
-        nurse_counts: dict[str, dict[str, int]],
-        historic_viol: dict[str, int],
         sched_df: pd.DataFrame,
+        prior_violations: dict[str, int],
     ) -> int:
         """
-        Candidate-sensitive additive penalty.
+        How hard this candidate's new rotation repeats land.
 
-        Historic repeat counts are weighted by how often a nurse appears in the
-        candidate's weekend rows (Fri/Sat/Sun). This differentiates variants
-        that use high-violation nurses more heavily on weekends.
+        Each weekend where a nurse repeats the pattern they worked last time
+        counts ``1 + their earlier violations``, so among candidates with the
+        same number of repeats, the one that gives them to nurses who have
+        had the fewest scores lowest. Patterns start from each nurse's last
+        pattern before the window. Only weekends generated whole inside the
+        candidate count; a recorded edge weekend is history, not a new repeat.
         """
         if sched_df is None or sched_df.empty:
             return 0
 
-        weekend_rows = sched_df.loc[sched_df.index.weekday.isin([4, 5, 6]), ["main", "backup"]]
-        if weekend_rows.empty:
-            return 0
-
-        weekend_appearances: dict[str, int] = defaultdict(int)
-        for _, roles in weekend_rows.iterrows():
-            for nurse in roles.tolist():
+        days = set(sched_df.index)
+        last = dict(self.last_pattern)
+        score = 0
+        for friday in sorted(d for d in days if d.weekday() == self.FRIDAY_WEEKDAY):
+            if friday + timedelta(days=2) not in days:
+                continue
+            for nurse, pattern in (
+                (sched_df.at[friday, "main"], WeekendPattern.FSF),
+                (sched_df.at[friday, "backup"], WeekendPattern.SFS),
+            ):
                 if is_empty(nurse):
                     continue
-                weekend_appearances[str(nurse)] += 1
+                if last.get(nurse) == pattern:
+                    score += 1 + int(prior_violations.get(nurse, 0))
+                last[nurse] = pattern
+        return score
 
-        # Keep scope to nurses represented in this candidate's counts.
-        return sum(
-            historic_viol.get(nurse, 0) * weekend_appearances.get(nurse, 0)
-            for nurse in nurse_counts
-        )
+    def _prior_violation_counts(self) -> dict[str, int]:
+        """Each nurse's rotation violations before the window.
+
+        Violations recorded inside the window belong to the schedule being
+        replaced. History objects without the window-relative query fall back
+        to the stored counts.
+        """
+        before = getattr(self.weekend_history, "get_violation_counts_before", None)
+        if before is None:
+            return self.weekend_history.get_violation_counts()
+        return before(self.start_date)
 
     # ────────────────────────────────────────────────────────────────────
     # NurseScheduler._weekend_gap_penalty
@@ -1805,18 +1819,21 @@ class NurseScheduler:
                 logger.error(f"Failed to export performance metrics: {exc}")
 
     def _score_and_rank_variants(self, candidate_schedules):
-        """Compute weighted scores and rank variants.
+        """Score and rank candidates in place, best first.
+
+        Order: fewest weekend-pattern repeats, then fewest unfilled slots,
+        then the weighted score over the remaining metrics (see
+        :func:`scheduler.scoring.rank_rows`). Each candidate's stats gain
+        ``weighted_score`` and ``rank``.
 
         Semantics alignment note:
         - ``BestStateTracker`` uses lexicographic ``ScheduleQuality`` comparison
           during intra-variant local search.
-        - This method performs *inter-variant* final ranking by normalizing and
-          weighting metrics. ``long_term`` uses the same ``_long_term_score``
-          objective as ``ScheduleQuality.history_penalty`` (lower is better).
+        - ``long_term`` uses the same ``long_term_score`` objective as
+          ``ScheduleQuality.history_penalty`` (lower is better).
         """
-        viol_counts = self.weekend_history.get_violation_counts()
+        prior_violations = self._prior_violation_counts()
         overage = self._historic_overage()
-        weights = self.config.scoring_weights
 
         rows = []
         for idx, stats, nurse_counts, sched_df in candidate_schedules:
@@ -1825,21 +1842,20 @@ class NurseScheduler:
                     "idx": idx,
                     "rotation_rep": stats["rotation_rep"],
                     "gaps": stats["gaps"],
-                    "rot_viol": self._rotation_violation_score(nurse_counts, viol_counts, sched_df),
+                    "rot_viol": self._rotation_violation_score(sched_df, prior_violations),
                     "weekend_gap": self._weekend_gap_penalty(sched_df),
                     "balance": stats["balance_main"] + stats["balance_backup"],
                     "long_term": self._long_term_score(nurse_counts, overage),
                 }
             )
 
-        metric_df = weighted_scores_from_rows(rows, weights=weights)
+        ranked = rank_rows(rows, weights=self.config.scoring_weights)
 
-        # Attach score back to stats dict
         for idx, stats, _, _ in candidate_schedules:
-            stats["weighted_score"] = float(metric_df.loc[idx, "weighted_score"])
+            stats["weighted_score"] = float(ranked.loc[idx, "weighted_score"])
+            stats["rank"] = int(ranked.loc[idx, "rank"])
 
-        # Rank by weighted score (lower = better)
-        candidate_schedules.sort(key=lambda tpl: tpl[1]["weighted_score"])
+        candidate_schedules.sort(key=lambda tpl: tpl[1]["rank"])
 
     def _export_top_variants_as_pdfs(self, candidate_schedules, top_n):
         """Export the best variants as PDF files."""

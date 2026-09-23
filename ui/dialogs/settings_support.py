@@ -53,19 +53,15 @@ WIDGET_FOR_KEY = {
 }
 
 # (scoring_weights key, widget attribute, label, tooltip)
+# Rotation repeats and unfilled slots have no weight: options are always
+# ranked by them first (scheduler.scoring.RANK_FIRST). See WEIGHTS_HELP.
 WEIGHTS = [
-    (
-        "rotation_rep",
-        "w_rotrep",
-        "Rotation repeats:",
-        "Penalise options where nurses repeat last weekend's FSF/SFS pattern.",
-    ),
-    ("gaps", "w_gaps", "Unfilled slots:", "Penalise options that leave Main/Backup slots empty."),
     (
         "rot_viol",
         "w_rotviol",
         "Past violations:",
-        "Penalise giving repeats to nurses who already have rotation violations.",
+        "Among options with the same number of rotation repeats, favour those that give "
+        "the repeats to nurses with fewer past violations.",
     ),
     (
         "weekend_gap",
@@ -86,6 +82,11 @@ WEIGHTS = [
         "Penalise giving more shifts to nurses who worked more in the recent history window.",
     ),
 ]
+
+WEIGHTS_HELP = (
+    "Options are ranked by fewest rotation repeats, then fewest unfilled slots. "
+    "These weights order the options that tie on both. Only the ratios matter."
+)
 
 LABELS = {
     "allow_post_weekend_wednesday_main": "Main on the Wednesday after a worked weekend",

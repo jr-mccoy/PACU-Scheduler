@@ -593,12 +593,10 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
 
     nurse_counts_a = {"Alice": {"total": 2}, "Bob": {"total": 2}}
     nurse_counts_b = {"Bob": {"total": 2}, "Cara": {"total": 2}}
-    rot_viol_a = scheduler._rotation_violation_score(
-        nurse_counts_a, history.get_violation_counts(), sched_a
-    )
-    rot_viol_b = scheduler._rotation_violation_score(
-        nurse_counts_b, history.get_violation_counts(), sched_b
-    )
+    # rot_viol counts each new pattern repeat as 1 + the nurse's past
+    # violations (audit finding 15): A repeats Alice (4 past violations).
+    rot_viol_a = scheduler._rotation_violation_score(sched_a, history.get_violation_counts())
+    rot_viol_b = scheduler._rotation_violation_score(sched_b, history.get_violation_counts())
     assert rot_viol_a > rot_viol_b
 
     overage = {"Alice": 3, "Bob": 0, "Cara": 0}

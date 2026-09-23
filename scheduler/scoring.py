@@ -107,19 +107,69 @@ def compare_quality(
     return QualityComparison.EQUAL
 
 
+# Final ranking puts these first, in this order, before any weighted score:
+# fewest weekend-pattern repeats, then fewest unfilled slots.
+RANK_FIRST: tuple[str, ...] = ("rotation_rep", "gaps")
+
+# The smallest difference across candidates that earns a weighted metric its
+# full weight. Plain min-max normalization gave a one-point difference the
+# same weight as a twenty-point one, so a trivial edge in one metric could
+# outweigh a real difference in another. A metric whose candidates differ by
+# less than its scale gets a proportional share of its weight instead.
+METRIC_SCALES: dict[str, float] = {
+    "rot_viol": 2.0,  # one repeat landing on a nurse with one past repeat
+    "weekend_gap": 14.0,  # two weeks of weekend spacing, in days
+    "balance": 4.0,  # main + backup spread, in shifts
+    "long_term": 4.0,  # shifts above the recent-history minimum
+}
+
+
 def weighted_scores_from_rows(
     rows: Iterable[dict],
     *,
     weights: dict[str, float],
+    scales: dict[str, float] | None = None,
 ) -> pd.DataFrame:
-    """Normalize rows by metric and compute weighted composite score."""
+    """Normalize rows by metric and compute weighted composite score.
+
+    Each weighted metric becomes ``(value - min) / max(max - min, scale)``,
+    where ``scale`` comes from ``scales`` (default 0, which is plain min-max).
+    """
+    scales = scales or {}
     metric_df = pd.DataFrame(list(rows)).set_index("idx")
 
     for col in weights:
         lo, hi = metric_df[col].min(), metric_df[col].max()
-        metric_df[col] = 0.0 if hi == lo else (metric_df[col] - lo) / (hi - lo)
+        span = max(float(hi - lo), float(scales.get(col, 0.0)))
+        metric_df[col] = 0.0 if span == 0 else (metric_df[col] - lo) / span
 
     for col, w in weights.items():
         metric_df[col] *= w
     metric_df["weighted_score"] = metric_df[list(weights)].sum(axis=1)
     return metric_df
+
+
+def rank_rows(rows: Iterable[dict], *, weights: dict[str, float]) -> pd.DataFrame:
+    """Score and rank candidate metric rows; lower ``rank`` is better.
+
+    Candidates are ordered by :data:`RANK_FIRST` (fewest pattern repeats,
+    then fewest unfilled slots), then by ``weighted_score`` over the
+    remaining metrics using :data:`METRIC_SCALES`, then by ``idx`` so the
+    order is deterministic. Weights for the rank-first metrics are ignored:
+    they can never change the order.
+    """
+    rows = list(rows)
+    raw = pd.DataFrame(rows).set_index("idx")
+    scored_weights = {k: w for k, w in weights.items() if k not in RANK_FIRST}
+    scored = weighted_scores_from_rows(rows, weights=scored_weights, scales=METRIC_SCALES)
+
+    order = sorted(
+        raw.index,
+        key=lambda i: (
+            *(raw.at[i, key] for key in RANK_FIRST if key in raw.columns),
+            scored.at[i, "weighted_score"],
+            i,
+        ),
+    )
+    scored["rank"] = pd.Series({idx: rank for rank, idx in enumerate(order, start=1)})
+    return scored

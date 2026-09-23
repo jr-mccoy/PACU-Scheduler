@@ -221,9 +221,9 @@ def _prepare_variant_debug_payload(
     variants_payload = []
 
     viol_counts = None
-    if weekend_history and hasattr(weekend_history, "get_violation_counts"):
+    if scheduler and hasattr(scheduler, "_prior_violation_counts"):
         try:
-            viol_counts = weekend_history.get_violation_counts()
+            viol_counts = scheduler._prior_violation_counts()
         except Exception:
             viol_counts = None
 
@@ -266,10 +266,11 @@ def _prepare_variant_debug_payload(
             scheduler
             and hasattr(scheduler, "_rotation_violation_score")
             and viol_counts is not None
+            and sched_df is not None
         ):
             try:
                 gap_metrics["rotation_violation_score"] = float(
-                    scheduler._rotation_violation_score(counts, viol_counts)
+                    scheduler._rotation_violation_score(sched_df, viol_counts)
                 )
             except Exception:
                 pass

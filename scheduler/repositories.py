@@ -928,6 +928,29 @@ class WeekendHistory:
             """)
             return {name: cnt for name, cnt in cur.fetchall()}
 
+    def get_violation_counts_before(self, before_date) -> dict[str, int]:
+        """Each nurse's rotation violations on weekends before ``before_date``.
+
+        A schedule starting on ``before_date`` replaces anything recorded from
+        then on, so its violations are not the nurse's past. The stored count
+        (which may be a manual ``set_violation_count`` override) is used for
+        a nurse with no recorded violation on or after the date; otherwise
+        their violations are recounted from the dates before it.
+        """
+        cutoff = self._normalize_date(before_date)
+        stored = self.get_violation_counts()
+        earlier: dict[str, int] = {}
+        later: set[str] = set()
+        for nurse, violation_date, _pattern, _previous in self.get_violation_dates():
+            if self._normalize_date(violation_date) < cutoff:
+                earlier[nurse] = earlier.get(nurse, 0) + 1
+            else:
+                later.add(nurse)
+        return {
+            nurse: (earlier.get(nurse, 0) if nurse in later else count)
+            for nurse, count in stored.items()
+        }
+
     # Public Interface Methods
     def get_last_weekend_before(self, nurse: str, before_date: pd.Timestamp) -> pd.Timestamp | None:
         """Get the last weekend assignment before a given date."""

@@ -7,8 +7,9 @@ places where the scheduler does something other than what its rules, docs,
 or settings say, or where its search wastes its budget.
 
 Each finding ends with the fix it needs, and [the plan](#fix-plan) orders
-those fixes into phases. Phases 0 and 1 are done: findings 1–5, 7 and 22
-are **Fixed**, and each fixed finding says how. Every other finding
+those fixes into phases. Phases 0, 1 and 2 are done. Findings 1–7, 9, 13, 15, 19
+and 22 are **Fixed**, and each fixed finding says how. Finding 10 is closed
+as **Won't fix**: fairness keeps raw counts by decision. Every other finding
 that could be reproduced has a strict-xfail test in
 `tests/test_known_issues.py`, which fails loudly (as an unexpected pass)
 when its fix lands.
@@ -43,24 +44,24 @@ finding). "Code reading" means it follows directly from the cited lines.
 | 3 | P1 | Cancelling, or closing the review dialog, wipes manual rotation overrides | Reproduced | Fixed |
 | 4 | P1 | Saving from the CLI never records new weekends | Reproduced | Fixed |
 | 5 | P1 | Weekends cut by the window's edges are left blank, silently | Reproduced | Fixed |
-| 6 | P1 | Final ranking can put a schedule with unfilled shifts first | Reproduced | Open (xfail test) |
+| 6 | P1 | Final ranking can put a schedule with unfilled shifts first | Reproduced | Fixed |
 | 7 | P1 | Crashes are reported as "no feasible schedule"; unevaluated variants are shown as results | Code reading | Fixed |
 | 8 | P2 | PRN nurses are never scheduled at all | Reproduced | Open (xfail test) |
-| 9 | P2 | The 30-day history tie-breaker never runs | Code reading | Open (xfail test) |
-| 10 | P2 | Fairness metrics ignore how available each nurse was | Code reading | Open |
+| 9 | P2 | The 30-day history tie-breaker never runs | Code reading | Fixed |
+| 10 | P2 | Fairness metrics ignore how available each nurse was | Code reading | Won't fix (decision) |
 | 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading | Open |
 | 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading | Open |
-| 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading | Open |
+| 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading | Fixed |
 | 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading | Open |
-| 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading | Open |
+| 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading | Fixed |
 | 16 | P2 | Gap-fill tries every ordering of a week's empty slots, uncapped | Reproduced (591 s) | Open (xfail test) |
 | 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading | Open |
 | 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced | Open (xfail test) |
-| 19 | P3 | Local search cannot see long-term fairness | Code reading | Open |
+| 19 | P3 | Local search cannot see long-term fairness | Code reading | Fixed |
 | 20 | P3 | `consec_violations` can never exceed 1 | Reproduced | Open (xfail test) |
 | 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading | Open |
 | 22 | P3 | Applying a schedule is not atomic | Code reading | Fixed |
-| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading | Open |
+| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading | Open (PDF side effect fixed) |
 
 ## P1 — wrong schedules, lost data, or misreporting
 
@@ -244,6 +245,19 @@ Normalize the remaining metrics against fixed reference scales, not the
 candidate pool's min-max, so a trivial difference stays trivial. Show the
 gap count prominently in the review dialog.
 
+**Status: Fixed**, in the order set by open decision 2:
+1. fewest pattern repeats;
+2. then fewest unfilled slots;
+3. then the weighted score over the remaining metrics;
+4. then candidate index.
+
+`scheduler.scoring.rank_rows()` implements this, and each candidate's
+stats carry a `rank`. The weighted metrics are normalized against fixed
+minimum scales (`METRIC_SCALES`), so a one-day or one-shift difference no
+longer earns a metric its full weight. Repeats and unfilled slots have
+no weights any more. The Settings dialogs explain the order, and the
+review dialog lists those two metrics first. Tests: `tests/test_ranking.py`.
+
 ### 7. Crashes are reported as "no feasible schedule"; unevaluated variants are shown as results
 
 **Where.** `scheduler/engine.py:1025-1031`, `ui/worker_threads.py:255-275`,
@@ -308,6 +322,9 @@ candidate-domain ordering.
 **Fix.** Pass `self._historical_main` and `self._historical_backup` into the
 root variant. Add a test that a tie is broken by history.
 
+**Status: Fixed.** The root variant gets the historical counts, and
+clones share them. Tests: `tests/test_recent_history.py`.
+
 ### 10. Fairness metrics ignore how available each nurse was
 
 **Where.** `scheduler/domain.py:1033-1044`, `scheduler/scoring.py:28-54`,
@@ -331,6 +348,11 @@ the slots they could legally take given their availability. Their expected
 count is that share of the slots to fill. Replace the raw spreads with
 max/min deviation from expected, in both the local search and the final
 ranking. Exclude nurses with near-zero availability from the minimum.
+
+**Status: Won't fix, by decision.** Fairness keeps raw max-minus-min
+counts. The consequences above stand, including spread targets that a
+nurse on leave can make unreachable. Revisit if those cost too much
+search time or rank badly in practice.
 
 ### 11. Pinned weekend cells are force-included inconsistently and never validated
 
@@ -396,6 +418,24 @@ relaxed search minimal: per branch, use strict pairs when they exist and
 admit repeats only on the weekends where that branch has none. Keep the
 user's confirmation before relaxing.
 
+**Status: Fixed.**
+- `NurseScheduler.run_generation()` is the single pipeline. It takes
+  stage, progress and cancellation callbacks, can evaluate in threads, and
+  returns a `GenerationRun`.
+- The GUI worker only maps its callbacks to Qt signals, and
+  `generate_schedule()` wraps it for the CLI and scripts. A test checks
+  that both rank the same inputs identically.
+- As decided (open decision 7), relaxed mode tries each branch's strict
+  pairs first and admits a repeat only on a weekend that branch cannot
+  staff otherwise. When strict rotation is feasible, relaxed mode yields
+  exactly the strict variants.
+- The GUI still asks about rotation violations up front and does not
+  prompt midway. With repeats admitted only where needed, allowing them
+  up front gives the same schedules as strict-then-relaxed would.
+
+Tests: `tests/test_generation_pipeline.py` and
+`tests/test_relaxed_rotation.py`.
+
 ### 14. Beam pruning ranks by lifetime history and branches before it prunes
 
 **Where.** `scheduler/engine.py:1033-1069`, `:1002-1019`.
@@ -434,6 +474,17 @@ any repeats, yet this metric still carries 15% of the ranking.
 candidate: each repeat weighted by `1 + prior violations` of the nurse it
 lands on. Repeats then go to the nurses who have had the fewest. This
 changes what gets optimized, so it needs a product decision.
+
+**Status: Fixed**, as recommended (open decision 3).
+- Each new repeat in a candidate counts `1 + that nurse's earlier
+  violations`.
+- Patterns start from each nurse's last pattern before the window, and
+  earlier violations are counted before it too
+  (`WeekendHistory.get_violation_counts_before`).
+- A manual violation-count override applies unless violations are
+  recorded inside the window.
+
+Tests: `tests/test_ranking.py`.
 
 ### 16. Gap-fill tries every ordering of a week's empty slots, uncapped
 
@@ -504,6 +555,10 @@ penalty depends on weekday counts, so only the final ranking ever sees it.
 in the work item. Then the tracker can use `history_penalty` as its last
 tiebreak.
 
+**Status: Fixed.** The variant carries the historic overage and ships it
+to workers; `ScheduleQuality.from_variant` uses it when no scheduler is
+passed. Tests: `tests/test_recent_history.py`.
+
 ### 20. `consec_violations` can never exceed 1
 
 `_process_nurse_violations` (`scheduler/repositories.py:741`) counts two
@@ -547,7 +602,8 @@ rebuild.
 - `generate_schedule` always writes `schedule_variant_N.pdf` into the
   current directory (`scheduler/engine.py:1413`). That is a side effect of a
   library call, and the file names collide between runs. Move PDF export to
-  the callers.
+  the callers. *Fixed in Phase 2: the CLI calls
+  `export_top_variants_as_pdfs()` explicitly.*
 - `AssignmentHistory` caches history from a cutoff relative to *today*
   (`scheduler/repositories.py:155-159`), not to the scheduling window. A
   window more than `history_duration_months` from today silently gets no
@@ -676,6 +732,20 @@ Findings 6, 9, 10, 13, 15, and 19.
 one with gaps, that a nurse on leave does not change the spread target, and
 that the GUI and CLI produce identical rankings for the same inputs.
 
+**Status: Done**, with the decisions made before starting:
+- **Item 1.** Ranking puts fewest pattern repeats ahead of fewest
+  unfilled slots (open decision 2), so "a fully covered schedule always
+  beats one with gaps" holds among candidates with equally many repeats.
+- **Item 3** (availability-aware fairness) was dropped: fairness keeps
+  raw counts by decision, and finding 10 is closed as Won't fix.
+- **Item 5.** `rot_viol` uses the recommended definition.
+- **Item 4.** Relaxed search admits repeats only where needed.
+
+Beyond the plan:
+- `generate_schedule()` no longer writes PDFs (part of finding 23).
+- The generation run keeps the machine awake in the GUI too, not only
+  in the CLI.
+
 ### Phase 3 — make the search spend its budget well
 
 Findings 14, 16, 17, and 18.
@@ -738,10 +808,12 @@ before the phases that depend on them.
    resort for weekday gaps (recommended), or ordinary weekday staff?
 2. **Rotation repeats vs. coverage** (Phase 2): is a rotation repeat always
    worse than an unfilled weekday shift? That decides whether
-   `rotation_rep` becomes a hard ranking key alongside `gaps`.
+   `rotation_rep` becomes a hard ranking key alongside `gaps`. *Decided:
+   yes. Ranking is fewest repeats, then fewest unfilled slots, then the
+   weighted score.*
 3. **`rot_viol` meaning** (Phase 2): distribute new repeats toward nurses
    with fewer past repeats (recommended), or keep steering weekends away from
-   past victims?
+   past victims? *Decided: distribute new repeats (recommended).*
 4. **Weekend gap bound** (Phase 4): inclusive (a 28-day cadence is allowed at
    28) or exclusive (today)? Either way the label will say exactly which.
 5. **Edge weekends** (Phase 1): extend the horizon automatically
@@ -752,3 +824,8 @@ before the phases that depend on them.
    applies only when no later weekend is recorded) right, or should
    overrides carry an explicit effective date? *Phase 1 implemented the
    proposed rule; an effective date can still replace it.*
+7. **Where relaxed mode may repeat** (Phase 2): anywhere, or only on
+   weekends a branch cannot staff strictly? *Decided: only where needed.*
+8. **Time off in fairness** (Phase 2): proportional expected shares,
+   excluding low-availability nurses, or raw counts? *Decided: raw counts
+   (finding 10 closed as Won't fix).*

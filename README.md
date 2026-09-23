@@ -70,8 +70,17 @@ constrain everything else:
    rebalance pass that evens out Main/Backup counts without violating the hard
    constraints.
 
-Surviving variants are scored and ranked, and the top candidates are surfaced
-in a review dialog.
+Surviving variants are then ranked:
+
+1. fewest weekend-pattern repeats;
+2. then fewest unfilled slots;
+3. then a weighted score over weekend spacing, balance, long-term fairness,
+   and who absorbs any repeats.
+
+The weights (Settings → Ranking weights) only order candidates that tie on
+the first two. The top candidates are surfaced in a review dialog. The GUI,
+the terminal UI and `generate_schedule()` all run the same pipeline,
+`NurseScheduler.run_generation()`.
 
 ## Architecture
 
@@ -234,7 +243,19 @@ for operator control.
   retry runs only after `confirm_rotation_callback` approves it — and the
   default callback declines. `STRICT_ONLY` never introduces rotation repeats;
   an infeasible weekend fails generation rather than silently relaxing.
-  `RELAXED_ALLOWED` skips strict generation entirely.
+  `RELAXED_ALLOWED` starts relaxed. The GUI and the terminal UI use it when
+  you allow violations up front.
+- **Relaxed rotation repeats only where needed.** In relaxed mode each branch
+  still uses alternating pairs whenever it has any. A repeat is admitted
+  only on a weekend that branch cannot staff otherwise, and only for nurses
+  allowed to violate. When strict rotation is feasible, relaxed mode yields
+  the strict schedules.
+- **Ranking is lexicographic before it is weighted.** Fewest pattern repeats
+  wins, then fewest unfilled slots, and only then the weighted score. That
+  score's metrics are normalized against fixed minimum scales, so a trivial
+  difference does not earn a metric its full weight. The rotation-violation
+  metric counts each new repeat as `1 + that nurse's earlier violations`,
+  so unavoidable repeats go to the nurses who have had the fewest.
 - **Rotation violations are attributed per candidate schedule.** Each
   `ScheduleVariant` records the pattern repeats introduced on its own branch, and
   `get_rotation_violation_history()` is rebuilt and deduplicated from the

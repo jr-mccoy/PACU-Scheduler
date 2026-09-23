@@ -197,15 +197,42 @@ budgets are tunable rather than fixed:
   in the terminal UI. Both write `~/.nurse_scheduler/settings.json`, so the
   value persists between sessions and the two interfaces share it.
 - `SchedulerConfig.max_week_permutations` — cap on the slot orderings tried
-  when rebalancing one week. A full week has ten modifiable slots, so an
-  exhaustive search is 10! orderings.
+  when rebalancing one week, or when gap-filling a week that cannot be
+  filled completely. A Monday–Thursday week has up to eight modifiable slots
+  (8! = 40,320 orderings). Below the cap every ordering is tried; above it,
+  the given order plus seeded random shuffles, so every slot gets to go
+  first.
 - `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
   gap-fill, rebalance, and refill passes. Hand it to `NurseScheduler` as
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
 
-The shipped defaults are generous enough that a single variant can take
-minutes; see **Known limitations**.
+Slots that no nurse can legally take (everyone is off, or the weekends rule
+them all out) are detected once per variant and skipped by every search, so
+one impossible day no longer stalls the passes around it.
+
+`scripts/benchmark.py` times evaluation per variant for a budget profile and
+reports what it produced, on the demo roster or on a variant of it with an
+impossible day:
+
+```bash
+python scripts/benchmark.py --scenario blocked --tuning default --variants 5
+```
+
+Measured on a 4-core container, the per-variant times (default budgets, one
+at a time) were:
+
+| Scenario | Before the scheduler audit | After |
+| --- | --- | --- |
+| Demo roster | 14–24 s | 25–30 s, same result quality |
+| Every nurse off one Wednesday | over 900 s (stopped) | about 25 s |
+
+The two demo-roster columns evaluate different weekend variants, because the
+beam now ranks branches differently, so compare them loosely. On this roster
+the default budgets and the demo's tightened profile take the same time: the
+budgets do not bind, and run time is set by the per-cell work described
+under **Known limitations**. Re-measure on your own hardware before changing
+the defaults.
 
 ### Parallelism
 
@@ -306,7 +333,8 @@ for operator control.
 - **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
   the per-attempt time limits are 800 seconds each, multiplied by hundreds of
   passes. They effectively never bind, so run time is governed by how quickly
-  the search happens to converge.
+  the search happens to converge. Use `scripts/benchmark.py` to find budgets
+  that bind without costing result quality on your hardware.
 - **Weekend generation grows combinatorially.** Rosters much beyond ten nurses
   or horizons beyond about six weeks push variant counts up sharply.
 

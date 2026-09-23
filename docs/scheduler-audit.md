@@ -7,12 +7,10 @@ places where the scheduler does something other than what its rules, docs,
 or settings say, or where its search wastes its budget.
 
 Each finding ends with the fix it needs, and [the plan](#fix-plan) orders
-those fixes into phases. Phases 0–3 are done. Findings 1–7, 9, 13–19
-and 22 are **Fixed**, and each fixed finding says how. Finding 10 is closed
-as **Won't fix**: fairness keeps raw counts by decision. Every other finding
-that could be reproduced has a strict-xfail test in
-`tests/test_known_issues.py`, which fails loudly (as an unexpected pass)
-when its fix lands.
+those fixes into phases. All five phases (0–4) are done. Every finding is
+**Fixed** except 8 and 10, which are closed as **Won't fix** by decision:
+PRN nurses stay manual, and fairness keeps raw counts. Each finding says how
+it was resolved and names the tests that pin it.
 
 Severity:
 
@@ -46,11 +44,11 @@ finding). "Code reading" means it follows directly from the cited lines.
 | 5 | P1 | Weekends cut by the window's edges are left blank, silently | Reproduced | Fixed |
 | 6 | P1 | Final ranking can put a schedule with unfilled shifts first | Reproduced | Fixed |
 | 7 | P1 | Crashes are reported as "no feasible schedule"; unevaluated variants are shown as results | Code reading | Fixed |
-| 8 | P2 | PRN nurses are never scheduled at all | Reproduced | Open (xfail test) |
+| 8 | P2 | PRN nurses are never scheduled at all | Reproduced | Won't fix (decision) |
 | 9 | P2 | The 30-day history tie-breaker never runs | Code reading | Fixed |
 | 10 | P2 | Fairness metrics ignore how available each nurse was | Code reading | Won't fix (decision) |
-| 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading | Open |
-| 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading | Open |
+| 11 | P2 | Pinned weekend cells are force-included inconsistently and never validated | Code reading | Fixed |
+| 12 | P2 | The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum" | Code reading | Fixed |
 | 13 | P2 | Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed | Code reading | Fixed |
 | 14 | P2 | Beam pruning ranks by lifetime history and branches before it prunes | Code reading | Fixed |
 | 15 | P2 | `rot_viol` does not measure new rotation violations | Code reading | Fixed |
@@ -58,10 +56,10 @@ finding). "Code reading" means it follows directly from the cited lines.
 | 17 | P2 | One unfillable slot disables rebalancing for its whole week or window | Code reading | Fixed |
 | 18 | P2 | The rebalance permutation cap only varies the end of the week | Reproduced | Fixed |
 | 19 | P3 | Local search cannot see long-term fairness | Code reading | Fixed |
-| 20 | P3 | `consec_violations` can never exceed 1 | Reproduced | Open (xfail test) |
-| 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading | Open |
+| 20 | P3 | `consec_violations` can never exceed 1 | Reproduced | Fixed |
+| 21 | P3 | `last_assignment` is maintained everywhere and read nowhere | Code reading | Fixed |
 | 22 | P3 | Applying a schedule is not atomic | Code reading | Fixed |
-| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading | Open (PDF side effect fixed) |
+| 23 | P3 | Smaller issues: PDF side effect, history cutoff, unreachable budgets, doc errors | Code reading | Fixed |
 
 ## P1 — wrong schedules, lost data, or misreporting
 
@@ -308,6 +306,11 @@ join the weekday domain only as a last resort, after every regular nurse,
 when a slot would otherwise stay empty. They stay out of the spread and
 long-term fairness metrics.
 
+**Status: Won't fix, by decision** (open decision 1). PRN nurses stay out
+of automatic scheduling and are scheduled only when a manager pins them.
+The README no longer describes PRN "eligibility" as if it were automatic.
+Tests: `tests/test_policy_defaults.py`.
+
 ### 9. The 30-day history tie-breaker never runs
 
 **Where.** `scheduler/engine.py:990-997`, `scheduler/domain.py:711-717`,
@@ -377,6 +380,24 @@ main, Sat backup, or Sun main mean FSF; the mirror cells mean SFS). Treat
 contradictory pins as a locked-data conflict. Run a pre-flight validation of
 the pre-schedule, and show its findings before generation starts.
 
+**Status: Fixed.**
+- **Pinned cells.** A weekend's pattern nurse is derived from any pinned
+  cell (Fri main, Sat backup or Sun main fix FSF; the mirror cells fix
+  SFS), and every pin is force-included the same way. When a weekend's
+  pins contradict each other, the weekend stays infeasible, as before,
+  and the contradiction is recorded.
+- **Pre-flight check.** `NurseScheduler.validate_pre_schedule()` lists
+  per day:
+  - a nurse pinned to both roles;
+  - a nurse pinned on a day they have off;
+  - a pinned nurse who is not active;
+  - two late-shift nurses pinned together;
+  - contradictory weekend pins.
+  The generation screen shows these before it starts ("Generate
+  Anyway"), and the CLI prints them and asks.
+
+Tests: `tests/test_pinned_cells.py` and `tests/test_generation_screen.py`.
+
 ### 12. The weekend-gap setting is a hard, exclusive bound labelled "preferred minimum"
 
 **Where.** `scheduler/engine.py:700` and `:710` (`<= gap_min` rejects),
@@ -394,6 +415,16 @@ defaults it to 28, so library callers and the apps get different policies
 **Fix.** Decide whether the bound is inclusive. Either way, make the label
 state the enforced rule exactly ("Weekends must be more than N days apart"),
 and give `SchedulerConfig` its defaults from `SharedSettings.DEFAULTS`.
+
+**Status: Fixed**, as decided (open decision 4).
+- The bound is inclusive: weekends exactly `weekend_gap_days` apart are
+  allowed.
+- The label reads "Minimum days between weekends", and the tooltip calls
+  it a hard rule and gives the example.
+- `SchedulerConfig` defaults match `SharedSettings.DEFAULTS` (the gap is
+  now 28 in both), and a test checks this.
+
+Tests: `tests/test_policy_defaults.py`.
 
 ### 13. Relaxed rotation relaxes every weekend; neither front end uses strict-then-relaxed
 
@@ -600,6 +631,11 @@ happens. Three successive repeat violations still report `consec_viol = 1`
 on the rotation stats screen. **Fix:** count violations on successive
 *worked* weekends of that nurse, whatever the gap between them.
 
+**Status: Fixed.** The streak counts successive worked weekends that
+repeated the pattern before them, however far apart. The unused
+`_calculate_consecutive_violations` helper, which made the same 7-day
+assumption, is gone. Tests: `tests/test_violation_streak.py`.
+
 ### 21. `last_assignment` is maintained everywhere and read nowhere
 
 `ScheduleState.last_assignment` is copied on every clone, snapshotted,
@@ -608,6 +644,11 @@ assignment. No decision reads it: `_check_weekend_gap_constraints` documents
 its parameter as "not used". `_update_last_assignment_dates` also replaces
 the historical seed value with `None`. **Fix:** remove the field and the
 parameters that carry it.
+
+**Status: Fixed.** The field is gone from `ScheduleState`,
+`StateSnapshot`, `WeekBackup`, the assignment helpers, the search-context
+protocol and the weekend-eligibility signatures, and so are the
+full-schedule scans that recomputed it.
 
 ### 22. Applying a schedule is not atomic
 
@@ -647,6 +688,16 @@ rebuild.
 - `_is_nurse_available_for_weekend` (`scheduler/engine.py:636`) duplicates
   `_is_nurse_eligible_for_weekend` and has no callers.
 
+**Status: Fixed.**
+- **PDF side effect.** Fixed in Phase 2: callers export explicitly.
+- **History cutoff.** `AssignmentHistory` takes an `anchor`, and the
+  scheduler passes its start date (test: `tests/test_recent_history.py`).
+  Pruning old records still counts from today.
+- **Full-period budget.** `full_period_max_orders` defaults to 54, the
+  most `gen_full_orders` can produce.
+- **README slot count.** It says eight slots per week.
+- **Dead helper.** `_is_nurse_available_for_weekend` is removed.
+
 ## Fix plan
 
 The phases are ordered by risk to real schedules. Each phase is sized to be
@@ -675,10 +726,11 @@ Reproduced.
 - The finding-16 guard counts slot orderings instead of timing a run. It
   fails as soon as gap-fill passes `max_week_permutations`, which is fast
   and not flaky on a busy CI runner.
-- Findings still open are strict-xfail tests in
-  `tests/test_known_issues.py`. Finding 8's test encodes the recommended
-  policy (open decision 1) and should be revisited if that decision goes
-  another way.
+- Findings left for later phases were strict-xfail tests in
+  `tests/test_known_issues.py`. Each moved to a regular test file when its
+  fix landed. Finding 8's test encoded the recommended PRN policy and was
+  replaced by tests of the policy chosen instead. The file is gone now
+  that no finding is open.
 
 ### Phase 1 — stop wrong schedules and data loss
 
@@ -799,6 +851,21 @@ Findings 14, 16, 17, and 18.
 **Done when** the Phase 0 performance guard passes and the demo's run time
 drops. Record before and after timings in the README.
 
+**Status: Done**, except that the budget defaults (item 5) are not changed.
+- **Results.** The performance guard passes. With every nurse off one
+  Wednesday, a variant took over 900 s before (stopped) and about 25 s
+  after, on a 4-core container. On the plain demo roster, times are in
+  the same range before and after (14–30 s), with identical result
+  quality.
+- **Why the defaults stay.** On this roster the default budgets and the
+  demo's tight profile take the same time, so the budgets do not bind.
+  There was nothing to re-derive from these numbers without a slower,
+  harder roster or faster hardware. `scripts/benchmark.py` measures per
+  budget profile and scenario, so the defaults can be set on the
+  machines that will run the scheduler. `full_period_max_orders` became
+  54 (see finding 23), which changes no behaviour.
+- **README.** It records the measurements and corrects the slot count.
+
 ### Phase 4 — rules hygiene and cleanup
 
 Findings 8, 11, 12, 20, 21, and 23.
@@ -817,6 +884,11 @@ Findings 8, 11, 12, 20, 21, and 23.
 
 **Done when** the pre-flight report catches each seeded bad pin, and
 `last_assignment` no longer appears in `scheduler/`.
+
+**Status: Done**, with the decisions made before starting:
+- PRN nurses stay manual, so item 1 became a decision and finding 8 is
+  Won't fix.
+- The weekend gap became inclusive rather than only relabelled.
 
 ### Relation to the weekend-candidate design
 
@@ -838,6 +910,7 @@ before the phases that depend on them.
 
 1. **PRN nurses** (Phase 4): never scheduled automatically (today), last
    resort for weekday gaps (recommended), or ordinary weekday staff?
+   *Decided: never automatically; managers pin PRN nurses by hand.*
 2. **Rotation repeats vs. coverage** (Phase 2): is a rotation repeat always
    worse than an unfilled weekday shift? That decides whether
    `rotation_rep` becomes a hard ranking key alongside `gaps`. *Decided:
@@ -848,6 +921,7 @@ before the phases that depend on them.
    past victims? *Decided: distribute new repeats (recommended).*
 4. **Weekend gap bound** (Phase 4): inclusive (a 28-day cadence is allowed at
    28) or exclusive (today)? Either way the label will say exactly which.
+   *Decided: inclusive.*
 5. **Edge weekends** (Phase 1): extend the horizon automatically
    (recommended), or require ranges to start on a Monday and end on a
    Sunday? *Phase 1 implemented the recommendation, keeping already

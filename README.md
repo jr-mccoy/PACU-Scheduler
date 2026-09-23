@@ -14,8 +14,9 @@ fairness objective layered on top. Each day needs a **Main** and a **Backup**
 nurse. Weekends run in one of two rotation patterns — `FSF` (Friday/Sunday) and
 `SFS` (Saturday) — and a nurse who worked one pattern is expected to alternate
 to the other next time. On top of that, the scheduler has to respect
-time-off requests, minimum spacing between assignments, PRN (as-needed) and
-late-shift eligibility, and any assignments a manager has pinned in advance —
+time-off requests, minimum spacing between assignments, late-shift pairing
+rules, and any assignments a manager has pinned in advance (PRN, as-needed,
+nurses are scheduled only when pinned) —
 while spreading Main and Backup duty evenly across the team.
 
 This project generates candidate schedules, scores them, and presents the best
@@ -70,8 +71,17 @@ constrain everything else:
    rebalance pass that evens out Main/Backup counts without violating the hard
    constraints.
 
-Surviving variants are scored and ranked, and the top candidates are surfaced
-in a review dialog.
+Surviving variants are then ranked:
+
+1. fewest weekend-pattern repeats;
+2. then fewest unfilled slots;
+3. then a weighted score over weekend spacing, balance, long-term fairness,
+   and who absorbs any repeats.
+
+The weights (Settings → Ranking weights) only order candidates that tie on
+the first two. The top candidates are surfaced in a review dialog. The GUI,
+the terminal UI and `generate_schedule()` all run the same pipeline,
+`NurseScheduler.run_generation()`.
 
 ## Architecture
 
@@ -187,15 +197,42 @@ budgets are tunable rather than fixed:
   in the terminal UI. Both write `~/.nurse_scheduler/settings.json`, so the
   value persists between sessions and the two interfaces share it.
 - `SchedulerConfig.max_week_permutations` — cap on the slot orderings tried
-  when rebalancing one week. A full week has ten modifiable slots, so an
-  exhaustive search is 10! orderings.
+  when rebalancing one week, or when gap-filling a week that cannot be
+  filled completely. A Monday–Thursday week has up to eight modifiable slots
+  (8! = 40,320 orderings). Below the cap every ordering is tried; above it,
+  the given order plus seeded random shuffles, so every slot gets to go
+  first.
 - `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
   gap-fill, rebalance, and refill passes. Hand it to `NurseScheduler` as
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
 
-The shipped defaults are generous enough that a single variant can take
-minutes; see **Known limitations**.
+Slots that no nurse can legally take (everyone is off, or the weekends rule
+them all out) are detected once per variant and skipped by every search, so
+one impossible day no longer stalls the passes around it.
+
+`scripts/benchmark.py` times evaluation per variant for a budget profile and
+reports what it produced, on the demo roster or on a variant of it with an
+impossible day:
+
+```bash
+python scripts/benchmark.py --scenario blocked --tuning default --variants 5
+```
+
+Measured on a 4-core container, the per-variant times (default budgets, one
+at a time) were:
+
+| Scenario | Before the scheduler audit | After |
+| --- | --- | --- |
+| Demo roster | 14–24 s | 25–30 s, same result quality |
+| Every nurse off one Wednesday | over 900 s (stopped) | about 25 s |
+
+The two demo-roster columns evaluate different weekend variants, because the
+beam now ranks branches differently, so compare them loosely. On this roster
+the default budgets and the demo's tightened profile take the same time: the
+budgets do not bind, and run time is set by the per-cell work described
+under **Known limitations**. Re-measure on your own hardware before changing
+the defaults.
 
 ### Parallelism
 
@@ -225,16 +262,28 @@ for operator control.
   rewrites derived state — `weekend_rotation_history`, violation dates and
   stats, in-memory last patterns — from `weekend_assignments`, so assignments,
   patterns, and violations cannot drift apart.
-- **Manual violation overrides are temporary by design.**
-  `set_violation_count` writes an operator override directly, and it stands
-  until an explicit rebuild (`_recalculate_violation_counts` / "Rebuild
-  Violation History").
+- **Manual overrides are temporary by design.**
+  `set_violation_count` and `set_last_pattern` write operator overrides
+  directly. They stand until the next canonical rebuild: any weekend
+  assignment edit, applying a schedule, or "Rebuild Violation History".
 - **Weekend generation defaults to strict-then-relaxed.** Strict alternation is
   attempted across the whole horizon first. If no variants survive, the relaxed
   retry runs only after `confirm_rotation_callback` approves it — and the
   default callback declines. `STRICT_ONLY` never introduces rotation repeats;
   an infeasible weekend fails generation rather than silently relaxing.
-  `RELAXED_ALLOWED` skips strict generation entirely.
+  `RELAXED_ALLOWED` starts relaxed. The GUI and the terminal UI use it when
+  you allow violations up front.
+- **Relaxed rotation repeats only where needed.** In relaxed mode each branch
+  still uses alternating pairs whenever it has any. A repeat is admitted
+  only on a weekend that branch cannot staff otherwise, and only for nurses
+  allowed to violate. When strict rotation is feasible, relaxed mode yields
+  the strict schedules.
+- **Ranking is lexicographic before it is weighted.** Fewest pattern repeats
+  wins, then fewest unfilled slots, and only then the weighted score. That
+  score's metrics are normalized against fixed minimum scales, so a trivial
+  difference does not earn a metric its full weight. The rotation-violation
+  metric counts each new repeat as `1 + that nurse's earlier violations`,
+  so unavoidable repeats go to the nurses who have had the fewest.
 - **Rotation violations are attributed per candidate schedule.** Each
   `ScheduleVariant` records the pattern repeats introduced on its own branch, and
   `get_rotation_violation_history()` is rebuilt and deduplicated from the
@@ -243,11 +292,35 @@ for operator control.
 - **Pre-scheduled weekend conflicts are hard-blocking.** Candidate `FSF`/`SFS`
   pairs are rejected outright when they contradict a non-empty prefilled
   Friday, Saturday, or Sunday cell.
-- **Pre-window history counts toward weekday spacing.** Days worked in the
-  `min_days_between_assignments` window immediately before the schedule start —
-  drawn from weekend history and the `schedule_history` table — are seeded into
-  each snapshot, so spacing is enforced across the window boundary rather than
-  only inside it.
+- **History is read relative to the window.** Rotation alternates against
+  the last weekend recorded *before* the start date, and only weekends
+  before it count as history. Weekends already recorded inside the range
+  are the schedule being replaced. They are ignored while generating, the
+  screen and the CLI say how many there are, and applying an option
+  replaces them. A manual `set_last_pattern` override counts only while
+  the nurse has no recorded weekend on or after the start date.
+- **Committed work on both sides of the window is respected.** Days worked
+  in the `min_days_between_assignments` window just before the start, or
+  already committed just after the end, count toward weekday spacing. These
+  come from weekend history, pre-scheduled cells and the
+  `schedule_history` table. Weekends recorded or pre-scheduled after the
+  end count toward the weekend gap and the pre-weekend window.
+- **Weekends are scheduled whole.** A range that starts on a Saturday or
+  Sunday, or ends on a Friday or Saturday, is widened to cover the whole
+  weekend, and the screen shows the widened range. The exception is a cut
+  weekend that is already recorded (usually by the previous month's run).
+  Its days inside the range keep their recorded roles, so consecutive
+  months never reshuffle each other's boundary weekend.
+- **Generation only reads; applying writes everything at once.**
+  Generating, cancelling or closing the review never touches history.
+  Applying an option goes through `scheduler.apply_schedule()`, from both
+  the GUI and the CLI. That records the per-day and weekend history for
+  the option's dates in one transaction, replacing what was there, and
+  rebuilds rotation state once.
+- **A crash is an error, never "no feasible schedule".**
+  `generate_weekend_candidates()` reports `ok`, `infeasible` or `error`,
+  and `generate_schedule()` raises `GenerationError` instead of offering
+  to relax rotation because of a bug.
 
 ## Known limitations
 
@@ -260,7 +333,8 @@ for operator control.
 - **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
   the per-attempt time limits are 800 seconds each, multiplied by hundreds of
   passes. They effectively never bind, so run time is governed by how quickly
-  the search happens to converge.
+  the search happens to converge. Use `scripts/benchmark.py` to find budgets
+  that bind without costing result quality on your hardware.
 - **Weekend generation grows combinatorially.** Rosters much beyond ten nurses
   or horizons beyond about six weeks push variant counts up sharply.
 
@@ -274,6 +348,8 @@ for operator control.
   by characterization tests.
 - [`docs/ui-ux-audit.md`](docs/ui-ux-audit.md) — GUI audit findings, the
   conventions adopted, which settings were connected, and what was deferred.
+- [`docs/scheduler-audit.md`](docs/scheduler-audit.md) — logic errors and
+  oversights found in the scheduling engine, and the phased plan to fix them.
 
 ## License
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from PySide6.QtCore import Qt, QTimer, QUrl
@@ -19,24 +20,41 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..messages import confirm, show_info
+from scheduler import apply_schedule
+
+from ..messages import confirm, show_error, show_info
 from ..services.variant_export import export_variants_calendar_html
 from ..style import UiStyle
 from ..widgets.common import add_shortcut, set_role
 from .tool_dialog import ToolDialog
 
+logger = logging.getLogger(__name__)
+
 # (stats key, label, tooltip) — shown for the variant on screen.
 METRICS = [
     (
-        "weighted_score",
-        "Score",
-        "Overall ranking score combining every metric below with the scoring weights "
-        "from Settings. Lower is better; options are listed best first.",
+        "rotation_rep",
+        "Rotation repeats",
+        "Weekends where a nurse repeats the pattern (FSF/SFS) they worked last time "
+        "instead of alternating. Options are ranked by this first. Ideally 0.",
     ),
     (
         "gaps",
         "Unfilled slots",
-        "Main/Backup slots the scheduler could not fill. Ideally 0.",
+        "Main/Backup slots the scheduler could not fill. Options are ranked by this "
+        "second. Ideally 0.",
+    ),
+    (
+        "unfillable",
+        "Impossible slots",
+        "Unfilled slots that no nurse could legally take in this option, because of time "
+        "off, spacing or the weekend rules. Fixing them needs a data or rule change.",
+    ),
+    (
+        "weighted_score",
+        "Score",
+        "Combines the remaining metrics with the ranking weights from Settings, and "
+        "orders options that tie on repeats and unfilled slots. Lower is better.",
     ),
     (
         "balance_main",
@@ -47,12 +65,6 @@ METRICS = [
         "balance_backup",
         "Backup spread",
         "Difference between the most and fewest Backup shifts any nurse gets. Lower is fairer.",
-    ),
-    (
-        "rotation_rep",
-        "Rotation repeats",
-        "Weekends where a nurse repeats the pattern (FSF/SFS) they worked last time "
-        "instead of alternating. Ideally 0.",
     ),
 ]
 
@@ -81,18 +93,18 @@ class VariantReviewDialog(ToolDialog):
         variants,
         weekend_history,
         assignment_history,
-        backup,
         *,
         out_dir: str | None = None,
         export_error: str | None = None,
+        notice: str | None = None,
     ):
         super().__init__(parent, title="Review Schedules")
         self.variants = variants
         self.wh = weekend_history
         self.ah = assignment_history
-        self._backup = backup
         self._out_dir = out_dir
         self._export_error = export_error
+        self._notice = notice
         self._cur = 0
         self._build_ui()
         QTimer.singleShot(0, self._update_page)
@@ -106,6 +118,12 @@ class VariantReviewDialog(ToolDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 20)
         outer.setSpacing(12)
+
+        if self._notice:
+            notice = QLabel(self._notice)
+            notice.setWordWrap(True)
+            notice.setProperty("role", "muted")
+            outer.addWidget(notice)
 
         # Where the automatic export went, with a way to get there.
         if self._out_dir or self._export_error:
@@ -341,11 +359,20 @@ class VariantReviewDialog(ToolDialog):
         )
 
     def _apply(self, df):
-        for dt, row in df.iterrows():
-            main, backup = row.get("main"), row.get("backup")
-            if dt.weekday() == 4 and main and backup and main != backup:
-                self.wh.add_assignment(dt.isoformat(), main, backup)
-            self.ah.update_history(dt.isoformat(), main, backup)
+        try:
+            apply_schedule(self.wh.db_name, df)
+        except Exception as exc:
+            logger.exception("Applying option %d failed", self._cur + 1)
+            show_error(
+                self,
+                "Schedule not applied",
+                f"Option {self._cur + 1} could not be applied, so history was left unchanged.",
+                details=str(exc),
+            )
+            return
+        self.wh.reload()
+        if self.ah is not None:
+            self.ah.reload()
 
         show_info(
             self.parent(),

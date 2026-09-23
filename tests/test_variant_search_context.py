@@ -43,7 +43,6 @@ def _build_variant(nurses=("Alice", "Bob")) -> ScheduleVariant:
         schedule=schedule,
         main_assignment_counts=pd.Series(0, index=counts_idx),
         backup_assignment_counts=pd.Series(0, index=counts_idx),
-        last_assignment={n: None for n in nurses},
         last_pattern={n: None for n in nurses},
         weekend_tracking={},
         nurse_weekend_lists={n: [] for n in nurses},
@@ -105,7 +104,6 @@ def _make_fake_context():
         schedule=pd.DataFrame({"main": [None, None], "backup": [None, None]}, index=idx),
         main_assignment_counts=pd.Series([0, 0], index=["Alice", "Bob"]),
         backup_assignment_counts=pd.Series([0, 0], index=["Alice", "Bob"]),
-        last_assignment={"Alice": None, "Bob": None},
     )
     fake.config = SimpleNamespace(
         min_days_between_assignments=2,
@@ -132,6 +130,7 @@ def _make_fake_context():
     fake.log_assignment_debug = lambda **kw: calls.append(("log_assignment_debug", kw))
     fake.is_empty = lambda v: v is None or v == ""
     fake.is_pre_scheduled = lambda d, r: False
+    fake.is_unfillable = lambda d, r: False
 
     def eligible_domain(d, r, diagnostics=None, *, force_relaxed=False):
         return ["Alice", "Bob"]
@@ -166,7 +165,6 @@ def _make_fake_context():
     fake.gen_full_orders = lambda days, max_orders=50: []
     fake.backtrack_full_order = lambda vars_list, deadline, node_budget: False
     fake.recalculate_assignment_counts = lambda: None
-    fake.update_last_assignment_dates = lambda: None
     fake.get_total_counts = lambda: pd.Series([0, 0], index=["Alice", "Bob"])
     fake.weekday_counts_for = lambda wd: {}
 

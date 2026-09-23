@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import logging
 import os
@@ -9,7 +10,13 @@ import sys
 import traceback
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
 from itertools import pairwise
@@ -47,12 +54,147 @@ from .platform import allow_sleep, default_worker_count, inhibit_sleep, usable_c
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
 from .runtime import is_empty
-from .scoring import weighted_scores_from_rows
+from .scoring import long_term_score, rank_rows
 
 logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
 PERFORMANCE_PROFILING_REQUESTED = _runtime.PERFORMANCE_PROFILING_REQUESTED
 PERFORMANCE_PROFILE_JSON_DEFAULT = _runtime.PERFORMANCE_PROFILE_JSON_DEFAULT
+
+
+# How often a running evaluation checks whether it has been cancelled.
+_CANCEL_POLL_SECONDS = 0.5
+
+
+def _terminate_pool(pool) -> None:
+    """Stop a cancelled executor without waiting for in-flight variants.
+
+    ``shutdown(cancel_futures=True)`` only drops queued work; a process
+    pool's running workers would otherwise keep evaluating (minutes per
+    variant) after the user pressed Cancel, so terminate them.
+    """
+    pool.shutdown(wait=False, cancel_futures=True)
+    processes = getattr(pool, "_processes", None) or {}
+    for proc in list(processes.values()):
+        try:
+            proc.terminate()
+        except Exception:  # pragma: no cover - best effort
+            logger.debug("Could not terminate worker process", exc_info=True)
+
+
+@dataclass
+class _Evaluation:
+    """What one evaluation pass produced."""
+
+    candidates: list = field(default_factory=list)
+    worker_metrics: list = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    cancelled: bool = False
+
+
+@dataclass
+class GenerationRun:
+    """The outcome of :meth:`NurseScheduler.run_generation`.
+
+    ``status`` is ``"ok"``, ``"infeasible"`` or ``"cancelled"``. For ``"ok"``,
+    ``candidates`` holds every evaluated candidate as
+    ``(idx, stats, nurse_counts, schedule)``, ranked best first;
+    ``failures`` holds the tracebacks of variants that could not be
+    evaluated, and ``worker_metrics`` the profiling data when requested.
+    ``search_capped`` says the weekend beam was cut to ``max_weekend_variants``.
+    """
+
+    status: str
+    candidates: list = field(default_factory=list)
+    worker_metrics: list = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    # The max_weekend_variants beam discarded branches: other workable
+    # schedules (or, when infeasible, a feasible one) may exist.
+    search_capped: bool = False
+
+
+@dataclass(frozen=True)
+class PreScheduleIssue:
+    """One problem with the pinned cells, from :meth:`NurseScheduler.validate_pre_schedule`."""
+
+    day: pd.Timestamp
+    message: str
+
+
+class GenerationError(RuntimeError):
+    """Schedule generation failed for a reason other than infeasibility."""
+
+
+@dataclass
+class WeekendGenerationResult:
+    """How weekend generation ended, and the variants it produced.
+
+    ``status`` is ``"ok"``, ``"infeasible"`` or ``"error"``. For
+    ``"infeasible"``, ``failed_weekend`` is the Friday no branch could staff;
+    for ``"error"``, ``error`` is the traceback. ``pruned`` records that the
+    ``max_weekend_variants`` beam discarded branches, so infeasibility may be
+    an artefact of the cap.
+    """
+
+    status: str
+    variants: list[ScheduleVariant] = field(default_factory=list)
+    error: str | None = None
+    failed_weekend: pd.Timestamp | None = None
+    pruned: bool = False
+
+
+def whole_weekend_range(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    is_recorded: Callable[[pd.Timestamp], bool] = lambda friday: False,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Widen ``[start, end]`` so it does not cut a weekend in two.
+
+    A start on Saturday or Sunday moves back to that weekend's Friday, and an
+    end on Friday or Saturday moves on to its Sunday, so the FSF/SFS pair is
+    generated for all three days. A weekend that ``is_recorded`` already
+    belongs to the period that recorded it, so the range is left as is there
+    and the recorded days inside it are kept instead.
+    """
+    start = DateUtils.normalize_date(start)
+    end = DateUtils.normalize_date(end)
+    if start.weekday() in (5, 6):
+        friday = start - timedelta(days=start.weekday() - 4)
+        if not is_recorded(friday):
+            start = friday
+    if end.weekday() in (4, 5):
+        friday = end - timedelta(days=end.weekday() - 4)
+        if not is_recorded(friday) and friday >= start:
+            end = friday + timedelta(days=2)
+    return start, end
+
+
+def search_capped_note(max_variants: int) -> str:
+    """What to tell the user when the weekend beam discarded branches."""
+    return (
+        f"The weekend search kept only the best {max_variants} weekend variants at each "
+        "weekend (Settings: Weekend variants to evaluate), so other workable schedules "
+        "may exist. Raise that setting to search more widely."
+    )
+
+
+def recorded_weekends_in_range(weekend_history, start, end) -> list[pd.Timestamp]:
+    """Fridays of weekends already recorded wholly inside ``[start, end]``.
+
+    Generating that range replaces them: they are read as the schedule being
+    replaced, not as history, and applying a new option overwrites them.
+    """
+    start = DateUtils.normalize_date(start)
+    end = DateUtils.normalize_date(end)
+    get_assignments = getattr(weekend_history, "get_assignments", None)
+    if get_assignments is None:
+        return []
+    return [
+        friday
+        for friday, fsf, sfs in get_assignments()
+        if (fsf or sfs) and start <= friday and friday + timedelta(days=2) <= end
+    ]
 
 
 def _sync_worker_compatibility_overrides() -> None:
@@ -153,9 +295,6 @@ class NurseScheduler:
         config,
     ):
         """Initialize the core attributes of the scheduler (now with deterministic nurse order)."""
-        self.start_date = DateUtils.normalize_date(start_date)
-        self.end_date = DateUtils.normalize_date(end_date)
-
         # Deterministic ordering across processes/runs
         self.nurses = sorted(list(nurses), key=str.casefold)
         self.prn_nurses = sorted(list(prn_nurses), key=str.casefold)
@@ -164,6 +303,18 @@ class NurseScheduler:
         self.weekend_history = weekend_history
         self.pre_scheduler = pre_scheduler
         self.config = config if config is not None else SchedulerConfig()
+
+        # A weekend is one FSF/SFS unit, so a range that cuts one is widened to
+        # cover it whole, unless that weekend is already recorded (then its
+        # days inside the range are kept as they are; see
+        # _recorded_edge_weekend_slots).
+        self.requested_start_date = DateUtils.normalize_date(start_date)
+        self.requested_end_date = DateUtils.normalize_date(end_date)
+        self.start_date, self.end_date = whole_weekend_range(
+            self.requested_start_date,
+            self.requested_end_date,
+            is_recorded=lambda friday: self._recorded_weekend(friday) is not None,
+        )
 
     def _initialize_scheduling_data(self):
         """Initialize the main scheduling data structures."""
@@ -175,15 +326,25 @@ class NurseScheduler:
     def _initialize_nurse_tracking(self):
         """Initialize tracking data for nurse assignments and patterns."""
         self.weekend_tracking = {}
-        self.last_assignment = {}
         self.last_pattern = {}
         self.rotation_violation_history = defaultdict(list)
         self._rotation_violations = []
 
         for nurse in self.nurses:
-            last_wk = self.weekend_history.get_last_weekend_before(nurse, self.start_date)
-            self.last_assignment[nurse] = last_wk
-            self.last_pattern[nurse] = self.weekend_history.get_last_pattern(nurse)
+            self.last_pattern[nurse] = self._last_pattern_before_window(nurse)
+
+    def _last_pattern_before_window(self, nurse: str) -> WeekendPattern | None:
+        """The nurse's rotation pattern going into ``start_date``.
+
+        Weekends already recorded inside the window belong to the schedule
+        being replaced, so rotation alternates against the last weekend
+        before the window. History objects without the window-relative query
+        (test doubles, older integrations) fall back to the stored pattern.
+        """
+        before = getattr(self.weekend_history, "get_last_pattern_before", None)
+        if before is None:
+            return self.weekend_history.get_last_pattern(nurse)
+        return before(nurse, self.start_date)
 
     def _initialize_historical_data(self):
         """Initialize historical assignment tracking."""
@@ -191,6 +352,7 @@ class NurseScheduler:
             self.assignment_history = AssignmentHistory(
                 self.nurse_manager.db_name,
                 history_duration_months=getattr(self, "history_duration_months", 6),
+                anchor=self.start_date,
             )
         except Exception:
             # DB is missing or table empty – proceed with empty history
@@ -257,22 +419,8 @@ class NurseScheduler:
 
     @staticmethod
     def _long_term_score(nurse_counts: dict[str, dict[str, int]], overage: dict[str, int]) -> int:
-        """
-        Penalty used when sorting variants.
-        For each nurse:
-            extra = max(0, overage[n] + variant_total - min_total)
-        We sum those extras.  Lower score = variant that helps previously
-        over-used nurses land at or below the minimum total in this run.
-        """
-        if not nurse_counts:
-            return 0
-
-        min_total = min(c["total"] for c in nurse_counts.values())
-
-        penalty = 0
-        for n, counts in nurse_counts.items():
-            penalty += max(0, overage.get(n, 0) + counts["total"] - min_total)
-        return penalty
+        """Delegate to :func:`scheduler.scoring.long_term_score`."""
+        return long_term_score(nurse_counts, overage)
 
     # --- Add inside NurseScheduler ---------------------------------------------
 
@@ -297,36 +445,50 @@ class NurseScheduler:
 
     def _rotation_violation_score(
         self,
-        nurse_counts: dict[str, dict[str, int]],
-        historic_viol: dict[str, int],
         sched_df: pd.DataFrame,
+        prior_violations: dict[str, int],
     ) -> int:
         """
-        Candidate-sensitive additive penalty.
+        How hard this candidate's new rotation repeats land.
 
-        Historic repeat counts are weighted by how often a nurse appears in the
-        candidate's weekend rows (Fri/Sat/Sun). This differentiates variants
-        that use high-violation nurses more heavily on weekends.
+        Each weekend where a nurse repeats the pattern they worked last time
+        counts ``1 + their earlier violations``, so among candidates with the
+        same number of repeats, the one that gives them to nurses who have
+        had the fewest scores lowest. Patterns start from each nurse's last
+        pattern before the window. Only weekends generated whole inside the
+        candidate count; a recorded edge weekend is history, not a new repeat.
         """
         if sched_df is None or sched_df.empty:
             return 0
 
-        weekend_rows = sched_df.loc[sched_df.index.weekday.isin([4, 5, 6]), ["main", "backup"]]
-        if weekend_rows.empty:
-            return 0
-
-        weekend_appearances: dict[str, int] = defaultdict(int)
-        for _, roles in weekend_rows.iterrows():
-            for nurse in roles.tolist():
+        days = set(sched_df.index)
+        last = dict(self.last_pattern)
+        score = 0
+        for friday in sorted(d for d in days if d.weekday() == self.FRIDAY_WEEKDAY):
+            if friday + timedelta(days=2) not in days:
+                continue
+            for nurse, pattern in (
+                (sched_df.at[friday, "main"], WeekendPattern.FSF),
+                (sched_df.at[friday, "backup"], WeekendPattern.SFS),
+            ):
                 if is_empty(nurse):
                     continue
-                weekend_appearances[str(nurse)] += 1
+                if last.get(nurse) == pattern:
+                    score += 1 + int(prior_violations.get(nurse, 0))
+                last[nurse] = pattern
+        return score
 
-        # Keep scope to nurses represented in this candidate's counts.
-        return sum(
-            historic_viol.get(nurse, 0) * weekend_appearances.get(nurse, 0)
-            for nurse in nurse_counts
-        )
+    def _prior_violation_counts(self) -> dict[str, int]:
+        """Each nurse's rotation violations before the window.
+
+        Violations recorded inside the window belong to the schedule being
+        replaced. History objects without the window-relative query fall back
+        to the stored counts.
+        """
+        before = getattr(self.weekend_history, "get_violation_counts_before", None)
+        if before is None:
+            return self.weekend_history.get_violation_counts()
+        return before(self.start_date)
 
     # ────────────────────────────────────────────────────────────────────
     # NurseScheduler._weekend_gap_penalty
@@ -466,102 +628,188 @@ class NurseScheduler:
         for day_str, row in raw.items():
             ts = DateUtils.normalize_date(day_str)
             slots[ts] = {"main": row.get("main"), "backup": row.get("backup")}
+
+        # Days of an already-recorded weekend that the range cuts are fixed,
+        # like pre-scheduled cells; an explicit pre-scheduled name wins.
+        for day, roles in self._recorded_edge_weekend_slots().items():
+            slot = slots.setdefault(day, {"main": None, "backup": None})
+            for role, nurse in roles.items():
+                if self.is_empty(slot.get(role)):
+                    slot[role] = nurse
+        return slots
+
+    def _recorded_weekend(self, friday: pd.Timestamp) -> tuple[str, str] | None:
+        """The recorded ``(fsf, sfs)`` pair for a weekend, or None.
+
+        Falls back to "some nurse worked it" (with unknown roles) for history
+        objects without ``get_assignment``.
+        """
+        lookup = getattr(self.weekend_history, "get_assignment", None)
+        if lookup is not None:
+            pair = lookup(friday)
+            if pair and not self.is_empty(pair[0]) and not self.is_empty(pair[1]):
+                return pair[0], pair[1]
+            return None
+        for nurse in self.nurses:
+            if friday in self.weekend_history.get_weekends(nurse):
+                return (None, None)
+        return None
+
+    def _recorded_edge_weekend_slots(self) -> dict[pd.Timestamp, dict[str, str]]:
+        """Cells of recorded weekends that straddle the window's start or end.
+
+        :func:`whole_weekend_range` leaves such a weekend out of the widened
+        range because it belongs to the period that recorded it; the days of
+        it that do fall inside this window keep their recorded roles.
+        """
+        slots: dict[pd.Timestamp, dict[str, str]] = {}
+        edge_fridays = {self._as_friday(self.start_date), self._as_friday(self.end_date)}
+        for friday in edge_fridays:
+            if self.start_date <= friday and friday + timedelta(days=2) <= self.end_date:
+                continue  # a whole weekend inside the window: generated normally
+            pair = self._recorded_weekend(friday)
+            if not pair or self.is_empty(pair[0]):
+                continue
+            fsf, sfs = pair
+            pattern = ((fsf, sfs), (sfs, fsf), (fsf, sfs))  # Fri, Sat, Sun (main, backup)
+            for offset, (main, backup) in enumerate(pattern):
+                day = friday + timedelta(days=offset)
+                if self.start_date <= day <= self.end_date:
+                    slots[day] = {"main": main, "backup": backup}
         return slots
 
     # --- Replace in NurseScheduler ---------------------------------------------
 
+    # Which pattern each pinned weekend cell implies: FSF works Fri main,
+    # Sat backup and Sun main; SFS the mirror cells.
+    _PINNED_PATTERN_CELLS = (
+        (0, "main", WeekendPattern.FSF),
+        (0, "backup", WeekendPattern.SFS),
+        (1, "main", WeekendPattern.SFS),
+        (1, "backup", WeekendPattern.FSF),
+        (2, "main", WeekendPattern.FSF),
+        (2, "backup", WeekendPattern.SFS),
+    )
+
     def _get_pre_scheduled_weekend_assignments(self) -> dict:
         """
-        Extract pre-scheduled weekend assignments for:
-          • the schedule window, and
-          • an additional forward horizon = weekend_gap_days (+2 for Sat/Sun)
-        so forward-gap checks can block end-of-window conflicts.
+        Pinned FSF/SFS nurse per weekend, ``{friday: {FSF: name|None, SFS: name|None}}``.
+
+        Covers the schedule window and a forward horizon of weekend_gap_days
+        (+2 for Sat/Sun) so forward-gap checks can block end-of-window
+        conflicts. A weekend's pattern nurse is derived from *any* pinned cell
+        of that weekend, not only Friday's: a Saturday Main pin fixes the SFS
+        nurse just as a Friday Backup pin does, so both are force-included the
+        same way. When a weekend's pins contradict each other the pattern is
+        left unset; no pair then matches the pinned cells, and
+        :meth:`validate_pre_schedule` explains why.
         """
-        # extend scan to capture the first full weekend after gap_min
+        return self._pinned_weekends()[0]
+
+    def _pinned_weekends(self) -> tuple[dict, dict[pd.Timestamp, str]]:
+        """``(assignments, conflicts)`` for pinned weekend cells (cached)."""
+        cached = getattr(self, "_pinned_weekends_cache", None)
+        if cached is not None:
+            return cached
+
         horizon_end = (self.end_date + timedelta(days=self.config.weekend_gap_days + 2)).normalize()
-
-        # pull pre-scheduled rows across the extended range
-        pre_scheduled = self.pre_scheduler.get_assignments_in_range(self.start_date, horizon_end)
-        pre_scheduled_df = pd.DataFrame.from_dict(pre_scheduled, orient="index")
-        if not pre_scheduled_df.empty:
-            pre_scheduled_df.index = pd.DatetimeIndex(
-                [DateUtils.normalize_date(idx) for idx in pre_scheduled_df.index]
-            )
-
-        # build Friday keys for both the in-window weekends and the forward horizon
-        fridays = self._fridays_in_range(self.start_date, horizon_end)
-        weekend_assignments = {
-            friday: {WeekendPattern.FSF: None, WeekendPattern.SFS: None} for friday in fridays
+        rows = {
+            DateUtils.normalize_date(day): row
+            for day, row in self.pre_scheduler.get_assignments_in_range(
+                self.start_date, horizon_end
+            ).items()
         }
 
-        # direct Friday hints (Fri main → FSF, Fri backup → SFS)
-        if not pre_scheduled_df.empty:
-            friday_rows = pre_scheduled_df.loc[
-                pre_scheduled_df.index.weekday == self.FRIDAY_WEEKDAY
-            ]
-            for friday in fridays:
-                if friday in friday_rows.index:
-                    fri_main = (
-                        friday_rows.at[friday, "main"] if "main" in friday_rows.columns else None
+        assignments: dict = {}
+        conflicts: dict[pd.Timestamp, str] = {}
+        for friday in self._fridays_in_range(self.start_date, horizon_end):
+            implied: dict[WeekendPattern, set[str]] = {
+                WeekendPattern.FSF: set(),
+                WeekendPattern.SFS: set(),
+            }
+            for offset, role, pattern in self._PINNED_PATTERN_CELLS:
+                nurse = (rows.get(friday + timedelta(days=offset)) or {}).get(role)
+                if not self.is_empty(nurse):
+                    implied[pattern].add(nurse)
+
+            fsf, sfs = implied[WeekendPattern.FSF], implied[WeekendPattern.SFS]
+            problems = []
+            if len(fsf) > 1:
+                problems.append(f"FSF cells name {', '.join(sorted(fsf))}")
+            if len(sfs) > 1:
+                problems.append(f"SFS cells name {', '.join(sorted(sfs))}")
+            both = fsf & sfs
+            if both:
+                problems.append(f"{', '.join(sorted(both))} pinned to both patterns")
+            if problems:
+                conflicts[friday] = (
+                    f"The pinned cells of the weekend of {friday:%a %b %d} contradict each "
+                    f"other ({'; '.join(problems)}), so no weekend pair can match them."
+                )
+            assignments[friday] = {
+                WeekendPattern.FSF: next(iter(fsf)) if len(fsf) == 1 and not both else None,
+                WeekendPattern.SFS: next(iter(sfs)) if len(sfs) == 1 and not both else None,
+            }
+
+        self._pinned_weekends_cache = (assignments, conflicts)
+        return self._pinned_weekends_cache
+
+    def validate_pre_schedule(self) -> list[PreScheduleIssue]:
+        """
+        Problems with the pinned (pre-scheduled) cells in the window.
+
+        Pinned cells are fixed commitments that generation never questions,
+        so a mistake in one silently shapes or sinks every option. This lists:
+        the same nurse pinned to both roles on a day; a nurse pinned on a day
+        they have off; a nurse who is not active; two late-shift nurses
+        pinned together; and weekends whose pinned cells contradict each
+        other. Callers show these before generating.
+        """
+        issues: list[PreScheduleIssue] = []
+        roster = set(self.nurses) | set(self.prn_nurses)
+        rows = self.pre_scheduler.get_assignments_in_range(self.start_date, self.end_date)
+        for raw_day, row in rows.items():
+            day = DateUtils.normalize_date(raw_day)
+            main, backup = row.get("main"), row.get("backup")
+            main = None if self.is_empty(main) else main
+            backup = None if self.is_empty(backup) else backup
+            when = f"{day:%a %b %d}"
+            for role, nurse in (("Main", main), ("Backup", backup)):
+                if nurse is None:
+                    continue
+                if nurse not in roster:
+                    issues.append(
+                        PreScheduleIssue(day, f"{when}: {role} {nurse} is not an active nurse.")
                     )
-                    fri_backup = (
-                        friday_rows.at[friday, "backup"]
-                        if "backup" in friday_rows.columns
-                        else None
+                elif day in self._unavailable_days(nurse):
+                    issues.append(
+                        PreScheduleIssue(day, f"{when}: {role} {nurse} has that day off.")
                     )
-                    if fri_main and not self.is_empty(fri_main):
-                        weekend_assignments[friday][WeekendPattern.FSF] = fri_main
-                    if fri_backup and not self.is_empty(fri_backup):
-                        weekend_assignments[friday][WeekendPattern.SFS] = fri_backup
-
-            # infer FSF/SFS when whole-weekend is prefilled but Friday wasn't explicit
-            self._infer_weekend_patterns_from_whole_weekend(
-                weekend_assignments, pre_scheduled_df, fridays
-            )
-
-        return weekend_assignments
-
-    def _infer_weekend_patterns_from_whole_weekend(
-        self, weekend_assignments, pre_scheduled_df, fridays
-    ):
-        """Infer FSF/SFS patterns from whole weekend assignments when not explicitly set."""
-        for friday in fridays:
-            if self.is_empty(weekend_assignments[friday][WeekendPattern.FSF]) and self.is_empty(
-                weekend_assignments[friday][WeekendPattern.SFS]
+            if main is not None and main == backup:
+                issues.append(
+                    PreScheduleIssue(day, f"{when}: {main} is pinned as both Main and Backup.")
+                )
+            elif (
+                main is not None
+                and backup is not None
+                and self.nurse_manager.is_late_shift_nurse(main)
+                and self.nurse_manager.is_late_shift_nurse(backup)
             ):
-                weekend_dates = [
-                    friday,
-                    friday + pd.Timedelta(days=1),
-                    friday + pd.Timedelta(days=2),
-                ]
-                weekend_df = pre_scheduled_df.loc[pre_scheduled_df.index.isin(weekend_dates)]
-                nurse_counts = {}
+                issues.append(
+                    PreScheduleIssue(
+                        day, f"{when}: {main} and {backup} are both late-shift nurses."
+                    )
+                )
 
-                for _, row in weekend_df.iterrows():
-                    self._count_nurse_assignments(row, nurse_counts)
+        for friday, message in self._pinned_weekends()[1].items():
+            if friday <= self.end_date:
+                issues.append(PreScheduleIssue(friday, message))
+        return sorted(issues, key=lambda issue: (issue.day, issue.message))
 
-                # Only assign if a nurse is not assigned to both roles
-                for nurse, counts in nurse_counts.items():
-                    if (
-                        counts["main"] + counts["backup"] >= 2
-                        and counts["main"] != counts["backup"]
-                    ):
-                        pattern = (
-                            WeekendPattern.FSF
-                            if counts["main"] > counts["backup"]
-                            else WeekendPattern.SFS
-                        )
-                        weekend_assignments[friday][pattern] = nurse
-
-    def _count_nurse_assignments(self, row, nurse_counts):
-        """Count main and backup assignments for nurses in a given row."""
-        main_nurse = row.get("main")
-        backup_nurse = row.get("backup")
-
-        if main_nurse and not self.is_empty(main_nurse):
-            nurse_counts.setdefault(main_nurse, {"main": 0, "backup": 0})["main"] += 1
-        if backup_nurse and not self.is_empty(backup_nurse):
-            nurse_counts.setdefault(backup_nurse, {"main": 0, "backup": 0})["backup"] += 1
+    def _unavailable_days(self, nurse: str) -> set[pd.Timestamp]:
+        return {
+            DateUtils.normalize_date(d) for d in self.nurse_manager.get_unavailable_dates(nurse)
+        }
 
     # =====================================================================
     # WEEKEND MANAGEMENT METHODS
@@ -596,8 +844,9 @@ class NurseScheduler:
     ):
         """
         Earliest *future* weekend (as its Friday) on which nurse is assigned,
-        considering both the current schedule and all pre-scheduled weekends
-        (which may extend beyond the schedule window).
+        considering the current schedule, all pre-scheduled weekends (which
+        may extend beyond the schedule window), and weekends already recorded
+        in weekend history after the window.
         """
         # From the current schedule (within window)
         weekend_mask = schedule["day_of_week"].isin(self.WEEKDAYS)
@@ -616,7 +865,12 @@ class NurseScheduler:
         )
         next_in_pre = self._as_friday(next_in_pre)
 
-        candidates = [d for d in (next_in_schedule, next_in_pre) if d is not None]
+        # Weekends already recorded after the window
+        next_recorded = next(
+            (f for f in self._future_weekends().get(nurse, ()) if f > current_weekend), None
+        )
+
+        candidates = [d for d in (next_in_schedule, next_in_pre, next_recorded) if d is not None]
         return min(candidates) if candidates else None
 
     def _find_next_pre_scheduled_weekend(self, nurse, current_weekend, all_pre_scheduled_weekends):
@@ -633,34 +887,17 @@ class NurseScheduler:
     # NURSE VALIDATION METHODS
     # =====================================================================
 
-    def _is_nurse_available_for_weekend(self, nurse: str, weekend: pd.Timestamp) -> bool:
-        """Check if a nurse is available for all three days of a weekend."""
-        if self.nurse_manager.is_prn_nurse(nurse):
-            return False
-
-        weekend_dates = self._weekend_dates(weekend)
-        weekend_dates_in_idx = [d for d in weekend_dates if d in self.availability.index]
-        if len(weekend_dates_in_idx) != self.WEEKEND_DAYS_COUNT:
-            return False
-
-        try:
-            vals = self.availability.loc[weekend_dates_in_idx, nurse]
-        except KeyError:
-            return False
-
-        return bool(vals.apply(lambda v: (not pd.isna(v)) and bool(v)).all())
-
     def _check_weekend_gap_constraints(
         self,
         nurse: str,
         weekend: pd.Timestamp,
-        last_assignment: dict,  # kept for signature compatibility; not used
         schedule: pd.DataFrame,
         all_pre_scheduled_weekends: dict,
     ) -> bool:
         """
-        Hard rule: a nurse must have strictly more than config.weekend_gap_days
-        between Fridays of two worked weekends — both backward and forward.
+        Hard rule: the Fridays of two weekends a nurse works must be at least
+        config.weekend_gap_days apart, both backward and forward. The bound is
+        inclusive: at 28, a nurse may work every fourth weekend.
 
         This uses weekend history and the current schedule (including any
         pre-scheduled weekends) to decide.
@@ -668,9 +905,14 @@ class NurseScheduler:
         gap_min = self.config.weekend_gap_days
 
         # ── backward gap: use historic last and any prior worked weekend in this schedule ──
-        # Normalize the history date to its Friday so the day-diff compares
-        # Friday→Friday, matching _weekend_gap_penalty's treatment of history.
-        prev_wk_hist = self._as_friday(self.weekend_history.get_last_weekend_before(nurse, weekend))
+        # History counts only before the window: weekends recorded inside it
+        # belong to the schedule being replaced, and this branch's own earlier
+        # weekends are found in `schedule` below. Normalize the history date to
+        # its Friday so the day-diff compares Friday→Friday, matching
+        # _weekend_gap_penalty's treatment of history.
+        prev_wk_hist = self._as_friday(
+            self.weekend_history.get_last_weekend_before(nurse, min(weekend, self.start_date))
+        )
 
         prev_wk_sched = None
         prior_fridays = [
@@ -697,7 +939,7 @@ class NurseScheduler:
 
         if prev_wk is not None:
             # Compare Friday→Friday
-            if (weekend - prev_wk).days <= gap_min:
+            if (weekend - prev_wk).days < gap_min:
                 return False
 
         # ── forward gap: first future worked weekend from schedule or pre-scheduled ──
@@ -707,7 +949,7 @@ class NurseScheduler:
         if next_wk is not None:
             # Ensure we compare Friday→Friday regardless of which day was assigned
             next_friday = self._as_friday(next_wk)
-            if (next_friday - weekend).days <= gap_min:
+            if (next_friday - weekend).days < gap_min:
                 return False
 
         return True
@@ -752,7 +994,6 @@ class NurseScheduler:
     def _get_valid_nurse_pairs(
         self,
         weekend: pd.Timestamp,
-        last_assignment: dict,
         last_pattern: dict,
         pre_scheduled: dict,
         weekend_tracking: dict,
@@ -787,7 +1028,6 @@ class NurseScheduler:
         # Get valid nurses for each pattern
         valid_fsf, valid_sfs = self._get_valid_nurses_for_patterns(
             weekend,
-            last_assignment,
             last_pattern,
             schedule,
             all_pre_scheduled_weekends,
@@ -845,7 +1085,6 @@ class NurseScheduler:
     def _get_valid_nurses_for_patterns(
         self,
         weekend,
-        last_assignment,
         last_pattern,
         schedule,
         all_pre_scheduled_weekends,
@@ -868,7 +1107,6 @@ class NurseScheduler:
             if not self._is_nurse_eligible_for_weekend(
                 nurse,
                 weekend_dates_in_idx,
-                last_assignment,
                 weekend,
                 schedule,
                 all_pre_scheduled_weekends,
@@ -891,7 +1129,6 @@ class NurseScheduler:
         self,
         nurse,
         weekend_dates_in_idx,
-        last_assignment,
         weekend,
         schedule,
         all_pre_scheduled_weekends,
@@ -919,7 +1156,7 @@ class NurseScheduler:
 
         # Weekend gap constraints (backward via history/schedule, forward via schedule/pre-scheduled)
         if not self._check_weekend_gap_constraints(
-            nurse, weekend, last_assignment, schedule, all_pre_scheduled_weekends
+            nurse, weekend, schedule, all_pre_scheduled_weekends
         ):
             return False
 
@@ -971,7 +1208,27 @@ class NurseScheduler:
         self, *, allow_rotation_violations: bool = False
     ) -> list[ScheduleVariant]:
         """
-        Build every feasible schedule variant. Logs branching and state to debug_variants.txt.
+        Build every feasible weekend variant, or ``[]``.
+
+        ``[]`` means either that no weekend assignment satisfies the rules or
+        that generation crashed (logged with its traceback). Callers that must
+        tell those apart use :meth:`generate_weekend_candidates`.
+        """
+        return self.generate_weekend_candidates(
+            allow_rotation_violations=allow_rotation_violations
+        ).variants
+
+    def generate_weekend_candidates(
+        self, *, allow_rotation_violations: bool = False
+    ) -> WeekendGenerationResult:
+        """
+        Build every feasible weekend variant and say how generation ended.
+
+        The result's ``status`` is ``"ok"``, ``"infeasible"`` (some weekend
+        has no valid pair on any surviving branch) or ``"error"`` (generation
+        raised; ``error`` holds the traceback). A crash is never reported as
+        infeasibility, which would send the user off relaxing rules to work
+        around a bug. Logs branching and state to debug_variants.txt.
         """
         if _runtime._DBG_FILE_VARIANTS:
             _runtime._DBG_FILE_VARIANTS.seek(0)
@@ -994,15 +1251,23 @@ class NurseScheduler:
                 self.config,
                 self.nurse_manager,
                 pre_scheduled_slots,
+                historical_main=self._historical_main,
+                historical_backup=self._historical_backup,
+                historic_overage=self._historic_overage(),
             )
             variants = [initial]
             max_variants = int(getattr(self.config, "max_weekend_variants", 0) or 0)
-            pruned_any = False
+            self._beam_pruned = False
 
             for friday in weekends:
                 variants = self._process_weekend_variants(
-                    friday, variants, pre_weekend_assignments, allow_rotation_violations
+                    friday,
+                    variants,
+                    pre_weekend_assignments,
+                    allow_rotation_violations,
+                    limit=max_variants,
                 )
+                pruned_any = self._beam_pruned
                 if not variants:
                     _dbg_variants(f"  ERROR: no variants left after {friday.date()}")
                     if pruned_any:
@@ -1013,73 +1278,155 @@ class NurseScheduler:
                             friday.date(),
                             max_variants,
                         )
-                    return []
+                    return WeekendGenerationResult(
+                        "infeasible", [], failed_weekend=friday, pruned=pruned_any
+                    )
                 if max_variants and len(variants) > max_variants:
+                    # Generators select children before cloning; this catches
+                    # any that return more than the cap.
                     variants = self._prune_weekend_variants(variants, max_variants, friday)
-                    pruned_any = True
 
+            pruned_any = self._beam_pruned
             self._collect_rotation_violations(variants)
             _dbg_variants(f"\nFinal total variants: {len(variants)}")
-            return variants
+            return WeekendGenerationResult("ok", variants, pruned=pruned_any)
 
         except Exception:
             # Log unconditionally so a genuine crash is not silently reported as
             # "no feasible schedule" (the debug sink is off unless NSCHED_DEBUG).
-            logger.error("generate_all_weekend_variants failed:\n%s", traceback.format_exc())
+            trace = traceback.format_exc()
+            logger.error("generate_all_weekend_variants failed:\n%s", trace)
             _dbg_variants("EXCEPTION:\n")
-            _dbg_variants(traceback.format_exc())
-            return []
+            _dbg_variants(trace)
+            return WeekendGenerationResult("error", [], error=trace)
+
+    # ── beam ─────────────────────────────────────────────────────────────
+    # Growth is roughly (valid pairs)^(weekends), and each survivor later runs
+    # the full clone → assign → gap-fill → rebalance pipeline, so the beam is
+    # capped at max_weekend_variants after each weekend. Branches are kept by
+    # a cheap weekend-only preference: fewest rotation repeats introduced on
+    # the branch, then the most even spread of *recent* weekends across
+    # nurses, then the largest minimum Friday-to-Friday gap ending inside or
+    # after the window. Lifetime history would make tenure dominate (a new
+    # hire is always the minimum), and an old short gap would pin the minimum.
+
+    def _recent_weekend_cutoff(self) -> pd.Timestamp:
+        """Weekends before this date do not count toward beam balance."""
+        return self.start_date - timedelta(days=4 * int(self.config.weekend_gap_days))
+
+    def _beam_profile(self, lists: dict) -> tuple[dict[str, int], list[int]]:
+        """Recent weekend count per nurse, and the sorted gaps that count."""
+        cutoff = self._recent_weekend_cutoff()
+        counts = {n: sum(1 for f in lists.get(n, ()) if f >= cutoff) for n in self.nurses}
+        gaps = sorted(
+            (nxt - prev).days
+            for fridays in lists.values()
+            for prev, nxt in pairwise(fridays)
+            if nxt >= self.start_date
+        )
+        return counts, gaps
+
+    @staticmethod
+    def _beam_key(violations: int, counts: dict[str, int], min_gap: int | None) -> tuple:
+        values = list(counts.values())
+        imbalance = (max(values) - min(values)) if values else 0
+        return (violations, imbalance, -(min_gap if min_gap is not None else 10**6))
+
+    def _variant_beam_key(self, variant) -> tuple:
+        counts, gaps = self._beam_profile(variant.state.nurse_weekend_lists)
+        return self._beam_key(len(variant.rotation_violations), counts, gaps[0] if gaps else None)
 
     def _prune_weekend_variants(self, variants, max_variants, friday):
+        """Trim already-built variants to the best ``max_variants`` (see above).
+
+        Sorting is stable, so ties keep their original deterministic order.
         """
-        Trim the variant beam to ``max_variants`` after one weekend's branching.
+        self._log_beam_prune(friday, len(variants), max_variants)
+        return sorted(variants, key=self._variant_beam_key)[:max_variants]
 
-        Growth is roughly (valid pairs)^(weekends) and each survivor later runs
-        the full clone → assign → gap-fill → rebalance pipeline, so an
-        unbounded beam can stall a whole generation run. Variants are kept by
-        a cheap weekend-only preference: fewest rotation repeats introduced on
-        the branch, then most even spread of weekends across nurses (history
-        included), then the largest minimum Friday-to-Friday gap. Sorting is
-        stable, so ties keep their original deterministic order.
-        """
-
-        def prune_key(variant):
-            lists = variant.state.nurse_weekend_lists
-            counts = [len(lists.get(n, ())) for n in self.nurses]
-            imbalance = (max(counts) - min(counts)) if counts else 0
-            min_gap = None
-            for fridays in lists.values():
-                for prev, nxt in pairwise(fridays):
-                    gap = (nxt - prev).days
-                    if min_gap is None or gap < min_gap:
-                        min_gap = gap
-            return (
-                len(variant.rotation_violations),
-                imbalance,
-                -(min_gap if min_gap is not None else 10**6),
-            )
-
+    def _log_beam_prune(self, friday, produced: int, kept: int) -> None:
+        self._beam_pruned = True
         logger.warning(
             "Weekend %s produced %d variants; pruning beam to best %d (max_weekend_variants).",
             friday.date(),
-            len(variants),
-            max_variants,
+            produced,
+            kept,
         )
-        _dbg_variants(f"  pruning {len(variants)} variants to {max_variants} after {friday.date()}")
-        return sorted(variants, key=prune_key)[:max_variants]
+        _dbg_variants(f"  pruning {produced} variants to {kept} after {friday.date()}")
+
+    def _branch(self, variants, pairs_for, friday, limit: int = 0) -> list[ScheduleVariant]:
+        """Clone one child per (parent, pair), keeping only the best ``limit``.
+
+        Children are scored from their parent and pair before any clone is
+        made, so a capped weekend never materializes more than ``limit``
+        schedules (instead of every parent × pair, often tens of thousands).
+        """
+        children = [(var, pair) for var in variants for pair in pairs_for(var)]
+        if limit and len(children) > limit:
+            profiles = {
+                id(var): self._beam_profile(var.state.nurse_weekend_lists) for var in variants
+            }
+            keys = [
+                self._child_beam_key(var, profiles[id(var)], friday, fsf, sfs)
+                for var, (fsf, sfs) in children
+            ]
+            best = sorted(range(len(children)), key=lambda i: (keys[i], i))[:limit]
+            self._log_beam_prune(friday, len(children), limit)
+            children = [children[i] for i in best]
+
+        next_vars = []
+        for var, (fsf, sfs) in children:
+            clone = var.clone()
+            # assign_weekend records any rotation repeat on the clone itself,
+            # so violations stay attributable to the branch that contains them.
+            clone.assign_weekend(friday, fsf, sfs)
+            next_vars.append(clone)
+        return next_vars
+
+    def _child_beam_key(self, parent, profile, friday, fsf, sfs) -> tuple:
+        """The beam key ``parent.clone().assign_weekend(friday, fsf, sfs)`` would have."""
+        last = parent.state.last_pattern
+        violations = (
+            len(parent.rotation_violations)
+            + int(last.get(fsf) == WeekendPattern.FSF)
+            + int(last.get(sfs) == WeekendPattern.SFS)
+        )
+        counts, gaps = profile
+        counts = dict(counts)
+        removed: list[int] = []
+        added: list[int] = []
+        lists = parent.state.nurse_weekend_lists
+        for nurse in (fsf, sfs):
+            fridays = lists.get(nurse, [])
+            if friday in fridays:
+                continue
+            if friday >= self._recent_weekend_cutoff():
+                counts[nurse] = counts.get(nurse, 0) + 1
+            pos = bisect.bisect_left(fridays, friday)
+            prev = fridays[pos - 1] if pos > 0 else None
+            nxt = fridays[pos] if pos < len(fridays) else None
+            if prev is not None and nxt is not None and nxt >= self.start_date:
+                removed.append((nxt - prev).days)  # split by the new weekend
+            if prev is not None and friday >= self.start_date:
+                added.append((friday - prev).days)
+            if nxt is not None:
+                added.append((nxt - friday).days)
+
+        remaining = list(gaps)
+        for gap in removed:
+            remaining.remove(gap)
+        candidates = remaining[:1] + added
+        return self._beam_key(violations, counts, min(candidates) if candidates else None)
 
     def _process_weekend_variants(
-        self, friday, variants, pre_weekend_assignments, allow_rotation_violations
+        self, friday, variants, pre_weekend_assignments, allow_rotation_violations, *, limit=0
     ):
-        """Process variants for a specific weekend."""
+        """Branch every variant on this weekend's valid pairs (at most ``limit`` kept)."""
         _dbg_variants(f"\n--- Weekend {friday.date()} ---")
         _dbg_variants(f"  starting variants count: {len(variants)}")
 
         for i, var in enumerate(variants):
-            _dbg_variants(
-                f"    VAR#{i} last_assign: {var.state.last_assignment}  "
-                f"last_pat: {var.state.last_pattern}"
-            )
+            _dbg_variants(f"    VAR#{i} last_pat: {var.state.last_pattern}")
 
         next_vars: list[ScheduleVariant] = []
         fixed = pre_weekend_assignments.get(friday, {})
@@ -1090,24 +1437,25 @@ class NurseScheduler:
             # allow_rotation_violations=True (the STRICT_THEN_RELAXED flow does
             # this after the confirm_rotation_callback gate approves it).
             next_vars = self._generate_strict_variants(
-                variants, friday, fixed, pre_weekend_assignments
+                variants, friday, fixed, pre_weekend_assignments, limit=limit
             )
             _dbg_variants(f"  after strict pass: {len(next_vars)} variants")
         else:
             next_vars = self._generate_relaxed_variants(
-                variants, friday, fixed, pre_weekend_assignments, next_vars
+                variants, friday, fixed, pre_weekend_assignments, next_vars, limit=limit
             )
             _dbg_variants(f"  after repeat-allowed pass: {len(next_vars)} variants")
 
         return next_vars
 
-    def _generate_strict_variants(self, variants, friday, fixed, pre_weekend_assignments):
+    def _generate_strict_variants(
+        self, variants, friday, fixed, pre_weekend_assignments, *, limit=0
+    ):
         """Generate variants with strict rotation enforcement."""
-        next_vars = []
-        for var in variants:
-            pairs = self._get_valid_nurse_pairs(
+
+        def pairs_for(var):
+            return self._get_valid_nurse_pairs(
                 friday,
-                var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
@@ -1115,36 +1463,44 @@ class NurseScheduler:
                 all_pre_scheduled_weekends=pre_weekend_assignments,
                 enforce_rotation=True,
             )
-            for fsf, sfs in pairs:
-                clone = var.clone()
-                clone.assign_weekend(friday, fsf, sfs)
-                next_vars.append(clone)
-        return next_vars
+
+        return self._branch(variants, pairs_for, friday, limit)
 
     def _generate_relaxed_variants(
-        self, variants, friday, fixed, pre_weekend_assignments, next_vars
+        self, variants, friday, fixed, pre_weekend_assignments, next_vars, *, limit=0
     ):
-        """Generate variants with relaxed rotation rules."""
+        """Generate variants for a weekend, admitting repeats only where needed.
+
+        Each branch uses its strict (alternating) pairs whenever it has any.
+        Only a branch with no strict pair for this weekend falls back to pairs
+        that repeat a pattern, and only for nurses allowed to violate. So a
+        repeat appears only on a weekend that branch could not staff
+        otherwise, never merely because relaxation was switched on.
+        """
         self._rotation_enforced = False
-        for var in variants:
-            pairs = self._get_valid_nurse_pairs(
+
+        def pairs_for(var):
+            common = dict(
+                schedule=var.state.schedule,
+                all_pre_scheduled_weekends=pre_weekend_assignments,
+            )
+            args = (
                 friday,
-                var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
-                schedule=var.state.schedule,
-                all_pre_scheduled_weekends=pre_weekend_assignments,
+            )
+            pairs = self._get_valid_nurse_pairs(*args, enforce_rotation=True, **common)
+            if pairs:
+                return pairs
+            return self._get_valid_nurse_pairs(
+                *args,
                 enforce_rotation=False,
                 nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
+                **common,
             )
-            for fsf, sfs in pairs:
-                clone = var.clone()
-                # assign_weekend records any rotation repeat on the clone
-                # itself, so violations stay attributable to the branch that
-                # actually contains them.
-                clone.assign_weekend(friday, fsf, sfs)
-                next_vars.append(clone)
+
+        next_vars.extend(self._branch(variants, pairs_for, friday, limit))
         return next_vars
 
     def _collect_rotation_violations(self, variants) -> None:
@@ -1175,21 +1531,24 @@ class NurseScheduler:
 
     def get_state_snapshot(self) -> ScheduleState:
         """Get a snapshot of the current scheduling state."""
+        future = self._future_weekends()
         weekend_lists = {}
         for nurse in self.nurses:
             historic = [w for w in self.weekend_history.get_weekends(nurse) if w < self.start_date]
-            historic.sort()
-            weekend_lists[nurse] = historic
+            # Weekends already committed after the window bound the
+            # pre-weekend window of the window's last days, just as history
+            # bounds the post-weekend window of its first days.
+            weekend_lists[nurse] = sorted(set(historic) | set(future.get(nurse, ())))
 
         return ScheduleState(
             self.schedule,
             self.main_assignment_counts,
             self.backup_assignment_counts,
-            self.last_assignment,
             self.last_pattern,
             self.weekend_tracking,
             nurse_weekend_lists=weekend_lists,
             pre_window_worked=self._collect_pre_window_worked_days(),
+            post_window_worked=self._collect_post_window_worked_days(),
         )
 
     def _collect_pre_window_worked_days(self) -> dict[str, set[pd.Timestamp]]:
@@ -1205,32 +1564,91 @@ class NurseScheduler:
         lookback = int(getattr(self.config, "min_days_between_assignments", 0) or 0)
         if lookback <= 0:
             return {}
-        window_start = self.start_date - timedelta(days=lookback)
-        window_end = self.start_date - timedelta(days=1)
+        return self._collect_worked_days(
+            self.start_date - timedelta(days=lookback),
+            self.start_date - timedelta(days=1),
+        )
 
+    def _collect_post_window_worked_days(self) -> dict[str, set[pd.Timestamp]]:
+        """
+        Collect the days each nurse is already committed to in the
+        ``min_days_between_assignments`` days immediately after ``end_date``:
+        recorded weekends, pre-scheduled cells and applied per-day history.
+        The mirror of :meth:`_collect_pre_window_worked_days` for the
+        window's end.
+        """
+        lookahead = int(getattr(self.config, "min_days_between_assignments", 0) or 0)
+        if lookahead <= 0:
+            return {}
+        return self._collect_worked_days(
+            self.end_date + timedelta(days=1),
+            self.end_date + timedelta(days=lookahead),
+        )
+
+    def _collect_worked_days(
+        self, first: pd.Timestamp, last: pd.Timestamp
+    ) -> dict[str, set[pd.Timestamp]]:
+        """Days in ``[first, last]`` (outside the window) each nurse works."""
         worked: dict[str, set[pd.Timestamp]] = {n: set() for n in self.nurses}
+
+        def add(nurse, day) -> None:
+            if nurse in worked:
+                worked[nurse].add(DateUtils.normalize_date(day))
 
         # Weekend history: FSF/SFS nurses both work Fri, Sat and Sun.
         for nurse in self.nurses:
             for friday in self.weekend_history.get_weekends(nurse):
                 for offset in range(3):
                     day = friday + timedelta(days=offset)
-                    if window_start <= day <= window_end:
-                        worked[nurse].add(day)
+                    if first <= day <= last:
+                        add(nurse, day)
+
+        # Pre-scheduled cells are fixed commitments on either side.
+        for day, row in self.pre_scheduler.get_assignments_in_range(first, last).items():
+            for nurse in (row.get("main"), row.get("backup")):
+                add(nurse, day)
 
         # Per-day schedule history covers weekday shifts as well.
         if getattr(self, "assignment_history", None):
             try:
-                records = self.assignment_history.get_history(window_start, window_end)
+                records = self.assignment_history.get_history(first, last)
             except Exception:
                 records = []
             for date_str, main, backup in records:
-                day = DateUtils.normalize_date(date_str)
                 for nurse in (main, backup):
-                    if nurse in worked:
-                        worked[nurse].add(day)
+                    add(nurse, date_str)
 
         return {n: days for n, days in worked.items() if days}
+
+    def _future_weekends(self) -> dict[str, list[pd.Timestamp]]:
+        """
+        Fridays each nurse is already committed to after ``end_date``.
+
+        These come from weekend history (a later period applied first) and
+        from pre-scheduled weekends past the window. The forward weekend-gap
+        check and the pre-weekend window of the window's last days must
+        respect them, or the window's end could put a nurse on the weekend
+        before one they already work.
+        """
+        cached = getattr(self, "_future_weekends_cache", None)
+        if cached is not None:
+            return cached
+
+        future: dict[str, set[pd.Timestamp]] = {n: set() for n in self.nurses}
+        for nurse in self.nurses:
+            for weekend in self.weekend_history.get_weekends(nurse):
+                friday = self._as_friday(DateUtils.normalize_date(weekend))
+                if friday > self.end_date:
+                    future[nurse].add(friday)
+        for friday, roles in self._get_pre_scheduled_weekend_assignments().items():
+            if friday <= self.end_date:
+                continue
+            for nurse in roles.values():
+                if nurse in future:
+                    future[nurse].add(friday)
+
+        self._future_weekends_cache = {n: sorted(f) for n, f in future.items() if f}
+        return self._future_weekends_cache
 
     @staticmethod
     def is_empty(value) -> bool:
@@ -1357,69 +1775,124 @@ class NurseScheduler:
         profile_performance: bool | None = None,
         profile_output_path: str | os.PathLike[str] | None = None,
     ) -> list:
-        """Generate schedules and optionally capture detailed performance metrics.
+        """Generate, evaluate and rank schedules; return the best ``top_n``.
 
-        ``max_workers`` caps the variant-evaluation process pool; ``None`` sizes
-        it to the machine (see :func:`scheduler.platform.default_worker_count`).
+        A convenience wrapper around :meth:`run_generation` for scripts and
+        the CLI: ``[]`` means no schedule satisfies the rules, and a failure
+        raises :class:`GenerationError`. ``max_workers`` caps the evaluation
+        pool; ``None`` sizes it to the machine (see
+        :func:`scheduler.platform.default_worker_count`). Writing PDFs is up
+        to the caller (:meth:`export_top_variants_as_pdfs`).
         """
+        profiling_enabled = (
+            PERFORMANCE_PROFILING_REQUESTED if profile_performance is None else profile_performance
+        )
+        run = self.run_generation(
+            max_workers=max_workers,
+            confirm_rotation_callback=confirm_rotation_callback,
+            weekend_variant_mode=weekend_variant_mode,
+            profile=bool(profiling_enabled),
+        )
+        if run.status != "ok":
+            return []
+
+        self._print_timing_summary(run.candidates)
+        if run.worker_metrics:
+            self._report_performance_metrics(
+                run.worker_metrics,
+                PERFORMANCE_PROFILE_JSON_DEFAULT
+                if profile_output_path is None
+                else profile_output_path,
+            )
+        return run.candidates[:top_n]
+
+    def run_generation(
+        self,
+        *,
+        max_workers: int | None = None,
+        confirm_rotation_callback: Callable[[], bool] | None = None,
+        weekend_variant_mode: str
+        | NurseScheduler.WeekendVariantMode = WeekendVariantMode.STRICT_THEN_RELAXED,
+        profile: bool = False,
+        use_threads: bool = False,
+        on_stage: Callable[[str], None] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> GenerationRun:
+        """The one generation pipeline the GUI, the CLI and scripts share.
+
+        Builds weekend variants, evaluates each in a worker pool, and ranks
+        every evaluated candidate (:meth:`_score_and_rank_variants`).
+
+        * ``on_stage(text)`` and ``on_progress(done, total)`` report progress;
+        * ``is_cancelled()`` is polled while variants evaluate, and a
+          cancelled run stops its workers and returns status ``"cancelled"``;
+        * ``use_threads`` evaluates in threads instead of processes (for
+          platforms without working process pools, such as Android);
+        * ``profile`` collects per-variant :class:`WorkerMetrics`.
+
+        Returns a :class:`GenerationRun` with status ``"ok"``, ``"infeasible"``
+        or ``"cancelled"``. Crashes, and runs where no variant could be
+        evaluated, raise :class:`GenerationError`.
+        """
+
+        def stage(text: str) -> None:
+            if on_stage is not None:
+                on_stage(text)
+
+        def cancelled() -> bool:
+            return bool(is_cancelled and is_cancelled())
+
+        if profile and psutil is None:
+            logger.warning(
+                "Performance profiling requested but psutil is not available. "
+                "Install psutil or disable profiling to silence this message."
+            )
+            profile = False
+
         sleep_handle = inhibit_sleep()
-
+        self.last_weekend_generation = None
         try:
-            profiling_enabled = (
-                PERFORMANCE_PROFILING_REQUESTED
-                if profile_performance is None
-                else bool(profile_performance)
-            )
-            if profiling_enabled and psutil is None:
-                logger.warning(
-                    "Performance profiling requested but psutil is not available. "
-                    "Install psutil or disable profiling to silence this message."
-                )
-                profiling_enabled = False
-
-            profile_json_path: str | os.PathLike[str] | None
-            if profile_output_path is None:
-                profile_json_path = PERFORMANCE_PROFILE_JSON_DEFAULT
-            else:
-                profile_json_path = profile_output_path
-
-            # Setup rotation confirmation callback
-            confirm_rotation_callback = self._setup_rotation_callback(confirm_rotation_callback)
-
-            # Generate weekend variants
+            stage("Building weekend rotation variants…")
             variants = self._generate_weekend_variants(
-                confirm_rotation_callback, weekend_variant_mode
+                self._setup_rotation_callback(confirm_rotation_callback), weekend_variant_mode
             )
+            weekend_result = getattr(self, "last_weekend_generation", None)
+            capped = bool(weekend_result and weekend_result.pruned)
+            if cancelled():
+                return GenerationRun("cancelled")
             if not variants:
-                return []
+                return GenerationRun("infeasible", search_capped=capped)
 
-            # Evaluate variants with or without profiling
-            if profiling_enabled:
-                candidate_schedules, worker_metrics = self._evaluate_variants_with_profiling(
-                    variants, max_workers
+            total = len(variants)
+            stage(f"Evaluating {total} variant{'s' if total != 1 else ''}…")
+            evaluation = self._evaluate_all(
+                variants,
+                max_workers,
+                profiling=profile,
+                use_threads=use_threads,
+                on_progress=on_progress,
+                is_cancelled=is_cancelled,
+            )
+            if evaluation.cancelled:
+                return GenerationRun("cancelled")
+            if not evaluation.candidates:
+                # Variants existed, so this is a failure, not infeasibility.
+                detail = evaluation.failures[0] if evaluation.failures else "No details logged."
+                raise GenerationError(
+                    f"None of the {total} candidate schedules could be evaluated.\n\n"
+                    f"First failure:\n{detail}"
                 )
-            else:
-                candidate_schedules = self._evaluate_variants(variants, max_workers)
-                worker_metrics = []
 
-            if not candidate_schedules:
-                logger.error("❌ No candidate schedules after evaluation.")
-                return []
-
-            # Score and rank variants
-            self._score_and_rank_variants(candidate_schedules)
-
-            # Export best variants as PDFs
-            self._export_top_variants_as_pdfs(candidate_schedules, top_n)
-
-            # Optional timing summary
-            self._print_timing_summary(candidate_schedules)
-
-            if profiling_enabled:
-                self._report_performance_metrics(worker_metrics, profile_json_path)
-
-            return candidate_schedules[:top_n]
-
+            stage("Ranking variants…")
+            self._score_and_rank_variants(evaluation.candidates)
+            return GenerationRun(
+                "ok",
+                candidates=evaluation.candidates,
+                worker_metrics=evaluation.worker_metrics,
+                failures=evaluation.failures,
+                search_capped=capped,
+            )
         finally:
             allow_sleep(sleep_handle)
 
@@ -1434,28 +1907,42 @@ class NurseScheduler:
         return confirm_rotation_callback
 
     def _generate_weekend_variants(self, confirm_rotation_callback, weekend_variant_mode):
-        """Generate weekend variants based on the selected fallback mode."""
+        """Generate weekend variants based on the selected fallback mode.
+
+        Raises :class:`GenerationError` if generation crashes, so a bug is
+        never mistaken for infeasibility (and never prompts the user to allow
+        rotation repeats).
+        """
         mode = self._normalize_weekend_variant_mode(weekend_variant_mode)
 
+        def generate(allow_rotation_violations: bool) -> list[ScheduleVariant]:
+            result = self.generate_weekend_candidates(
+                allow_rotation_violations=allow_rotation_violations
+            )
+            self.last_weekend_generation = result
+            if result.status == "error":
+                raise GenerationError(f"Weekend generation failed:\n{result.error}")
+            return result.variants
+
         if mode == self.WeekendVariantMode.STRICT_ONLY:
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
+            variants = generate(False)
             if not variants:
                 logger.info("No feasible variants with strict rotation mode.")
             return variants
 
         if mode == self.WeekendVariantMode.RELAXED_ALLOWED:
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=True)
+            variants = generate(True)
             if not variants:
                 logger.error("No feasible variants with relaxed rotation mode.")
             return variants
 
         # STRICT_THEN_RELAXED
-        variants = self.generate_all_weekend_variants(allow_rotation_violations=False)
+        variants = generate(False)
         if not variants:
             if not confirm_rotation_callback():
                 logger.info("User declined to allow rotation repeats – abort.")
                 return []
-            variants = self.generate_all_weekend_variants(allow_rotation_violations=True)
+            variants = generate(True)
             if not variants:
                 logger.error("Still no feasible variants with repeats allowed.")
                 return []
@@ -1470,82 +1957,108 @@ class NurseScheduler:
         logger.info("Evaluating %d variants on %d worker processes.", variant_count, workers)
         return workers
 
-    def _evaluate_variants(self, variants, max_workers=None):
-        """Evaluate all variants either in parallel or serially."""
-        candidate_schedules: list = []
-        workers = self._resolve_worker_count(max_workers, len(variants))
+    def _evaluate_all(
+        self,
+        variants,
+        max_workers=None,
+        *,
+        profiling: bool = False,
+        use_threads: bool = False,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> _Evaluation:
+        """Evaluate every variant in a worker pool, falling back to serial.
 
+        The pool is polled every ``_CANCEL_POLL_SECONDS`` so ``is_cancelled``
+        takes effect promptly; a cancelled process pool has its workers
+        terminated rather than left evaluating. If the pool itself fails,
+        every variant is re-evaluated serially from scratch, so a pool that
+        broke mid-run cannot leave duplicate entries.
+        """
+        worker = _evaluate_variant_worker_profiled if profiling else _evaluate_variant_worker
+        total = len(variants)
+        result = _Evaluation()
+        progress_bar = None
+        if on_progress is None:
+            progress_bar = tqdm(total=total, desc="Evaluating variants", unit="variant")
+
+        def report(done: int) -> None:
+            if on_progress is not None:
+                on_progress(done, total)
+            elif progress_bar is not None:
+                progress_bar.update(1)
+
+        def collect(idx: int, outcome) -> None:
+            if profiling:
+                *outcome, metrics = outcome
+                result.worker_metrics.append(metrics)
+            result.candidates.append(tuple(outcome))
+
+        def cancelled() -> bool:
+            return bool(is_cancelled and is_cancelled())
+
+        if on_progress is not None:
+            on_progress(0, total)
+        workers = self._resolve_worker_count(max_workers, total)
+        executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
         try:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                fut_map = {
-                    pool.submit(_evaluate_variant_worker, (i, v, self.worker_tuning)): i
+            pool = executor(max_workers=workers)
+            try:
+                pending = {
+                    pool.submit(worker, (i, v, self.worker_tuning)): i
                     for i, v in enumerate(variants)
                 }
-                for fut in tqdm(
-                    as_completed(fut_map),
-                    total=len(fut_map),
-                    desc="Evaluating variants",
-                    unit="variant",
-                ):
-                    try:
-                        candidate_schedules.append(fut.result())
-                    except Exception as ex:
-                        logger.error(f"Worker {fut_map[fut]} failed: {ex}")
+                done = 0
+                while pending:
+                    finished, _ = wait(
+                        list(pending), timeout=_CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
+                    )
+                    if cancelled():
+                        result.cancelled = True
+                        break
+                    for fut in finished:
+                        idx = pending.pop(fut)
+                        try:
+                            collect(idx, fut.result())
+                        except Exception:
+                            logger.exception("Evaluating variant %d failed", idx)
+                            result.failures.append(traceback.format_exc())
+                        done += 1
+                        report(done)
+            finally:
+                if result.cancelled:
+                    _terminate_pool(pool)
+                else:
+                    pool.shutdown(wait=True)
         except Exception as e:
             # Fallback: run serially. Reset any partial results so a
             # mid-iteration pool failure does not leave duplicate idx entries.
-            logger.warning(f"ProcessPool failed ({e}); evaluating serially.")
-            candidate_schedules = []
+            logger.warning("Worker pool failed (%s); evaluating serially.", e)
+            result = _Evaluation()
             for idx, var in enumerate(variants):
+                if cancelled():
+                    result.cancelled = True
+                    break
                 try:
-                    candidate_schedules.append(
-                        _evaluate_variant_worker((idx, var, self.worker_tuning))
-                    )
-                except Exception as ex:
-                    logger.error(f"Serial worker {idx} failed: {ex}")
+                    collect(idx, worker((idx, var, self.worker_tuning)))
+                except Exception:
+                    logger.exception("Evaluating variant %d failed", idx)
+                    result.failures.append(traceback.format_exc())
+                report(idx + 1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
-        return candidate_schedules
+        return result
+
+    def _evaluate_variants(self, variants, max_workers=None):
+        """Evaluate every variant; return the evaluated candidates."""
+        return self._evaluate_all(variants, max_workers).candidates
 
     def _evaluate_variants_with_profiling(self, variants, max_workers=None):
-        """Evaluate all variants while collecting profiling metrics."""
-        candidate_schedules: list = []
-        all_worker_metrics: list[WorkerMetrics] = []
-        workers = self._resolve_worker_count(max_workers, len(variants))
-
-        try:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                fut_map = {
-                    pool.submit(_evaluate_variant_worker_profiled, (i, v, self.worker_tuning)): i
-                    for i, v in enumerate(variants)
-                }
-                for fut in tqdm(
-                    as_completed(fut_map),
-                    total=len(fut_map),
-                    desc="Evaluating variants",
-                    unit="variant",
-                ):
-                    try:
-                        idx, stats, nurse_counts, sched_df, metrics = fut.result()
-                        candidate_schedules.append((idx, stats, nurse_counts, sched_df))
-                        all_worker_metrics.append(metrics)
-                    except Exception as ex:
-                        logger.error(f"Worker {fut_map[fut]} failed: {ex}")
-        except Exception as e:
-            # Reset any partial results so a mid-iteration pool failure does
-            # not leave duplicate idx entries.
-            logger.warning(f"ProcessPool failed ({e}); evaluating serially with profiling.")
-            candidate_schedules = []
-            all_worker_metrics = []
-            for idx, var in enumerate(variants):
-                try:
-                    result = _evaluate_variant_worker_profiled((idx, var, self.worker_tuning))
-                    idx, stats, nurse_counts, sched_df, metrics = result
-                    candidate_schedules.append((idx, stats, nurse_counts, sched_df))
-                    all_worker_metrics.append(metrics)
-                except Exception as ex:
-                    logger.error(f"Serial worker {idx} failed: {ex}")
-
-        return candidate_schedules, all_worker_metrics
+        """Evaluate every variant; return ``(candidates, worker_metrics)``."""
+        evaluation = self._evaluate_all(variants, max_workers, profiling=True)
+        return evaluation.candidates, evaluation.worker_metrics
 
     def _report_performance_metrics(
         self, worker_metrics: list[WorkerMetrics], output_path: str | os.PathLike[str] | None
@@ -1565,18 +2078,21 @@ class NurseScheduler:
                 logger.error(f"Failed to export performance metrics: {exc}")
 
     def _score_and_rank_variants(self, candidate_schedules):
-        """Compute weighted scores and rank variants.
+        """Score and rank candidates in place, best first.
+
+        Order: fewest weekend-pattern repeats, then fewest unfilled slots,
+        then the weighted score over the remaining metrics (see
+        :func:`scheduler.scoring.rank_rows`). Each candidate's stats gain
+        ``weighted_score`` and ``rank``.
 
         Semantics alignment note:
         - ``BestStateTracker`` uses lexicographic ``ScheduleQuality`` comparison
           during intra-variant local search.
-        - This method performs *inter-variant* final ranking by normalizing and
-          weighting metrics. ``long_term`` uses the same ``_long_term_score``
-          objective as ``ScheduleQuality.history_penalty`` (lower is better).
+        - ``long_term`` uses the same ``long_term_score`` objective as
+          ``ScheduleQuality.history_penalty`` (lower is better).
         """
-        viol_counts = self.weekend_history.get_violation_counts()
+        prior_violations = self._prior_violation_counts()
         overage = self._historic_overage()
-        weights = self.config.scoring_weights
 
         rows = []
         for idx, stats, nurse_counts, sched_df in candidate_schedules:
@@ -1585,35 +2101,37 @@ class NurseScheduler:
                     "idx": idx,
                     "rotation_rep": stats["rotation_rep"],
                     "gaps": stats["gaps"],
-                    "rot_viol": self._rotation_violation_score(nurse_counts, viol_counts, sched_df),
+                    "rot_viol": self._rotation_violation_score(sched_df, prior_violations),
                     "weekend_gap": self._weekend_gap_penalty(sched_df),
                     "balance": stats["balance_main"] + stats["balance_backup"],
                     "long_term": self._long_term_score(nurse_counts, overage),
                 }
             )
 
-        metric_df = weighted_scores_from_rows(rows, weights=weights)
+        ranked = rank_rows(rows, weights=self.config.scoring_weights)
 
-        # Attach score back to stats dict
         for idx, stats, _, _ in candidate_schedules:
-            stats["weighted_score"] = float(metric_df.loc[idx, "weighted_score"])
+            stats["weighted_score"] = float(ranked.loc[idx, "weighted_score"])
+            stats["rank"] = int(ranked.loc[idx, "rank"])
 
-        # Rank by weighted score (lower = better)
-        candidate_schedules.sort(key=lambda tpl: tpl[1]["weighted_score"])
+        candidate_schedules.sort(key=lambda tpl: tpl[1]["rank"])
 
-    def _export_top_variants_as_pdfs(self, candidate_schedules, top_n):
-        """Export the best variants as PDF files."""
+    def export_top_variants_as_pdfs(
+        self, candidate_schedules, top_n: int, directory: str | os.PathLike[str] = "."
+    ) -> list[str]:
+        """Write ``schedule_variant_<rank>.pdf`` for the best ``top_n``; return the paths."""
         cal = calendar.Calendar(firstweekday=6)  # Sunday-first
         pdf_paths = []
 
         for rank, (_idx, _stats, _nurse_counts, sched_df) in enumerate(
             candidate_schedules[:top_n], start=1
         ):
-            pdf_name = f"schedule_variant_{rank}.pdf"
+            pdf_name = os.path.join(os.fspath(directory), f"schedule_variant_{rank}.pdf")
             self._export_variant_pdf(pdf_name, sched_df, cal)
             pdf_paths.append(pdf_name)
 
         logger.info("Wrote %d PDF file(s): %s", len(pdf_paths), ", ".join(pdf_paths))
+        return pdf_paths
 
     def _print_timing_summary(self, candidate_schedules):
         """Print timing summary if enabled."""
@@ -1632,7 +2150,14 @@ class NurseScheduler:
 __all__ = [
     "WorkerTuningConfig",
     "WORKER_TUNING",
+    "GenerationError",
+    "GenerationRun",
     "NurseScheduler",
+    "PreScheduleIssue",
+    "WeekendGenerationResult",
+    "recorded_weekends_in_range",
+    "search_capped_note",
+    "whole_weekend_range",
     "_evaluate_variant_worker",
     "_evaluate_variant_worker_profiled",
 ]

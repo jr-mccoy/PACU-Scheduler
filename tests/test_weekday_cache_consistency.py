@@ -46,7 +46,6 @@ def _build_weekday_variant(nurses, weeks: int = 4) -> ScheduleVariant:
         schedule=schedule,
         main_assignment_counts=pd.Series(0, index=counts_idx),
         backup_assignment_counts=pd.Series(0, index=counts_idx),
-        last_assignment={n: None for n in nurses},
         last_pattern={n: None for n in nurses},
         weekend_tracking={},
         nurse_weekend_lists={n: [] for n in nurses},

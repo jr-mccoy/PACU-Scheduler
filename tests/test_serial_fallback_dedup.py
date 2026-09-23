@@ -82,29 +82,30 @@ class _FakeFuture:
 
 
 class _FakePool:
-    """Runs the worker eagerly on submit; the failure comes from as_completed."""
+    """Runs the worker eagerly on submit; the failure comes from ``wait``."""
 
     def __init__(self, *args, **kwargs):
         pass
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
     def submit(self, fn, arg):
         return _FakeFuture(fn(arg))
 
+    def shutdown(self, wait=True, cancel_futures=False):
+        pass
+
 
 def _make_mid_iteration_failure(fail_after: int):
-    def fake_as_completed(fut_map):
-        for i, fut in enumerate(fut_map):
-            if i >= fail_after:
-                raise BrokenProcessPool("simulated mid-iteration pool failure")
-            yield fut
+    """A ``wait`` that completes ``fail_after`` futures, then breaks the pool."""
+    calls = []
 
-    return fake_as_completed
+    def fake_wait(fs, timeout=None, return_when=None):
+        calls.append(1)
+        if len(calls) > 1:
+            raise BrokenProcessPool("simulated mid-iteration pool failure")
+        futures = list(fs)
+        return set(futures[:fail_after]), set(futures[fail_after:])
+
+    return fake_wait
 
 
 def test_serial_fallback_dedups_and_ranking_survives(monkeypatch):
@@ -114,7 +115,7 @@ def test_serial_fallback_dedups_and_ranking_survives(monkeypatch):
     monkeypatch.setattr(engine, "_evaluate_variant_worker", _fake_worker)
     monkeypatch.setattr(engine, "ProcessPoolExecutor", _FakePool)
     # First two futures complete, then the pool breaks mid-iteration.
-    monkeypatch.setattr(engine, "as_completed", _make_mid_iteration_failure(2))
+    monkeypatch.setattr(engine, "wait", _make_mid_iteration_failure(2))
 
     result = scheduler._evaluate_variants(variants, max_workers=4)
 
@@ -137,7 +138,7 @@ def test_profiled_serial_fallback_dedups(monkeypatch):
 
     monkeypatch.setattr(engine, "_evaluate_variant_worker_profiled", fake_worker_profiled)
     monkeypatch.setattr(engine, "ProcessPoolExecutor", _FakePool)
-    monkeypatch.setattr(engine, "as_completed", _make_mid_iteration_failure(2))
+    monkeypatch.setattr(engine, "wait", _make_mid_iteration_failure(2))
 
     result, metrics = scheduler._evaluate_variants_with_profiling(variants, max_workers=4)
 

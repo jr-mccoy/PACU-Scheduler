@@ -10,6 +10,11 @@ class WorkerTuningConfig:
     """Immutable algorithm tuning shared by all worker evaluation paths."""
 
     gap_fill_iterations: int = 300
+    # Per-week complete-fill search budget during gap filling (MRV
+    # backtracking); a week that cannot be filled completely within it falls
+    # back to the best of a capped sample of slot orderings.
+    gap_fill_node_limit: int = 20_000
+    gap_fill_time_limit_ms: int = 2_000
     rebalance_tolerance: int = 1
     rebalance_iterations: int = 1500
     rebalance_early_stop_spread: tuple[int, int] | None = None
@@ -18,7 +23,9 @@ class WorkerTuningConfig:
     window_refill_time_limit_ms: int = 800000
     window_refill_node_limit: int = 750000
     window_refill_target_spread: tuple[int, int] = (1, 1)
-    full_period_max_orders: int = 1000
+    # gen_full_orders produces at most 54 distinct orderings, so a larger
+    # value changes nothing; 54 says what the search actually does.
+    full_period_max_orders: int = 54
     full_period_per_attempt_time_ms: int = 800000
     full_period_per_attempt_nodes: int = 1500000
     full_period_target_spread: tuple[int, int] = (1, 1)

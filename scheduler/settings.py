@@ -35,8 +35,6 @@ class SharedSettings:
         "allow_midweek_pair_mixed": False,
         "max_weekend_variants": DEFAULT_MAX_WEEKEND_VARIANTS,
         "scoring_weights": {
-            "rotation_rep": 0.30,
-            "gaps": 0.20,
             "rot_viol": 0.15,
             "weekend_gap": 0.15,
             "balance": 0.10,

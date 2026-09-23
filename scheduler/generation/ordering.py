@@ -28,7 +28,7 @@ class OrderGenerator:
         for day in days:
             order = ("main", "backup") if role_order == "MB" else ("backup", "main")
             for role in order:
-                if not ctx.is_pre_scheduled(day, role):
+                if not ctx.is_pre_scheduled(day, role) and not ctx.is_unfillable(day, role):
                     val = ctx.state.schedule.at[day, role]
                     if ctx.is_empty(val):
                         vars_list.append((day, role))
@@ -104,8 +104,10 @@ class OrderGenerator:
         mrvl = []
         for day in chrono:
             for role in ("main", "backup"):
-                if not ctx.is_pre_scheduled(day, role) and ctx.is_empty(
-                    ctx.state.schedule.at[day, role]
+                if (
+                    not ctx.is_pre_scheduled(day, role)
+                    and not ctx.is_unfillable(day, role)
+                    and ctx.is_empty(ctx.state.schedule.at[day, role])
                 ):
                     mrvl.append((day, role))
         mrvl.sort(key=lambda item: domain_size(item[0], item[1]))
@@ -118,8 +120,10 @@ class OrderGenerator:
         for idx, day in enumerate(chrono):
             if (
                 not ctx.is_pre_scheduled(day, "main")
+                and not ctx.is_unfillable(day, "main")
                 and ctx.is_empty(ctx.state.schedule.at[day, "main"])
                 and not ctx.is_pre_scheduled(day, "backup")
+                and not ctx.is_unfillable(day, "backup")
                 and ctx.is_empty(ctx.state.schedule.at[day, "backup"])
             ):
                 if idx % 2 == 0:

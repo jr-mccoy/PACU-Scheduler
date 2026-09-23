@@ -134,8 +134,9 @@ def test_history_duration_reaches_assignment_history(monkeypatch):
     seen = {}
 
     class _RecordingHistory:
-        def __init__(self, db_name, history_duration_months=6):
+        def __init__(self, db_name, history_duration_months=6, *, anchor=None):
             seen["months"] = history_duration_months
+            seen["anchor"] = anchor
 
         def get_counts(self, start, end):
             return {}, {}
@@ -153,3 +154,5 @@ def test_history_duration_reaches_assignment_history(monkeypatch):
     )
     assert scheduler.history_duration_months == 3
     assert seen["months"] == 3
+    # History is read back from the schedule's start, not from today.
+    assert seen["anchor"] == scheduler.start_date

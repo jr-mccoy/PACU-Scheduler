@@ -4,6 +4,7 @@ Implementations are owned by focused modules; no public package import routes
 through the deprecated ``legacy_core`` compatibility facade.
 """
 
+from .apply import ApplyReport, apply_schedule
 from .debug import (
     _DEBUG,
     _LOG_FILE_CACHE,
@@ -38,7 +39,11 @@ from .domain import (
 )
 from .engine import (
     WORKER_TUNING,
+    GenerationError,
+    GenerationRun,
     NurseScheduler,
+    PreScheduleIssue,
+    WeekendGenerationResult,
     WorkerTuningConfig,
     _evaluate_variant_worker,
     _evaluate_variant_worker_profiled,
@@ -74,6 +79,12 @@ from .runtime import is_empty
 from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
+    "PreScheduleIssue",
+    "GenerationRun",
+    "GenerationError",
+    "WeekendGenerationResult",
+    "ApplyReport",
+    "apply_schedule",
     "AssignmentDebugLogger",
     "ASSIGNMENT_DEBUG_LOGGER",
     "AssignmentHistory",

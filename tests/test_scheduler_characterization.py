@@ -11,6 +11,7 @@ from scheduler import (
     SchedulerConfig,
     ScheduleState,
     ScheduleVariant,
+    WeekendGenerationResult,
     WeekendHistory,
     WeekendPattern,
 )
@@ -226,7 +227,6 @@ def _build_variant(nurses=("Alice", "Bob"), periods=5) -> ScheduleVariant:
         schedule=schedule,
         main_assignment_counts=pd.Series(0, index=counts_idx),
         backup_assignment_counts=pd.Series(0, index=counts_idx),
-        last_assignment={n: None for n in nurses},
         last_pattern={n: None for n in nurses},
         weekend_tracking={},
         nurse_weekend_lists={n: [] for n in nurses},
@@ -303,7 +303,6 @@ def test_get_valid_nurse_pairs_rejects_prefilled_weekend_conflict():
 
     pairs = scheduler._get_valid_nurse_pairs(
         weekend=weekend,
-        last_assignment=scheduler.last_assignment,
         last_pattern=scheduler.last_pattern,
         pre_scheduled={},
         weekend_tracking=scheduler.weekend_tracking,
@@ -400,7 +399,7 @@ def test_generation_mode_strict_only(monkeypatch, scheduler_for_modes):
     monkeypatch.setattr(
         scheduler_for_modes,
         "_generate_strict_variants",
-        lambda variants, friday, fixed, pre: calls.append("strict") or ["strict"],
+        lambda variants, friday, fixed, pre, **_kw: calls.append("strict") or ["strict"],
     )
     monkeypatch.setattr(
         scheduler_for_modes,
@@ -443,9 +442,9 @@ def test_strict_then_relaxed_gate_declined_aborts(monkeypatch, scheduler_for_mod
 
     def fake_generate(*, allow_rotation_violations=False):
         calls.append(allow_rotation_violations)
-        return []
+        return WeekendGenerationResult("infeasible", [])
 
-    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
+    monkeypatch.setattr(scheduler_for_modes, "generate_weekend_candidates", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: False,
@@ -462,9 +461,11 @@ def test_strict_then_relaxed_gate_accepted_retries_relaxed(monkeypatch, schedule
 
     def fake_generate(*, allow_rotation_violations=False):
         calls.append(allow_rotation_violations)
-        return sentinel if allow_rotation_violations else []
+        if allow_rotation_violations:
+            return WeekendGenerationResult("ok", sentinel)
+        return WeekendGenerationResult("infeasible", [])
 
-    monkeypatch.setattr(scheduler_for_modes, "generate_all_weekend_variants", fake_generate)
+    monkeypatch.setattr(scheduler_for_modes, "generate_weekend_candidates", fake_generate)
 
     out = scheduler_for_modes._generate_weekend_variants(
         confirm_rotation_callback=lambda: True,
@@ -590,12 +591,10 @@ def test_metrics_diverge_and_weighted_score_reflects_difference():
 
     nurse_counts_a = {"Alice": {"total": 2}, "Bob": {"total": 2}}
     nurse_counts_b = {"Bob": {"total": 2}, "Cara": {"total": 2}}
-    rot_viol_a = scheduler._rotation_violation_score(
-        nurse_counts_a, history.get_violation_counts(), sched_a
-    )
-    rot_viol_b = scheduler._rotation_violation_score(
-        nurse_counts_b, history.get_violation_counts(), sched_b
-    )
+    # rot_viol counts each new pattern repeat as 1 + the nurse's past
+    # violations (audit finding 15): A repeats Alice (4 past violations).
+    rot_viol_a = scheduler._rotation_violation_score(sched_a, history.get_violation_counts())
+    rot_viol_b = scheduler._rotation_violation_score(sched_b, history.get_violation_counts())
     assert rot_viol_a > rot_viol_b
 
     overage = {"Alice": 3, "Bob": 0, "Cara": 0}
@@ -719,7 +718,6 @@ def test_window_refill_restores_global_best_after_mutation(monkeypatch: pytest.M
     second_day = variant.state.schedule.index[1]
     variant.state.schedule.at[first_day, "main"] = "Alice"
     variant._recalculate_assignment_counts()
-    variant._update_last_assignment_dates()
 
     baseline = variant.state.schedule.copy(deep=True)
 

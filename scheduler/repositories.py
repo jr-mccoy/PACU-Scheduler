@@ -147,16 +147,25 @@ class AssignmentHistory(DatabaseMixin):
         WHERE sh.date=?
     """
 
-    def __init__(self, db_name: str = "nurse_schedule.db", history_duration_months: int = 6):
+    def __init__(
+        self,
+        db_name: str = "nurse_schedule.db",
+        history_duration_months: int = 6,
+        *,
+        anchor=None,
+    ):
         super().__init__(db_name)
         self.history_duration_months = history_duration_months
+        # The cached history reaches back history_duration_months from the
+        # anchor: today by default, or a schedule's start date, so a schedule
+        # generated for a period long ago still sees the history before it.
+        self.anchor = None if anchor is None else DateUtils.normalize_date(anchor)
         self._history = self._load_history()
 
     def _get_cutoff_date(self) -> pd.Timestamp:
-        """Calculate the cutoff date for history retention."""
-        return DateUtils.normalize_date(
-            pd.Timestamp.today() - pd.DateOffset(months=self.history_duration_months)
-        )
+        """The earliest date the cached history covers."""
+        anchor = self.anchor if self.anchor is not None else pd.Timestamp.today()
+        return DateUtils.normalize_date(anchor - pd.DateOffset(months=self.history_duration_months))
 
     def _load_history(self) -> dict[pd.Timestamp, dict[str, str | None]]:
         """Load assignment history from the database."""
@@ -175,6 +184,10 @@ class AssignmentHistory(DatabaseMixin):
     def _refresh_cache(self) -> None:
         """Refresh the in-memory cache from database."""
         self._history = self._load_history()
+
+    def reload(self) -> None:
+        """Re-read history written by other instances (for example, an apply)."""
+        self._refresh_cache()
 
     def get_all_history(self) -> list[tuple[str, str | None, str | None]]:
         """Return all history records as a list of tuples."""
@@ -262,8 +275,10 @@ class AssignmentHistory(DatabaseMixin):
         self._history.pop(normalized_date, None)
 
     def prune_old_records(self) -> None:
-        """Remove records older than the cutoff date."""
-        cutoff_date = self._get_cutoff_date()
+        """Remove records older than history_duration_months before today."""
+        cutoff_date = DateUtils.normalize_date(
+            pd.Timestamp.today() - pd.DateOffset(months=self.history_duration_months)
+        )
         cutoff_date_str = cutoff_date.strftime("%Y-%m-%d")
 
         self.execute_update("DELETE FROM schedule_history WHERE date < ?", (cutoff_date_str,))
@@ -687,18 +702,6 @@ class WeekendHistory:
                 """)
             return cursor.fetchall()
 
-    def _calculate_consecutive_violations(
-        self,
-        last_violation_date: pd.Timestamp | None,
-        current_violation_date: pd.Timestamp,
-        current_streak: int,
-    ) -> int:
-        """Calculate consecutive violation count."""
-        if last_violation_date is None:
-            return 1
-        delta_days = (current_violation_date - last_violation_date).days
-        return current_streak + 1 if delta_days == 7 else 1
-
     def _build_nurse_sequences(self) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
         """Build chronological sequences of assignments for each nurse."""
         return self._build_nurse_sequences_from_assignments(sorted(self._assignments.items()))
@@ -721,28 +724,29 @@ class WeekendHistory:
     def _process_nurse_violations(
         self, nurse: str, sequence: list[tuple[pd.Timestamp, WeekendPattern]]
     ) -> tuple[list, int, pd.Timestamp | None, int]:
-        """Process violations for a single nurse's sequence."""
+        """Violations in one nurse's chronological weekend sequence.
+
+        Returns ``(violation_dates, violation_count, last_violation_date,
+        streak)``. ``streak`` is how many of the nurse's most recent worked
+        weekends in a row repeated the pattern before them. It counts
+        successive *worked* weekends, however far apart: a nurse's weekends
+        are always at least ``weekend_gap_days`` apart, so comparing calendar
+        weeks (as this once did) never saw two violations as consecutive.
+        """
         violation_dates = []
         violation_count = 0
         last_violation_date = None
         streak = 0
-        prev_violation_date = None
 
         for i in range(1, len(sequence)):
-            prev_date, prev_pat = sequence[i - 1]
+            _prev_date, prev_pat = sequence[i - 1]
             curr_date, curr_pat = sequence[i]
 
             if prev_pat == curr_pat:  # Violation detected
                 violation_count += 1
                 violation_dates.append((curr_date, curr_pat, prev_pat))
                 last_violation_date = curr_date
-
-                # Calculate consecutive streak
-                if prev_violation_date is not None and (curr_date - prev_violation_date).days == 7:
-                    streak += 1
-                else:
-                    streak = 1
-                prev_violation_date = curr_date
+                streak += 1
             else:
                 streak = 0
 
@@ -924,6 +928,29 @@ class WeekendHistory:
             """)
             return {name: cnt for name, cnt in cur.fetchall()}
 
+    def get_violation_counts_before(self, before_date) -> dict[str, int]:
+        """Each nurse's rotation violations on weekends before ``before_date``.
+
+        A schedule starting on ``before_date`` replaces anything recorded from
+        then on, so its violations are not the nurse's past. The stored count
+        (which may be a manual ``set_violation_count`` override) is used for
+        a nurse with no recorded violation on or after the date; otherwise
+        their violations are recounted from the dates before it.
+        """
+        cutoff = self._normalize_date(before_date)
+        stored = self.get_violation_counts()
+        earlier: dict[str, int] = {}
+        later: set[str] = set()
+        for nurse, violation_date, _pattern, _previous in self.get_violation_dates():
+            if self._normalize_date(violation_date) < cutoff:
+                earlier[nurse] = earlier.get(nurse, 0) + 1
+            else:
+                later.add(nurse)
+        return {
+            nurse: (earlier.get(nurse, 0) if nurse in later else count)
+            for nurse, count in stored.items()
+        }
+
     # Public Interface Methods
     def get_last_weekend_before(self, nurse: str, before_date: pd.Timestamp) -> pd.Timestamp | None:
         """Get the last weekend assignment before a given date."""
@@ -939,6 +966,40 @@ class WeekendHistory:
     def get_last_pattern(self, nurse: str) -> WeekendPattern | None:
         """Get the last pattern for a nurse."""
         return self._last_patterns.get(nurse)
+
+    def get_last_pattern_before(self, nurse: str, before_date) -> WeekendPattern | None:
+        """The pattern of the nurse's last recorded weekend before ``before_date``.
+
+        A schedule generated from ``before_date`` must alternate against the
+        weekend before it, not against weekends recorded inside or after its
+        own window (for example, an earlier run of the same month being
+        replaced). The stored last pattern, which may be a manual
+        ``set_last_pattern`` override, is used only when the nurse has no
+        recorded weekend on or after ``before_date``. Otherwise the override
+        predates those weekends and no longer describes the nurse.
+        """
+        cutoff = self._normalize_date(before_date)
+        last_before: tuple[pd.Timestamp, WeekendPattern] | None = None
+        worked_later = False
+        for weekend_start, (fsf, sfs) in self._assignments.items():
+            if nurse == fsf:
+                pattern = WeekendPattern.FSF
+            elif nurse == sfs:
+                pattern = WeekendPattern.SFS
+            else:
+                continue
+            if weekend_start >= cutoff:
+                worked_later = True
+            elif last_before is None or weekend_start > last_before[0]:
+                last_before = (weekend_start, pattern)
+
+        if not worked_later:
+            return self._last_patterns.get(nurse)
+        return last_before[1] if last_before else None
+
+    def get_assignment(self, weekend_start) -> tuple[str | None, str | None] | None:
+        """The recorded ``(fsf, sfs)`` pair for one weekend, or None."""
+        return self._assignments.get(self._normalize_date(weekend_start))
 
     def get_weekends(self, nurse: str) -> list[pd.Timestamp]:
         """Get all weekend assignments for a nurse."""

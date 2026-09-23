@@ -26,6 +26,7 @@ from .settings_support import (
     LABELS,
     ONE_DAY_GAP_HELP,
     WEIGHTS,
+    WEIGHTS_HELP,
     add_restore_defaults,
     apply_tooltips,
     load_values,
@@ -154,7 +155,7 @@ class CompactSettingsDialog(ToolDialog):
         self.variant_cap.setSingleStep(100)
         self.variant_cap.setGroupSeparatorShown(True)
 
-        sched_form.addRow("Weekend gap (days):", self.weekend_gap)
+        sched_form.addRow("Minimum days between weekends:", self.weekend_gap)
         sched_form.addRow("Days off between shifts:", self.min_between)
         sched_form.addRow("Fairness window (days):", self.hist_window)
         sched_form.addRow("History to load (months):", self.hist_duration)
@@ -226,7 +227,7 @@ class CompactSettingsDialog(ToolDialog):
 
         weights_tab = QWidget()
         weights_form = make_form(weights_tab)
-        weights_help = QLabel("How much each factor counts when ranking options.")
+        weights_help = QLabel(WEIGHTS_HELP)
         weights_help.setWordWrap(True)
         weights_help.setProperty("role", "muted")
         weights_form.addRow(weights_help)

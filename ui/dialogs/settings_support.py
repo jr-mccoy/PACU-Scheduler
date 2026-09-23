@@ -53,19 +53,15 @@ WIDGET_FOR_KEY = {
 }
 
 # (scoring_weights key, widget attribute, label, tooltip)
+# Rotation repeats and unfilled slots have no weight: options are always
+# ranked by them first (scheduler.scoring.RANK_FIRST). See WEIGHTS_HELP.
 WEIGHTS = [
-    (
-        "rotation_rep",
-        "w_rotrep",
-        "Rotation repeats:",
-        "Penalise options where nurses repeat last weekend's FSF/SFS pattern.",
-    ),
-    ("gaps", "w_gaps", "Unfilled slots:", "Penalise options that leave Main/Backup slots empty."),
     (
         "rot_viol",
         "w_rotviol",
         "Past violations:",
-        "Penalise giving repeats to nurses who already have rotation violations.",
+        "Among options with the same number of rotation repeats, favour those that give "
+        "the repeats to nurses with fewer past violations.",
     ),
     (
         "weekend_gap",
@@ -87,6 +83,11 @@ WEIGHTS = [
     ),
 ]
 
+WEIGHTS_HELP = (
+    "Options are ranked by fewest rotation repeats, then fewest unfilled slots. "
+    "These weights order the options that tie on both. Only the ratios matter."
+)
+
 LABELS = {
     "allow_post_weekend_wednesday_main": "Main on the Wednesday after a worked weekend",
     "allow_post_weekend_wednesday_backup": "Backup on the Wednesday after a worked weekend",
@@ -103,7 +104,10 @@ TOOLTIPS = {
     "accent_color": "Highlight colour as #RRGGBB, e.g. #5C8DBC.",
     "show_gif": "Play GIF.gif on the main menu when the file is present.",
     "calendar_grid": "Draw lines between days in every calendar.",
-    "weekend_gap_days": "Preferred minimum days between two weekends for the same nurse.",
+    "weekend_gap_days": (
+        "Hard rule: the fewest days between the Fridays of two weekends one nurse works. "
+        "Weekends exactly this far apart are allowed (28 = every fourth weekend at most)."
+    ),
     "min_days_between_assignments": (
         "Days a nurse must have off between two weekday shifts. The one-day gap "
         "options below can relax this by a day when nobody else can work."

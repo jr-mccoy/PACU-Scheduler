@@ -70,6 +70,8 @@ class VariantSearchContext(Protocol):
 
     def is_pre_scheduled(self, date: Any, role: str) -> bool: ...
 
+    def is_unfillable(self, date: Any, role: str) -> bool: ...
+
     # ----- Eligibility / domain queries -----
     def eligible_domain(
         self,
@@ -157,8 +159,6 @@ class VariantSearchContext(Protocol):
 
     # ----- Cache maintenance -----
     def recalculate_assignment_counts(self) -> None: ...
-
-    def update_last_assignment_dates(self) -> None: ...
 
     def get_total_counts(self) -> Any: ...
 

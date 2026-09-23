@@ -44,7 +44,6 @@ def _build_variant() -> ScheduleVariant:
         schedule=schedule,
         main_assignment_counts=pd.Series(0, index=counts_idx),
         backup_assignment_counts=pd.Series(0, index=counts_idx),
-        last_assignment=dict.fromkeys(NURSES),
         last_pattern=dict.fromkeys(NURSES),
         weekend_tracking={},
         nurse_weekend_lists={n: [] for n in NURSES},

@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import date, timedelta
 
+import pandas as pd
 from PySide6.QtCore import QDate, QElapsedTimer, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,13 +18,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from scheduler import AssignmentHistory, WeekendHistory
+from scheduler import (
+    AssignmentHistory,
+    NurseManager,
+    PreScheduler,
+    WeekendHistory,
+    build_scheduler_from_settings,
+)
+from scheduler.engine import (
+    recorded_weekends_in_range,
+    search_capped_note,
+    whole_weekend_range,
+)
 from scheduler.exporters import write_gap_report
 
 from ..config import DB_NAME, DEBUG_SAVE_VARIANTS
 from ..dialogs.rotation_violation_dialog import RotationViolationDialog
 from ..dialogs.variant_review_dialog import VariantReviewDialog
-from ..messages import show_error, show_info
+from ..messages import confirm, show_error, show_info
 from ..widgets.common import action_button, back_button, screen_title
 from ..widgets.date_pickers import MultiDatePicker, SingleDatePicker
 from ..worker_threads import ScheduleProgressWorker
@@ -33,19 +45,47 @@ logger = logging.getLogger(__name__)
 DEFAULT_SPAN_DAYS = 28  # four weeks, start day included
 
 
-def describe_range(start: date, end: date) -> str:
-    """One-line summary of a scheduling horizon, e.g. for the screen footer."""
+def describe_range(
+    start: date,
+    end: date,
+    scheduled: tuple[date, date] | None = None,
+    replaces: int = 0,
+) -> str:
+    """Summary of a scheduling horizon, e.g. for the screen footer.
+
+    ``scheduled`` is the range the scheduler will actually cover, which is
+    wider when ``start``..``end`` cuts a weekend in two (see
+    :func:`scheduler.engine.whole_weekend_range`). Weekends are counted over
+    it, and a second line says why it differs. ``replaces`` is how many
+    weekends are already recorded in that range; applying an option will
+    replace them.
+    """
     if end < start:
         return ""
+    first_day, last_day = scheduled or (start, end)
     days = (end - start).days + 1
-    weekends = sum(1 for i in range(days) if (start + timedelta(days=i)).weekday() == 5)
-    same_year = start.year == end.year
-    first = start.strftime("%a %b %d") if same_year else start.strftime("%a %b %d, %Y")
-    last = end.strftime("%a %b %d, %Y")
-    return (
-        f"{first} – {last}  ·  {days} day{'s' if days != 1 else ''}"
+    weekends = sum(
+        1
+        for i in range((last_day - first_day).days + 1)
+        if (first_day + timedelta(days=i)).weekday() == 5
+    )
+    text = (
+        f"{_span(start, end)}  ·  {days} day{'s' if days != 1 else ''}"
         f"  ·  {weekends} weekend{'s' if weekends != 1 else ''}"
     )
+    if (first_day, last_day) != (start, end):
+        text += f"\nScheduling {_span(first_day, last_day)} so no weekend is split."
+    if replaces:
+        text += (
+            f"\n{replaces} weekend{'s are' if replaces != 1 else ' is'} already recorded in "
+            "this range. The new schedule is built without them and replaces them when applied."
+        )
+    return text
+
+
+def _span(start: date, end: date) -> str:
+    first = start.strftime("%a %b %d") if start.year == end.year else start.strftime("%a %b %d, %Y")
+    return f"{first} – {end.strftime('%a %b %d, %Y')}"
 
 
 def _qdate_to_date(qd: QDate) -> date:
@@ -108,7 +148,8 @@ class ScheduleGenerationScreen(QWidget):
 
         # placeholders
         self._running = False
-        self.wh = self.ah = self.backup = None
+        self.ah = None
+        self._weekend_history: WeekendHistory | None = None
         self._progress: QProgressDialog | None = None
         self.worker: ScheduleProgressWorker | None = None
         self._variant_dialog = None
@@ -125,6 +166,23 @@ class ScheduleGenerationScreen(QWidget):
     def selected_range(self) -> tuple[date, date]:
         return _qdate_to_date(self._start_cal.qdate()), _qdate_to_date(self._end_cal.qdate())
 
+    def on_show(self):
+        """Re-read weekend history, which decides how edge weekends are handled."""
+        self._weekend_history = None
+        self._update_summary()
+
+    def _scheduled_range(self, start: date, end: date) -> tuple[date, date]:
+        """The range generation will cover, with split weekends made whole."""
+        if self._weekend_history is None:
+            self._weekend_history = WeekendHistory(DB_NAME)
+        history = self._weekend_history
+        first, last = whole_weekend_range(
+            pd.Timestamp(start),
+            pd.Timestamp(end),
+            is_recorded=lambda friday: history.get_assignment(friday) is not None,
+        )
+        return first.date(), last.date()
+
     def _update_summary(self, *_):
         start, end = self.selected_range()
         running = self._running
@@ -133,7 +191,9 @@ class ScheduleGenerationScreen(QWidget):
             self.summary.setProperty("role", "error")
             self.gen_btn.setEnabled(False)
         else:
-            self.summary.setText(describe_range(start, end))
+            first, last = self._scheduled_range(start, end)
+            replaces = len(recorded_weekends_in_range(self._weekend_history, first, last))
+            self.summary.setText(describe_range(start, end, (first, last), replaces))
             self.summary.setProperty("role", None)
             self.gen_btn.setEnabled(not running)
         self.summary.style().unpolish(self.summary)
@@ -155,9 +215,47 @@ class ScheduleGenerationScreen(QWidget):
         if end < start or self._running:
             return
 
-        # backup histories ---------------------------------------------------
-        self.wh, self.ah = WeekendHistory(DB_NAME), AssignmentHistory(DB_NAME)
-        self.backup = self.wh.backup()
+        issues = self.pre_schedule_issues(start, end)
+        if issues:
+            shown = issues[:12]
+            more = len(issues) - len(shown)
+            text = "\n".join(f"• {issue.message}" for issue in shown)
+            if more:
+                text += f"\n• …and {more} more."
+            confirm(
+                self,
+                "Check the pre-schedule",
+                "Some pinned (pre-scheduled) cells in this range look wrong. Generation "
+                "keeps pinned cells as they are, so these will shape every option:\n\n"
+                f"{text}\n\nFix them under Pre-Scheduled Assignments, or generate anyway.",
+                yes_cb=lambda: self._choose_rotation_and_start(start, end),
+                yes_text="Generate Anyway",
+            )
+            return
+        self._choose_rotation_and_start(start, end)
+
+    def pre_schedule_issues(self, start: date, end: date) -> list:
+        """Problems with pinned cells in the range (empty if they cannot be checked)."""
+        try:
+            settings = self.parent.settings
+            values = settings.all() if hasattr(settings, "all") else dict(settings)
+            scheduler = build_scheduler_from_settings(
+                start,
+                end,
+                NurseManager(DB_NAME),
+                WeekendHistory(DB_NAME),
+                PreScheduler(DB_NAME),
+                values,
+            )
+            return scheduler.validate_pre_schedule()
+        except Exception:
+            logger.exception("Checking the pre-schedule failed")
+            return []
+
+    def _choose_rotation_and_start(self, start: date, end: date):
+        # Generation only reads history; nothing is written until an option
+        # is applied, so there is nothing to back up or restore here.
+        self.ah = AssignmentHistory(DB_NAME)
 
         theme = self.parent.settings.get("theme")
         accent = self.parent.settings.get("accent_color")
@@ -284,10 +382,6 @@ class ScheduleGenerationScreen(QWidget):
             self._progress.close()
             self._progress = None
 
-    def _restore_backup(self):
-        if self.wh and self.backup:
-            self.wh.restore(self.backup)
-
     def _finish_run(self):
         self._running = False
         self._close_progress()
@@ -295,12 +389,10 @@ class ScheduleGenerationScreen(QWidget):
 
     def _on_worker_cancelled(self):
         self._finish_run()
-        self._restore_backup()
         show_info(self, "Generation cancelled", "No schedule was generated. Nothing was changed.")
 
     def _on_worker_error(self, trace: str):
         self._finish_run()
-        self._restore_backup()
         show_error(
             self,
             "Schedule generation failed",
@@ -327,11 +419,16 @@ class ScheduleGenerationScreen(QWidget):
         # Guard: no feasible candidates
         if not variants:
             self._finish_run()
-            self._restore_backup()
+            capped = (
+                "The weekend search was capped this run, so raising “Weekend variants to "
+                "evaluate” is the first thing to try.\n\n"
+                if self.worker is not None and self.worker.search_capped
+                else ""
+            )
             show_info(
                 self,
                 "No feasible schedules",
-                "No schedule satisfies every rule for this date range. Things to try:\n\n"
+                capped + "No schedule satisfies every rule for this date range. Things to try:\n\n"
                 "• Raise “Weekend variants to evaluate” in Settings (or set it to "
                 "Unlimited); a low cap can prune the only workable weekend pattern.\n"
                 "• Allow rotation violations for some nurses when you generate.\n"
@@ -371,12 +468,19 @@ class ScheduleGenerationScreen(QWidget):
             variants,
             wh,
             self.ah,
-            self.backup,
             out_dir=out_dir,
             export_error=export_error,
+            notice=self._capped_note(scheduler),
         )
-        self._variant_dialog.rejected.connect(self._restore_backup)
+        # Applying records weekends in this range; refresh the summary's count.
+        self._variant_dialog.accepted.connect(self.on_show)
         self._variant_dialog.open()
+
+    def _capped_note(self, scheduler) -> str | None:
+        """The beam-capped notice for this run, if the cap discarded branches."""
+        if self.worker is None or not self.worker.search_capped:
+            return None
+        return search_capped_note(scheduler.config.max_weekend_variants)
 
     def _write_diagnostics(self, scheduler, out_dir: str) -> None:
         """Write the opt-in diagnostics from Settings next to the exported PDFs."""

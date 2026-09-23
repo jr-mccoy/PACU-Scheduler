@@ -1299,20 +1299,40 @@ class NurseScheduler:
     def _generate_relaxed_variants(
         self, variants, friday, fixed, pre_weekend_assignments, next_vars
     ):
-        """Generate variants with relaxed rotation rules."""
+        """Generate variants for a weekend, admitting repeats only where needed.
+
+        Each branch uses its strict (alternating) pairs whenever it has any.
+        Only a branch with no strict pair for this weekend falls back to pairs
+        that repeat a pattern, and only for nurses allowed to violate. So a
+        repeat appears only on a weekend that branch could not staff
+        otherwise, never merely because relaxation was switched on.
+        """
         self._rotation_enforced = False
         for var in variants:
+            common = dict(
+                schedule=var.state.schedule,
+                all_pre_scheduled_weekends=pre_weekend_assignments,
+            )
             pairs = self._get_valid_nurse_pairs(
                 friday,
                 var.state.last_assignment,
                 var.state.last_pattern,
                 fixed,
                 var.state.weekend_tracking,
-                schedule=var.state.schedule,
-                all_pre_scheduled_weekends=pre_weekend_assignments,
-                enforce_rotation=False,
-                nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
+                enforce_rotation=True,
+                **common,
             )
+            if not pairs:
+                pairs = self._get_valid_nurse_pairs(
+                    friday,
+                    var.state.last_assignment,
+                    var.state.last_pattern,
+                    fixed,
+                    var.state.weekend_tracking,
+                    enforce_rotation=False,
+                    nurses_allowed_rotation_violation=self.nurses_allowed_rotation_violation,
+                    **common,
+                )
             for fsf, sfs in pairs:
                 clone = var.clone()
                 # assign_weekend records any rotation repeat on the clone

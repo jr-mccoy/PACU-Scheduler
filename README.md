@@ -14,8 +14,9 @@ fairness objective layered on top. Each day needs a **Main** and a **Backup**
 nurse. Weekends run in one of two rotation patterns — `FSF` (Friday/Sunday) and
 `SFS` (Saturday) — and a nurse who worked one pattern is expected to alternate
 to the other next time. On top of that, the scheduler has to respect
-time-off requests, minimum spacing between assignments, PRN (as-needed) and
-late-shift eligibility, and any assignments a manager has pinned in advance —
+time-off requests, minimum spacing between assignments, late-shift pairing
+rules, and any assignments a manager has pinned in advance (PRN, as-needed,
+nurses are scheduled only when pinned) —
 while spreading Main and Backup duty evenly across the team.
 
 This project generates candidate schedules, scores them, and presents the best

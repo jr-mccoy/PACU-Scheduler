@@ -691,18 +691,6 @@ class WeekendHistory:
                 """)
             return cursor.fetchall()
 
-    def _calculate_consecutive_violations(
-        self,
-        last_violation_date: pd.Timestamp | None,
-        current_violation_date: pd.Timestamp,
-        current_streak: int,
-    ) -> int:
-        """Calculate consecutive violation count."""
-        if last_violation_date is None:
-            return 1
-        delta_days = (current_violation_date - last_violation_date).days
-        return current_streak + 1 if delta_days == 7 else 1
-
     def _build_nurse_sequences(self) -> dict[str, list[tuple[pd.Timestamp, WeekendPattern]]]:
         """Build chronological sequences of assignments for each nurse."""
         return self._build_nurse_sequences_from_assignments(sorted(self._assignments.items()))
@@ -725,28 +713,29 @@ class WeekendHistory:
     def _process_nurse_violations(
         self, nurse: str, sequence: list[tuple[pd.Timestamp, WeekendPattern]]
     ) -> tuple[list, int, pd.Timestamp | None, int]:
-        """Process violations for a single nurse's sequence."""
+        """Violations in one nurse's chronological weekend sequence.
+
+        Returns ``(violation_dates, violation_count, last_violation_date,
+        streak)``. ``streak`` is how many of the nurse's most recent worked
+        weekends in a row repeated the pattern before them. It counts
+        successive *worked* weekends, however far apart: a nurse's weekends
+        are always at least ``weekend_gap_days`` apart, so comparing calendar
+        weeks (as this once did) never saw two violations as consecutive.
+        """
         violation_dates = []
         violation_count = 0
         last_violation_date = None
         streak = 0
-        prev_violation_date = None
 
         for i in range(1, len(sequence)):
-            prev_date, prev_pat = sequence[i - 1]
+            _prev_date, prev_pat = sequence[i - 1]
             curr_date, curr_pat = sequence[i]
 
             if prev_pat == curr_pat:  # Violation detected
                 violation_count += 1
                 violation_dates.append((curr_date, curr_pat, prev_pat))
                 last_violation_date = curr_date
-
-                # Calculate consecutive streak
-                if prev_violation_date is not None and (curr_date - prev_violation_date).days == 7:
-                    streak += 1
-                else:
-                    streak = 1
-                prev_violation_date = curr_date
+                streak += 1
             else:
                 streak = 0
 

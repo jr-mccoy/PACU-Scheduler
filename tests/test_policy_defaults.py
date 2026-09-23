@@ -1,9 +1,12 @@
-"""Library callers and the apps apply the same policy (audit finding 12)."""
+"""Scheduling policies as decided: shared defaults, the weekend gap, PRN nurses.
+
+Audit findings 8 and 12.
+"""
 
 from __future__ import annotations
 
 import pandas as pd
-from scheduling_fixtures import build_scheduler, seed_db
+from scheduling_fixtures import REGULAR, build_scheduler, seed_db
 
 from scheduler import SchedulerConfig, SharedSettings
 
@@ -34,3 +37,22 @@ def test_weekends_exactly_the_gap_apart_are_allowed(tmp_path):
 
 def test_weekends_closer_than_the_gap_are_not(tmp_path):
     assert not _allowed(tmp_path, 35, "2026-11-06")  # 28 days, five weeks required
+
+
+def test_prn_nurses_are_only_scheduled_when_pinned(tmp_path):
+    # Audit finding 8, decided: PRN nurses stay out of automatic scheduling,
+    # even for a day no regular nurse can take. Managers pin them by hand.
+    wednesday = pd.Timestamp("2026-11-04")
+    db = seed_db(tmp_path, time_off=[(n, wednesday) for n in REGULAR])
+    variant = build_scheduler(db, "2026-11-02", "2026-11-08").generate_all_weekend_variants()[0]
+    variant.assign_weekdays()
+
+    assert "P" not in variant.nurses
+    assert not (variant.state.schedule[["main", "backup"]] == "P").any().any()
+
+
+def test_a_pinned_prn_nurse_is_kept(tmp_path):
+    db = seed_db(tmp_path, pre_scheduled=[("2026-11-04", "P", None)])
+    variant = build_scheduler(db, "2026-11-02", "2026-11-08").generate_all_weekend_variants()[0]
+    variant.assign_weekdays()
+    assert variant.state.schedule.at[pd.Timestamp("2026-11-04"), "main"] == "P"

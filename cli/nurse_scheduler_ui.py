@@ -1571,6 +1571,9 @@ class NurseSchedulerUI:
                 CLIHelper.pause()
                 return
 
+            pdfs = scheduler.export_top_variants_as_pdfs(top_schedules, len(top_schedules))
+            print(f"Wrote {len(pdfs)} PDF file(s): {', '.join(pdfs)}")
+
             # Display candidates and get user selection
             selected_schedule = self._display_and_select_schedule(top_schedules)
 

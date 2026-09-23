@@ -116,12 +116,12 @@ def test_worker_reports_a_generation_crash_as_an_error(qapp, tmp_path, monkeypat
 
 
 def test_worker_reports_an_error_when_no_variant_evaluates(qapp, tmp_path, monkeypatch):
-    import ui.worker_threads as worker_threads
+    import scheduler.engine as engine
 
     def crash(args):
         raise RuntimeError("simulated evaluation failure")
 
-    monkeypatch.setattr(worker_threads, "_evaluate_variant_worker", crash)
+    monkeypatch.setattr(engine, "_evaluate_variant_worker", crash)
 
     errors, finished = _run_worker(tmp_path, monkeypatch)
 

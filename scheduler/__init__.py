@@ -40,6 +40,7 @@ from .domain import (
 from .engine import (
     WORKER_TUNING,
     GenerationError,
+    GenerationRun,
     NurseScheduler,
     WeekendGenerationResult,
     WorkerTuningConfig,
@@ -77,6 +78,7 @@ from .runtime import is_empty
 from .settings import MAX_WEEKEND_VARIANTS_RANGE, SharedSettings
 
 __all__ = [
+    "GenerationRun",
     "GenerationError",
     "WeekendGenerationResult",
     "ApplyReport",

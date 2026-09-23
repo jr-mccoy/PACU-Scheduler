@@ -9,7 +9,12 @@ import sys
 import traceback
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
@@ -54,6 +59,53 @@ logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
 PERFORMANCE_PROFILING_REQUESTED = _runtime.PERFORMANCE_PROFILING_REQUESTED
 PERFORMANCE_PROFILE_JSON_DEFAULT = _runtime.PERFORMANCE_PROFILE_JSON_DEFAULT
+
+
+# How often a running evaluation checks whether it has been cancelled.
+_CANCEL_POLL_SECONDS = 0.5
+
+
+def _terminate_pool(pool) -> None:
+    """Stop a cancelled executor without waiting for in-flight variants.
+
+    ``shutdown(cancel_futures=True)`` only drops queued work; a process
+    pool's running workers would otherwise keep evaluating (minutes per
+    variant) after the user pressed Cancel, so terminate them.
+    """
+    pool.shutdown(wait=False, cancel_futures=True)
+    processes = getattr(pool, "_processes", None) or {}
+    for proc in list(processes.values()):
+        try:
+            proc.terminate()
+        except Exception:  # pragma: no cover - best effort
+            logger.debug("Could not terminate worker process", exc_info=True)
+
+
+@dataclass
+class _Evaluation:
+    """What one evaluation pass produced."""
+
+    candidates: list = field(default_factory=list)
+    worker_metrics: list = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    cancelled: bool = False
+
+
+@dataclass
+class GenerationRun:
+    """The outcome of :meth:`NurseScheduler.run_generation`.
+
+    ``status`` is ``"ok"``, ``"infeasible"`` or ``"cancelled"``. For ``"ok"``,
+    ``candidates`` holds every evaluated candidate as
+    ``(idx, stats, nurse_counts, schedule)``, ranked best first;
+    ``failures`` holds the tracebacks of variants that could not be
+    evaluated, and ``worker_metrics`` the profiling data when requested.
+    """
+
+    status: str
+    candidates: list = field(default_factory=list)
+    worker_metrics: list = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
 
 
 class GenerationError(RuntimeError):
@@ -1615,72 +1667,120 @@ class NurseScheduler:
         profile_performance: bool | None = None,
         profile_output_path: str | os.PathLike[str] | None = None,
     ) -> list:
-        """Generate schedules and optionally capture detailed performance metrics.
+        """Generate, evaluate and rank schedules; return the best ``top_n``.
 
-        ``max_workers`` caps the variant-evaluation process pool; ``None`` sizes
-        it to the machine (see :func:`scheduler.platform.default_worker_count`).
+        A convenience wrapper around :meth:`run_generation` for scripts and
+        the CLI: ``[]`` means no schedule satisfies the rules, and a failure
+        raises :class:`GenerationError`. ``max_workers`` caps the evaluation
+        pool; ``None`` sizes it to the machine (see
+        :func:`scheduler.platform.default_worker_count`). Writing PDFs is up
+        to the caller (:meth:`export_top_variants_as_pdfs`).
         """
+        profiling_enabled = (
+            PERFORMANCE_PROFILING_REQUESTED if profile_performance is None else profile_performance
+        )
+        run = self.run_generation(
+            max_workers=max_workers,
+            confirm_rotation_callback=confirm_rotation_callback,
+            weekend_variant_mode=weekend_variant_mode,
+            profile=bool(profiling_enabled),
+        )
+        if run.status != "ok":
+            return []
+
+        self._print_timing_summary(run.candidates)
+        if run.worker_metrics:
+            self._report_performance_metrics(
+                run.worker_metrics,
+                PERFORMANCE_PROFILE_JSON_DEFAULT
+                if profile_output_path is None
+                else profile_output_path,
+            )
+        return run.candidates[:top_n]
+
+    def run_generation(
+        self,
+        *,
+        max_workers: int | None = None,
+        confirm_rotation_callback: Callable[[], bool] | None = None,
+        weekend_variant_mode: str
+        | NurseScheduler.WeekendVariantMode = WeekendVariantMode.STRICT_THEN_RELAXED,
+        profile: bool = False,
+        use_threads: bool = False,
+        on_stage: Callable[[str], None] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> GenerationRun:
+        """The one generation pipeline the GUI, the CLI and scripts share.
+
+        Builds weekend variants, evaluates each in a worker pool, and ranks
+        every evaluated candidate (:meth:`_score_and_rank_variants`).
+
+        * ``on_stage(text)`` and ``on_progress(done, total)`` report progress;
+        * ``is_cancelled()`` is polled while variants evaluate, and a
+          cancelled run stops its workers and returns status ``"cancelled"``;
+        * ``use_threads`` evaluates in threads instead of processes (for
+          platforms without working process pools, such as Android);
+        * ``profile`` collects per-variant :class:`WorkerMetrics`.
+
+        Returns a :class:`GenerationRun` with status ``"ok"``, ``"infeasible"``
+        or ``"cancelled"``. Crashes, and runs where no variant could be
+        evaluated, raise :class:`GenerationError`.
+        """
+
+        def stage(text: str) -> None:
+            if on_stage is not None:
+                on_stage(text)
+
+        def cancelled() -> bool:
+            return bool(is_cancelled and is_cancelled())
+
+        if profile and psutil is None:
+            logger.warning(
+                "Performance profiling requested but psutil is not available. "
+                "Install psutil or disable profiling to silence this message."
+            )
+            profile = False
+
         sleep_handle = inhibit_sleep()
-
         try:
-            profiling_enabled = (
-                PERFORMANCE_PROFILING_REQUESTED
-                if profile_performance is None
-                else bool(profile_performance)
-            )
-            if profiling_enabled and psutil is None:
-                logger.warning(
-                    "Performance profiling requested but psutil is not available. "
-                    "Install psutil or disable profiling to silence this message."
-                )
-                profiling_enabled = False
-
-            profile_json_path: str | os.PathLike[str] | None
-            if profile_output_path is None:
-                profile_json_path = PERFORMANCE_PROFILE_JSON_DEFAULT
-            else:
-                profile_json_path = profile_output_path
-
-            # Setup rotation confirmation callback
-            confirm_rotation_callback = self._setup_rotation_callback(confirm_rotation_callback)
-
-            # Generate weekend variants
+            stage("Building weekend rotation variants…")
             variants = self._generate_weekend_variants(
-                confirm_rotation_callback, weekend_variant_mode
+                self._setup_rotation_callback(confirm_rotation_callback), weekend_variant_mode
             )
+            if cancelled():
+                return GenerationRun("cancelled")
             if not variants:
-                return []
+                return GenerationRun("infeasible")
 
-            # Evaluate variants with or without profiling
-            if profiling_enabled:
-                candidate_schedules, worker_metrics = self._evaluate_variants_with_profiling(
-                    variants, max_workers
-                )
-            else:
-                candidate_schedules = self._evaluate_variants(variants, max_workers)
-                worker_metrics = []
-
-            if not candidate_schedules:
+            total = len(variants)
+            stage(f"Evaluating {total} variant{'s' if total != 1 else ''}…")
+            evaluation = self._evaluate_all(
+                variants,
+                max_workers,
+                profiling=profile,
+                use_threads=use_threads,
+                on_progress=on_progress,
+                is_cancelled=is_cancelled,
+            )
+            if evaluation.cancelled:
+                return GenerationRun("cancelled")
+            if not evaluation.candidates:
                 # Variants existed, so this is a failure, not infeasibility.
+                detail = evaluation.failures[0] if evaluation.failures else "No details logged."
                 raise GenerationError(
-                    f"None of the {len(variants)} candidate schedules could be evaluated; "
-                    "the log has each failure."
+                    f"None of the {total} candidate schedules could be evaluated.\n\n"
+                    f"First failure:\n{detail}"
                 )
 
-            # Score and rank variants
-            self._score_and_rank_variants(candidate_schedules)
-
-            # Export best variants as PDFs
-            self._export_top_variants_as_pdfs(candidate_schedules, top_n)
-
-            # Optional timing summary
-            self._print_timing_summary(candidate_schedules)
-
-            if profiling_enabled:
-                self._report_performance_metrics(worker_metrics, profile_json_path)
-
-            return candidate_schedules[:top_n]
-
+            stage("Ranking variants…")
+            self._score_and_rank_variants(evaluation.candidates)
+            return GenerationRun(
+                "ok",
+                candidates=evaluation.candidates,
+                worker_metrics=evaluation.worker_metrics,
+                failures=evaluation.failures,
+            )
         finally:
             allow_sleep(sleep_handle)
 
@@ -1744,82 +1844,108 @@ class NurseScheduler:
         logger.info("Evaluating %d variants on %d worker processes.", variant_count, workers)
         return workers
 
-    def _evaluate_variants(self, variants, max_workers=None):
-        """Evaluate all variants either in parallel or serially."""
-        candidate_schedules: list = []
-        workers = self._resolve_worker_count(max_workers, len(variants))
+    def _evaluate_all(
+        self,
+        variants,
+        max_workers=None,
+        *,
+        profiling: bool = False,
+        use_threads: bool = False,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> _Evaluation:
+        """Evaluate every variant in a worker pool, falling back to serial.
 
+        The pool is polled every ``_CANCEL_POLL_SECONDS`` so ``is_cancelled``
+        takes effect promptly; a cancelled process pool has its workers
+        terminated rather than left evaluating. If the pool itself fails,
+        every variant is re-evaluated serially from scratch, so a pool that
+        broke mid-run cannot leave duplicate entries.
+        """
+        worker = _evaluate_variant_worker_profiled if profiling else _evaluate_variant_worker
+        total = len(variants)
+        result = _Evaluation()
+        progress_bar = None
+        if on_progress is None:
+            progress_bar = tqdm(total=total, desc="Evaluating variants", unit="variant")
+
+        def report(done: int) -> None:
+            if on_progress is not None:
+                on_progress(done, total)
+            elif progress_bar is not None:
+                progress_bar.update(1)
+
+        def collect(idx: int, outcome) -> None:
+            if profiling:
+                *outcome, metrics = outcome
+                result.worker_metrics.append(metrics)
+            result.candidates.append(tuple(outcome))
+
+        def cancelled() -> bool:
+            return bool(is_cancelled and is_cancelled())
+
+        if on_progress is not None:
+            on_progress(0, total)
+        workers = self._resolve_worker_count(max_workers, total)
+        executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
         try:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                fut_map = {
-                    pool.submit(_evaluate_variant_worker, (i, v, self.worker_tuning)): i
+            pool = executor(max_workers=workers)
+            try:
+                pending = {
+                    pool.submit(worker, (i, v, self.worker_tuning)): i
                     for i, v in enumerate(variants)
                 }
-                for fut in tqdm(
-                    as_completed(fut_map),
-                    total=len(fut_map),
-                    desc="Evaluating variants",
-                    unit="variant",
-                ):
-                    try:
-                        candidate_schedules.append(fut.result())
-                    except Exception as ex:
-                        logger.error(f"Worker {fut_map[fut]} failed: {ex}")
+                done = 0
+                while pending:
+                    finished, _ = wait(
+                        list(pending), timeout=_CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
+                    )
+                    if cancelled():
+                        result.cancelled = True
+                        break
+                    for fut in finished:
+                        idx = pending.pop(fut)
+                        try:
+                            collect(idx, fut.result())
+                        except Exception:
+                            logger.exception("Evaluating variant %d failed", idx)
+                            result.failures.append(traceback.format_exc())
+                        done += 1
+                        report(done)
+            finally:
+                if result.cancelled:
+                    _terminate_pool(pool)
+                else:
+                    pool.shutdown(wait=True)
         except Exception as e:
             # Fallback: run serially. Reset any partial results so a
             # mid-iteration pool failure does not leave duplicate idx entries.
-            logger.warning(f"ProcessPool failed ({e}); evaluating serially.")
-            candidate_schedules = []
+            logger.warning("Worker pool failed (%s); evaluating serially.", e)
+            result = _Evaluation()
             for idx, var in enumerate(variants):
+                if cancelled():
+                    result.cancelled = True
+                    break
                 try:
-                    candidate_schedules.append(
-                        _evaluate_variant_worker((idx, var, self.worker_tuning))
-                    )
-                except Exception as ex:
-                    logger.error(f"Serial worker {idx} failed: {ex}")
+                    collect(idx, worker((idx, var, self.worker_tuning)))
+                except Exception:
+                    logger.exception("Evaluating variant %d failed", idx)
+                    result.failures.append(traceback.format_exc())
+                report(idx + 1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
-        return candidate_schedules
+        return result
+
+    def _evaluate_variants(self, variants, max_workers=None):
+        """Evaluate every variant; return the evaluated candidates."""
+        return self._evaluate_all(variants, max_workers).candidates
 
     def _evaluate_variants_with_profiling(self, variants, max_workers=None):
-        """Evaluate all variants while collecting profiling metrics."""
-        candidate_schedules: list = []
-        all_worker_metrics: list[WorkerMetrics] = []
-        workers = self._resolve_worker_count(max_workers, len(variants))
-
-        try:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                fut_map = {
-                    pool.submit(_evaluate_variant_worker_profiled, (i, v, self.worker_tuning)): i
-                    for i, v in enumerate(variants)
-                }
-                for fut in tqdm(
-                    as_completed(fut_map),
-                    total=len(fut_map),
-                    desc="Evaluating variants",
-                    unit="variant",
-                ):
-                    try:
-                        idx, stats, nurse_counts, sched_df, metrics = fut.result()
-                        candidate_schedules.append((idx, stats, nurse_counts, sched_df))
-                        all_worker_metrics.append(metrics)
-                    except Exception as ex:
-                        logger.error(f"Worker {fut_map[fut]} failed: {ex}")
-        except Exception as e:
-            # Reset any partial results so a mid-iteration pool failure does
-            # not leave duplicate idx entries.
-            logger.warning(f"ProcessPool failed ({e}); evaluating serially with profiling.")
-            candidate_schedules = []
-            all_worker_metrics = []
-            for idx, var in enumerate(variants):
-                try:
-                    result = _evaluate_variant_worker_profiled((idx, var, self.worker_tuning))
-                    idx, stats, nurse_counts, sched_df, metrics = result
-                    candidate_schedules.append((idx, stats, nurse_counts, sched_df))
-                    all_worker_metrics.append(metrics)
-                except Exception as ex:
-                    logger.error(f"Serial worker {idx} failed: {ex}")
-
-        return candidate_schedules, all_worker_metrics
+        """Evaluate every variant; return ``(candidates, worker_metrics)``."""
+        evaluation = self._evaluate_all(variants, max_workers, profiling=True)
+        return evaluation.candidates, evaluation.worker_metrics
 
     def _report_performance_metrics(
         self, worker_metrics: list[WorkerMetrics], output_path: str | os.PathLike[str] | None
@@ -1877,19 +2003,22 @@ class NurseScheduler:
 
         candidate_schedules.sort(key=lambda tpl: tpl[1]["rank"])
 
-    def _export_top_variants_as_pdfs(self, candidate_schedules, top_n):
-        """Export the best variants as PDF files."""
+    def export_top_variants_as_pdfs(
+        self, candidate_schedules, top_n: int, directory: str | os.PathLike[str] = "."
+    ) -> list[str]:
+        """Write ``schedule_variant_<rank>.pdf`` for the best ``top_n``; return the paths."""
         cal = calendar.Calendar(firstweekday=6)  # Sunday-first
         pdf_paths = []
 
         for rank, (_idx, _stats, _nurse_counts, sched_df) in enumerate(
             candidate_schedules[:top_n], start=1
         ):
-            pdf_name = f"schedule_variant_{rank}.pdf"
+            pdf_name = os.path.join(os.fspath(directory), f"schedule_variant_{rank}.pdf")
             self._export_variant_pdf(pdf_name, sched_df, cal)
             pdf_paths.append(pdf_name)
 
         logger.info("Wrote %d PDF file(s): %s", len(pdf_paths), ", ".join(pdf_paths))
+        return pdf_paths
 
     def _print_timing_summary(self, candidate_schedules):
         """Print timing summary if enabled."""
@@ -1909,6 +2038,7 @@ __all__ = [
     "WorkerTuningConfig",
     "WORKER_TUNING",
     "GenerationError",
+    "GenerationRun",
     "NurseScheduler",
     "WeekendGenerationResult",
     "recorded_weekends_in_range",

@@ -1713,7 +1713,7 @@ class NurseSchedulerUI:
             idx, stats, nurse_counts, sched = candidate
             print(
                 f"\nCandidate {rank}: Rotation repeats={stats['rotation_rep']}, "
-                f"Unfilled slots={stats['gaps']}, "
+                f"Unfilled slots={stats['gaps']} ({stats.get('unfillable', 0)} impossible), "
                 f"Score={stats.get('weighted_score', 0.0):.3f}, "
                 f"Balance Main={stats['balance_main']}, "
                 f"Balance Backup={stats['balance_backup']}"

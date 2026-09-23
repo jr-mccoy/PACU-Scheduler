@@ -132,6 +132,7 @@ def _make_fake_context():
     fake.log_assignment_debug = lambda **kw: calls.append(("log_assignment_debug", kw))
     fake.is_empty = lambda v: v is None or v == ""
     fake.is_pre_scheduled = lambda d, r: False
+    fake.is_unfillable = lambda d, r: False
 
     def eligible_domain(d, r, diagnostics=None, *, force_relaxed=False):
         return ["Alice", "Bob"]

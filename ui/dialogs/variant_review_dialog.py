@@ -45,6 +45,12 @@ METRICS = [
         "second. Ideally 0.",
     ),
     (
+        "unfillable",
+        "Impossible slots",
+        "Unfilled slots that no nurse could legally take in this option, because of time "
+        "off, spacing or the weekend rules. Fixing them needs a data or rule change.",
+    ),
+    (
         "weighted_score",
         "Score",
         "Combines the remaining metrics with the ranking weights from Settings, and "

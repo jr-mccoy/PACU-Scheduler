@@ -67,6 +67,9 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
     try:
         with phase_timer("clone"):
             var = variant.clone()
+            # Weekends are fixed from here on: find the weekday slots no nurse
+            # can take, so every search below skips them.
+            var.compute_unfillable_slots()
 
         with phase_timer("assign_weekdays"):
             var.assign_weekdays()
@@ -79,6 +82,8 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
             var.iterative_gap_fill_no_revert(
                 max_iterations=tuning.gap_fill_iterations,
                 tracker=tracker,
+                node_limit=tuning.gap_fill_node_limit,
+                time_limit_ms=tuning.gap_fill_time_limit_ms,
             )
 
         with phase_timer("rebalance"):
@@ -137,6 +142,11 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                 "balance_backup": int(balance_backup),
                 "early_gaps": int(early_gaps),
                 "rotation_rep": int(rotation_rep),
+                # Slots no nurse could legally take; counted in "gaps" too.
+                "unfillable": len(var.unfillable_slots),
+                "unfillable_slots": [
+                    f"{day.date().isoformat()} {role}" for day, role in sorted(var.unfillable_slots)
+                ],
             }
 
             stats.update(tracker.get_statistics())

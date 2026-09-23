@@ -6,13 +6,14 @@ import bisect
 import datetime
 import logging
 import os
+import random
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from functools import cached_property
-from itertools import islice, permutations
+from itertools import permutations
 from math import factorial
 from typing import (
     TYPE_CHECKING,
@@ -62,6 +63,10 @@ MAX_TOTAL_ASSIGNMENTS_PER_WEEK = 2
 # full evaluation pipeline, so this is the main lever on run time; users tune
 # it for their machine through the settings file.
 DEFAULT_MAX_WEEKEND_VARIANTS = 1000
+# Budget for one week's complete-fill search during gap filling; the worker
+# passes WorkerTuningConfig values, these are the defaults for direct calls.
+GAP_FILL_NODE_LIMIT = 20_000
+GAP_FILL_TIME_LIMIT_MS = 2_000
 ANALYSE_INITIAL_WEEKDAY_GAPS = True
 GAP_REPORT_FILE = "weekday_gap_report.txt"
 
@@ -720,6 +725,10 @@ class ScheduleVariant:
         # fairness during local search without the scheduler object.
         self.historic_overage = dict(historic_overage or {})
 
+        # Weekday (date, role) slots no nurse can take, whatever the other
+        # weekdays hold; see compute_unfillable_slots(). Read-only once set.
+        self.unfillable_slots: frozenset[tuple[pd.Timestamp, str]] = frozenset()
+
         # Cache of late-shift staff
         self._late_set = {n for n in self.nurses if nurse_manager.is_late_shift_nurse(n)}
 
@@ -786,6 +795,65 @@ class ScheduleVariant:
 
     def is_pre_scheduled(self, date: pd.Timestamp, role: str) -> bool:
         return self._is_pre_scheduled(date, role)
+
+    def is_unfillable(self, date: pd.Timestamp, role: str) -> bool:
+        """True for a slot no nurse can take (see compute_unfillable_slots)."""
+        return (date, role) in self.unfillable_slots
+
+    def compute_unfillable_slots(self) -> frozenset[tuple[pd.Timestamp, str]]:
+        """Find, record and return the weekday slots no nurse can ever take.
+
+        A slot is unfillable when its candidate domain is empty even with
+        every other weekday cleared: everyone is off, or the fixed weekends
+        and pinned cells rule them all out. Eligibility only ever shrinks as
+        more cells are filled (spacing, weekly limits, the late-shift and
+        same-day rules), so such a slot stays empty in every completion.
+        The searches skip these slots instead of spending their budgets
+        re-proving that they cannot be filled, and a week or window
+        containing one can still be rebalanced around it.
+
+        Call this once the weekends are fixed. The most permissive domain
+        (gap-fill rules, with any configured spacing relaxation) is used, so
+        only slots that are truly impossible are recorded.
+        """
+        probe = self.clone()
+        days = probe.get_weekdays()
+        probe._clear_week_assignments(days)
+        unfillable = {
+            (day, role)
+            for day in days
+            for role in ("main", "backup")
+            if not probe._is_pre_scheduled(day, role)
+            and not probe._get_eligible_nurses_for_day_gap(day, role, relaxed_spacing=True)
+        }
+        self.unfillable_slots = frozenset(unfillable)
+        return self.unfillable_slots
+
+    def slot_orderings(self, slots, limit: int, seed: int):
+        """Orderings of ``slots`` for a capped search, yielded lazily.
+
+        Every ordering when there are at most ``limit`` of them (or ``limit``
+        is 0). Otherwise the given order first, then distinct seeded random
+        shuffles up to ``limit`` in all. Taking the first ``limit``
+        lexicographic permutations instead only ever reshuffles the tail:
+        with eight slots, the first two never move in 200 orderings.
+        """
+        slots = tuple(slots)
+        if not limit or factorial(len(slots)) <= limit:
+            yield from permutations(slots)
+            return
+        rng = random.Random(seed)
+        seen = {slots}
+        yield slots
+        attempts = 0
+        while len(seen) < limit and attempts < limit * 10:
+            attempts += 1
+            order = list(slots)
+            rng.shuffle(order)
+            candidate = tuple(order)
+            if candidate not in seen:
+                seen.add(candidate)
+                yield candidate
 
     def eligible_domain(
         self,
@@ -969,6 +1037,7 @@ class ScheduleVariant:
             historic_overage=self.historic_overage,
         )
         new_variant.rotation_violations = list(self.rotation_violations)
+        new_variant.unfillable_slots = self.unfillable_slots
         return new_variant
 
     def _is_pre_scheduled(self, date: pd.Timestamp, role: str) -> bool:
@@ -1927,7 +1996,7 @@ class ScheduleVariant:
         had_failure = False
 
         for date, role in slots:
-            if self._is_pre_scheduled(date, role):
+            if self._is_pre_scheduled(date, role) or self.is_unfillable(date, role):
                 continue
             if not is_empty(self.state.schedule.at[date, role]):
                 continue
@@ -2251,12 +2320,13 @@ class ScheduleVariant:
 
     def _build_window_varlist(self, days: list[pd.Timestamp]) -> list[tuple[pd.Timestamp, str]]:
         """
-        Variables to assign in the window: all (day, role) pairs that are empty and not pre-scheduled.
+        Variables to assign in the window: all (day, role) pairs that are empty,
+        not pre-scheduled, and not unfillable.
         """
         vars_list: list[tuple[pd.Timestamp, str]] = []
         for d in days:
             for role in ("main", "backup"):
-                if not self._is_pre_scheduled(d, role):
+                if not self._is_pre_scheduled(d, role) and not self.is_unfillable(d, role):
                     val = self.state.schedule.at[d, role]
                     if is_empty(val):
                         vars_list.append((d, role))
@@ -2337,11 +2407,11 @@ class ScheduleVariant:
             if time.perf_counter() >= deadline or node_budget[0] <= 0:
                 return False
 
-            # advance to next unfilled
+            # advance to next unfilled (unfillable slots stay empty)
             while idx < n:
                 d, r = vars_list[idx]
                 val = self.state.schedule.at[d, r]
-                if is_empty(val):
+                if is_empty(val) and not self.is_unfillable(d, r):
                     break
                 idx += 1
             if idx >= n:
@@ -2367,7 +2437,7 @@ class ScheduleVariant:
                 steps = 0
                 while j < n and steps < look_ahead:
                     dj, rj = vars_list[j]
-                    if is_empty(self.state.schedule.at[dj, rj]):
+                    if is_empty(self.state.schedule.at[dj, rj]) and not self.is_unfillable(dj, rj):
                         if not self._eligible_domain(dj, rj):
                             fail = True
                             break
@@ -2453,7 +2523,7 @@ class ScheduleVariant:
             (date, role)
             for date in week_days
             for role in ("main", "backup")
-            if not self._is_pre_scheduled(date, role)
+            if not self._is_pre_scheduled(date, role) and not self.is_unfillable(date, role)
         ]
         if not slots:
             self._debug_print(f"[ScheduleVariant] [WeekPerms] friday={friday_label} no-slots")
@@ -2477,15 +2547,11 @@ class ScheduleVariant:
             best_tuple = orig_tuple
             improved = False
 
-            perm_iterator = permutations(slot_tuple) if slot_tuple else [tuple()]
             perm_limit = getattr(self.config, "max_week_permutations", 0)
-            if perm_limit:
-                perm_iterator = islice(perm_iterator, perm_limit)
-            truncated = False
+            perm_iterator = self.slot_orderings(slot_tuple, perm_limit, week_start.toordinal())
+            truncated = bool(perm_limit) and factorial(len(slot_tuple)) > perm_limit
 
             for idx, order in enumerate(perm_iterator, start=1):
-                if perm_limit and idx == perm_limit:
-                    truncated = True
                 if idx == 1 or idx % 50 == 0:
                     self._debug_print(
                         f"[ScheduleVariant] [WeekPerms] friday={friday_label} perm={idx} mode={mode}"
@@ -2528,8 +2594,8 @@ class ScheduleVariant:
                 # Say so rather than letting a capped search read as an
                 # exhaustive one that found nothing.
                 logger.debug(
-                    "[WeekPerms] friday=%s mode=%s: no improvement within the first "
-                    "%d of %d slot orderings (max_week_permutations)",
+                    "[WeekPerms] friday=%s mode=%s: no improvement within %d sampled "
+                    "of %d slot orderings (max_week_permutations)",
                     friday_label,
                     mode,
                     perm_limit,
@@ -2564,8 +2630,16 @@ class ScheduleVariant:
         self,
         max_iterations: int = 40,
         tracker: BestStateTracker | None = None,
+        *,
+        node_limit: int = GAP_FILL_NODE_LIMIT,
+        time_limit_ms: int = GAP_FILL_TIME_LIMIT_MS,
     ) -> bool:
-        """Iteratively fill weekday gaps using tracker-backed snapshots."""
+        """Iteratively fill weekday gaps using tracker-backed snapshots.
+
+        Unfillable slots (:meth:`compute_unfillable_slots`) are not gaps this
+        pass can close, so weeks whose only gaps are unfillable are skipped
+        and the pass finishes once every fillable gap is filled.
+        """
 
         created_tracker = tracker is None
         if created_tracker:
@@ -2588,13 +2662,16 @@ class ScheduleVariant:
                     continue
                 week_label = f"{min(week_days).date()}-{max(week_days).date()}"
                 week_gaps = self._count_week_gaps(week_days)
+                fillable_gaps = week_gaps - self._count_unfillable(week_days)
                 self._debug_print(
                     f"[ScheduleVariant] [GapFill] pass={pass_idx} week={week_label} before={week_gaps}"
                 )
-                if week_gaps == 0:
+                if fillable_gaps == 0:
                     continue
 
-                remaining = self._try_week_gap_permutations_no_revert(week_days)
+                remaining = self._try_week_gap_permutations_no_revert(
+                    week_days, node_limit=node_limit, time_limit_ms=time_limit_ms
+                )
                 if remaining < week_gaps:
                     schedule_changed = True
                 self._debug_print(
@@ -2613,7 +2690,7 @@ class ScheduleVariant:
                 f"[ScheduleVariant] [GapFill] pass={pass_idx} end total={current_gaps}"
             )
 
-            if current_gaps == 0:
+            if self._count_fillable_weekday_gaps() == 0:
                 self._debug_print(f"[ScheduleVariant] [GapFill] complete pass={pass_idx}")
                 tracker.restore_global_best()
                 return True
@@ -2643,8 +2720,26 @@ class ScheduleVariant:
             is_empty(self.state.schedule.at[d, r]) for d in week_days for r in ("main", "backup")
         )
 
-    def _try_week_gap_permutations_no_revert(self, week_days: list[pd.Timestamp]) -> int:
-        """Fill gaps for one week using heuristic search and return remaining gaps."""
+    def _count_unfillable(self, days: list[pd.Timestamp]) -> int:
+        """Unfillable slots among ``days`` (always empty)."""
+        return sum(self.is_unfillable(d, r) for d in days for r in ("main", "backup"))
+
+    def _count_fillable_weekday_gaps(self) -> int:
+        """Empty weekday slots that some nurse could still take."""
+        return sum(
+            is_empty(self.state.schedule.at[d, r]) and not self.is_unfillable(d, r)
+            for d in self.get_weekdays()
+            for r in ("main", "backup")
+        )
+
+    def _try_week_gap_permutations_no_revert(
+        self,
+        week_days: list[pd.Timestamp],
+        *,
+        node_limit: int = GAP_FILL_NODE_LIMIT,
+        time_limit_ms: int = GAP_FILL_TIME_LIMIT_MS,
+    ) -> int:
+        """Fill gaps for one week using bounded search and return remaining gaps."""
 
         if not week_days:
             return 0
@@ -2667,7 +2762,9 @@ class ScheduleVariant:
         self._clear_week_assignments(ordered_days)
 
         self._debug_print(f"[ScheduleVariant] [GapPerms] friday={friday_label} perm=1")
-        new_gaps = self._fill_week_with_permutation(ordered_days)
+        new_gaps = self._fill_week_with_permutation(
+            ordered_days, node_limit=node_limit, time_limit_ms=time_limit_ms
+        )
 
         if new_gaps < orig_gaps:
             # Counts already maintained by _inc_assign in _fill_week_with_permutation
@@ -2684,6 +2781,8 @@ class ScheduleVariant:
             relaxed_gaps = self._fill_week_with_permutation(
                 ordered_days,
                 force_relaxed=True,
+                node_limit=node_limit,
+                time_limit_ms=time_limit_ms,
             )
             if relaxed_gaps < orig_gaps:
                 # Counts already maintained by _inc_assign in _fill_week_with_permutation
@@ -2710,8 +2809,17 @@ class ScheduleVariant:
         week_days: list[pd.Timestamp],
         *,
         force_relaxed: bool = False,
+        node_limit: int = GAP_FILL_NODE_LIMIT,
+        time_limit_ms: int = GAP_FILL_TIME_LIMIT_MS,
     ) -> int:
-        """Assign one week's empty slots using backtracking and heuristic ordering."""
+        """Fill one cleared week's empty slots; return the gaps left.
+
+        First a complete fill by MRV backtracking under ``node_limit`` and
+        ``time_limit_ms``. If none is found, the best partial fill over a
+        capped sample of slot orderings (``max_week_permutations``) is kept.
+        This replaces trying every ordering, which for a week that cannot be
+        completely filled meant all 8! = 40,320 of them.
+        """
 
         if not week_days:
             self._debug_print("[ScheduleVariant] [WeekPerm] empty-week")
@@ -2728,13 +2836,23 @@ class ScheduleVariant:
         self._debug_print(f"[ScheduleVariant] [WeekPerm] start {window_label} slots={len(slots)}")
 
         cleared_state = self.backup_week_assignments(week_days)
+        deadline = time.perf_counter() + time_limit_ms / 1000.0
+        if self.window_optimizer.backtrack_window(
+            slots, deadline, [node_limit], gap_mode=True, force_relaxed=force_relaxed
+        ):
+            remaining = self._count_week_gaps(week_days)
+            self._debug_print(
+                f"[ScheduleVariant] [WeekPerm] complete fill {window_label} gaps={remaining}"
+            )
+            return remaining
+        self._restore_from_backup(week_days, cleared_state)
+
         best_state: WeekBackup | None = None
         best_remaining = float("inf")
-
-        slot_tuple = tuple(slots)
-        perm_iterator = permutations(slot_tuple) if slot_tuple else [tuple()]
-
-        for idx, order in enumerate(perm_iterator, start=1):
+        orderings = self.slot_orderings(
+            slots, getattr(self.config, "max_week_permutations", 0), min(week_days).toordinal()
+        )
+        for idx, order in enumerate(orderings, start=1):
             if idx == 1 or idx % 50 == 0:
                 self._debug_print(
                     f"[ScheduleVariant] [WeekPerm] permutation={idx} window={window_label}"
@@ -2754,25 +2872,18 @@ class ScheduleVariant:
             if remaining < best_remaining:
                 best_remaining = remaining
                 best_state = self.backup_week_assignments(week_days)
-                if best_remaining == 0:
-                    self._debug_print(
-                        f"[ScheduleVariant] [WeekPerm] perfect assignment window={window_label} perm={idx}"
-                    )
-                    break
+                if remaining == self._count_unfillable(week_days):
+                    break  # every fillable slot is filled
 
         if best_state is not None:
             self._restore_from_backup(week_days, best_state)
-            remaining = (
-                best_remaining
-                if best_remaining != float("inf")
-                else self._count_week_gaps(week_days)
-            )
+            remaining = int(best_remaining)
         else:
             self._restore_from_backup(week_days, cleared_state)
             remaining = self._count_week_gaps(week_days)
 
         self._debug_print(
-            f"[ScheduleVariant] [WeekPerm] exhaustive result {window_label} gaps={remaining}"
+            f"[ScheduleVariant] [WeekPerm] sampled result {window_label} gaps={remaining}"
         )
         return remaining
 

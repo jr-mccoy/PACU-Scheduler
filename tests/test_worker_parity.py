@@ -57,11 +57,15 @@ class _StubVariant:
         self.state.main_assignment_counts = counts
         self.state.backup_assignment_counts = counts.copy()
         self.state.rotation_repeats = 0
+        self.unfillable_slots = frozenset()
 
     # ------------------------------------------------------------------ stubs
     def clone(self):
         self.calls.append("clone")
         return _StubVariant(self.calls)
+
+    def compute_unfillable_slots(self):
+        return self.unfillable_slots
 
     def assign_weekdays(self):
         self.calls.append("assign_weekdays")

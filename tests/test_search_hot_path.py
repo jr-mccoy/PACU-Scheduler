@@ -16,10 +16,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from scheduling_fixtures import build_scheduler, seed_db
+from scheduling_fixtures import build_scheduler, seed_db, weekday_only_variant
 
 import scheduler.evaluation.worker as worker
-from scheduler import SchedulerConfig, ScheduleState, ScheduleVariant, WorkerTuningConfig
+from scheduler import ScheduleVariant, WorkerTuningConfig
 from scheduler.evaluation.worker import _evaluate_variant_core
 
 QUICK = WorkerTuningConfig(
@@ -135,41 +135,9 @@ def test_slot_sequences_only_place_nurses_the_full_check_accepts(tmp_path, monke
 
 
 # ── finding 8: full-period refill keeps improvements ───────────────────────
-def _weekday_only_variant(nurses: list[str], weeks: int = 4) -> ScheduleVariant:
-    days = pd.DatetimeIndex(
-        [
-            pd.Timestamp("2026-01-05") + pd.Timedelta(weeks=w, days=d)
-            for w in range(weeks)
-            for d in range(4)
-        ]
-    )
-    schedule = pd.DataFrame(index=days, columns=["main", "backup", "is_weekend"])
-    schedule["main"] = None
-    schedule["backup"] = None
-    schedule["is_weekend"] = False
-    counts = pd.Series(0, index=pd.Index(nurses))
-
-    class _Nurses:
-        def is_prn_nurse(self, nurse):
-            return False
-
-        def is_late_shift_nurse(self, nurse):
-            return False
-
-    state = ScheduleState(schedule, counts, counts.copy(), {}, {})
-    return ScheduleVariant(
-        state,
-        nurses,
-        pd.DataFrame(True, index=days, columns=nurses),
-        SchedulerConfig(),
-        _Nurses(),
-        console_debug=False,
-    )
-
-
 def test_full_period_refill_keeps_an_improvement_that_misses_the_target():
     nurses = [f"N{i}" for i in range(1, 9)]
-    variant = _weekday_only_variant(nurses)
+    variant = weekday_only_variant(nurses)
     # N8 is never available, so no schedule reaches spreads of (1, 1).
     variant.availability["N8"] = False
     # Start from a lopsided schedule: N1 has every Main, N2 every Backup.
@@ -245,8 +213,8 @@ def test_the_worker_keeps_full_period_improvements_that_miss_the_target(monkeypa
         def iterative_full_period_refill(self, **kwargs):
             received.update(kwargs)
 
-        def _spread_components(self):
-            return (2, 2, 0)  # above the target, so the full-period refill runs
+        def spreads_at_lower_bound(self):
+            return False  # above the bounds, so the full-period refill runs
 
     monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
     _evaluate_variant_core((0, _Variant(), QUICK), with_profiling=False)

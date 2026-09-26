@@ -124,6 +124,8 @@ class VariantSearchContext(Protocol):
     # ----- Spread / quality metrics -----
     def spread_components(self) -> tuple[int, int, int]: ...
 
+    def spreads_at_lower_bound(self) -> bool: ...
+
     def lexi_better(
         self,
         new_tuple: tuple[int, int, int],

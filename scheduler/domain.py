@@ -610,6 +610,30 @@ class BestStateTracker:
         self._plateau_depth = 0
 
 
+def _spread_lower_bound(counts: pd.Series, fixed: dict[str, int], caps: dict[str, int]) -> int:
+    """Proven lower bound on ``max(counts) - min(counts)``.
+
+    ``counts`` sums to the shifts being shared out, and cannot change that
+    total; ``fixed`` and ``caps`` hold each nurse's least and most possible
+    count. See :meth:`ScheduleVariant.spread_lower_bounds`.
+    """
+    n = len(counts)
+    if n == 0:
+        return 0
+    total = int(counts.sum())
+    floor, ceil = total // n, -(-total // n)
+    most_fixed = max(fixed.get(nurse, 0) for nurse in counts.index)
+    least_cap = min(caps.get(nurse, 0) for nurse in counts.index)
+    # max >= ceil and >= most_fixed; min <= floor and <= least_cap.
+    return max(
+        0,
+        int(total % n != 0),
+        most_fixed - floor,
+        ceil - least_cap,
+        most_fixed - least_cap,
+    )
+
+
 class ScheduleState:
     """
     Immutable snapshot that can be cloned for every search-tree branch.
@@ -820,7 +844,104 @@ class ScheduleVariant:
             and not probe._get_eligible_nurses_for_day_gap(day, role, relaxed_spacing=True)
         }
         self.unfillable_slots = frozenset(unfillable)
+        self._spread_bound_inputs_cache = None  # which slots are modifiable changed
         return self.unfillable_slots
+
+    def spread_lower_bounds(self) -> tuple[int, int, int] | None:
+        """The lowest (backup, main, total) spreads any weekday fill can reach.
+
+        None while some fillable weekday slot is empty: filling it changes
+        the totals the bounds are computed from, and fewer gaps outranks any
+        spread. Otherwise each bound is proven, not estimated. For a role
+        with ``T`` shifts over ``n`` nurses, the busiest nurse has at least
+        ``ceil(T / n)`` and at least their fixed shifts (weekends and pinned
+        cells), and the least busy one at most ``floor(T / n)`` and at most
+        the most they could ever be given (fixed shifts, plus the weekly
+        limits applied to the days they are available). A spread of zero
+        needs ``T`` to divide evenly. A search that reaches every bound
+        cannot improve any spread further, so it may stop; one that stops
+        short of them may be leaving a better schedule unfound.
+        """
+        if self._count_fillable_weekday_gaps():
+            return None
+        fixed, caps = self._spread_bound_inputs()
+        mains = self.state.main_assignment_counts
+        backups = self.state.backup_assignment_counts
+        return (
+            _spread_lower_bound(backups, fixed["backup"], caps["backup"]),
+            _spread_lower_bound(mains, fixed["main"], caps["main"]),
+            _spread_lower_bound(mains + backups, fixed["total"], caps["total"]),
+        )
+
+    def spreads_at_lower_bound(self) -> bool:
+        """True when every spread has reached :meth:`spread_lower_bounds`."""
+        bounds = self.spread_lower_bounds()
+        if bounds is None:
+            return False
+        return all(
+            spread <= bound for spread, bound in zip(self._spread_components(), bounds, strict=True)
+        )
+
+    def _spread_bound_inputs(self) -> tuple[dict, dict]:
+        """Per-nurse fixed shifts and most possible shifts, by role (cached).
+
+        A weekday slot is modifiable unless it is pinned or unfillable; every
+        other cell, weekends included, is fixed for the whole weekday search.
+        Within a Mon–Thu week a nurse takes at most one Main and two shifts
+        in all, and only on days they are available.
+        """
+        cached = getattr(self, "_spread_bound_inputs_cache", None)
+        if cached is not None:
+            return cached
+
+        nurses = list(self.state.main_assignment_counts.index)
+        tracked = set(nurses)
+        fixed = {role: dict.fromkeys(nurses, 0) for role in ("main", "backup")}
+        # open_slots[(week, nurse)][role]: modifiable slots that week on days
+        # the nurse is available.
+        open_slots: dict[tuple, dict[str, int]] = {}
+        sched = self.state.schedule
+        weekend = sched["is_weekend"].to_numpy()
+        for pos, day in enumerate(sched.index):
+            week = day - timedelta(days=day.weekday())
+            for role in ("main", "backup"):
+                if (
+                    weekend[pos]
+                    or self._is_pre_scheduled(day, role)
+                    or self.is_unfillable(day, role)
+                ):
+                    nurse = sched.at[day, role]
+                    if nurse in tracked:
+                        fixed[role][nurse] += 1
+                    continue
+                for nurse in nurses:
+                    if self._is_available(nurse, day):
+                        slots = open_slots.setdefault((week, nurse), {"main": 0, "backup": 0})
+                        slots[role] += 1
+
+        caps = {
+            "main": dict(fixed["main"]),
+            "backup": dict(fixed["backup"]),
+            "total": {n: fixed["main"][n] + fixed["backup"][n] for n in nurses},
+        }
+        for (_week, nurse), slots in open_slots.items():
+            caps["main"][nurse] += min(MAX_MAIN_ASSIGNMENTS_PER_WEEK, slots["main"])
+            caps["backup"][nurse] += min(MAX_TOTAL_ASSIGNMENTS_PER_WEEK, slots["backup"])
+            caps["total"][nurse] += min(
+                MAX_TOTAL_ASSIGNMENTS_PER_WEEK, slots["main"] + slots["backup"]
+            )
+        fixed["total"] = {n: fixed["main"][n] + fixed["backup"][n] for n in nurses}
+
+        self._spread_bound_inputs_cache = (fixed, caps)
+        return self._spread_bound_inputs_cache
+
+    def _is_available(self, nurse: str, date: pd.Timestamp) -> bool:
+        """Availability as the eligibility checks read it (missing or NaN is off)."""
+        try:
+            value = self.availability.at[date, nurse]
+        except KeyError:
+            return False
+        return not pd.isna(value) and bool(value)
 
     def slot_orderings(self, slots, limit: int, seed: int):
         """Orderings of ``slots`` for a capped search, yielded lazily.
@@ -2354,7 +2475,7 @@ class ScheduleVariant:
         max_passes: int = 6000,
         time_limit_ms: int = 800000,
         node_limit: int = 8000000,
-        target_spread: tuple[int, int] | None = (1, 1),
+        target_spread: tuple[int, int] | None = None,
         tracker: BestStateTracker | None = None,
     ) -> bool:
         return self.window_optimizer.iterative_window_refill_rebalance(
@@ -2455,7 +2576,7 @@ class ScheduleVariant:
         max_orders: int = 10000,
         per_attempt_time_ms: int = 45000,
         per_attempt_nodes: int = 350000,
-        target_spread: tuple[int, int] = (1, 1),
+        target_spread: tuple[int, int] | None = None,
         required_spread: bool = True,
         tracker: BestStateTracker | None = None,
     ) -> bool:
@@ -2567,12 +2688,6 @@ class ScheduleVariant:
                     best_tuple = new_tuple
                     best_state = self.backup_week_assignments(week_days)
                     improved = True
-
-                if improved and best_tuple[0] <= 1 and best_tuple[1] <= 1:
-                    self._debug_print(
-                        f"[ScheduleVariant] [WeekPerms] friday={friday_label} early-stop perm={idx} mode={mode}"
-                    )
-                    break
 
                 if improved:
                     self._debug_print(

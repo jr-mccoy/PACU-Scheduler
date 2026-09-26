@@ -19,6 +19,8 @@ from scheduler import (
     NurseScheduler,
     PreScheduler,
     SchedulerConfig,
+    ScheduleState,
+    ScheduleVariant,
     WeekendHistory,
     ensure_schema,
 )
@@ -106,4 +108,51 @@ def build_scheduler(db: str, start: str, end: str, **config) -> NurseScheduler:
     )
 
 
-__all__ = ["REGULAR", "ROSTER", "build_scheduler", "seed_db"]
+class _PlainNurses:
+    """Nurse manager for variants built without a database: nobody is PRN or late."""
+
+    def is_prn_nurse(self, nurse: str) -> bool:
+        return False
+
+    def is_late_shift_nurse(self, nurse: str) -> bool:
+        return False
+
+
+def weekday_only_variant(
+    nurses: list[str],
+    weeks: int = 4,
+    *,
+    pre_scheduled: dict | None = None,
+    start: str = "2026-01-05",
+) -> ScheduleVariant:
+    """A variant of Mon–Thu rows only, every nurse available, nothing assigned.
+
+    ``start`` must be a Monday. With no weekends in it, only the weekday rules
+    apply, which keeps exhaustive checks small. ``pre_scheduled`` maps days to
+    ``{"main": name, "backup": name}`` pinned cells.
+    """
+    days = pd.DatetimeIndex(
+        [
+            pd.Timestamp(start) + pd.Timedelta(weeks=w, days=d)
+            for w in range(weeks)
+            for d in range(4)
+        ]
+    )
+    schedule = pd.DataFrame(index=days, columns=["main", "backup", "is_weekend"])
+    schedule["main"] = None
+    schedule["backup"] = None
+    schedule["is_weekend"] = False
+    counts = pd.Series(0, index=pd.Index(nurses))
+    state = ScheduleState(schedule, counts, counts.copy(), {}, {})
+    return ScheduleVariant(
+        state,
+        nurses,
+        pd.DataFrame(True, index=days, columns=nurses),
+        SchedulerConfig(),
+        _PlainNurses(),
+        pre_scheduled=pre_scheduled,
+        console_debug=False,
+    )
+
+
+__all__ = ["REGULAR", "ROSTER", "build_scheduler", "seed_db", "weekday_only_variant"]

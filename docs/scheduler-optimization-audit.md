@@ -3,7 +3,8 @@
 A review of where the scheduling engine spends its time, and of how to make
 it faster **without reducing or pruning the search space**, so that no
 higher-quality schedule becomes harder to find. Line references are to
-commit `1b93337`, the state before step 1 of [the plan](#plan).
+commit `1b93337`, the state before step 1 of [the plan](#plan), unless a
+finding says otherwise.
 
 Each finding says what it costs, how it was measured, and the change it
 needs. There are two kinds:
@@ -42,7 +43,7 @@ lists the ideas that would.
 | 4 | Speedup | Facts fixed once the weekends are fixed are recomputed on every check | Code reading | Open |
 | 5 | Speedup | Weekend generation repeats branch-independent work and clones every child | Measured: 6.5 s for 160 variants | Open |
 | 6 | Speedup | Smaller redundancies: count recalculations, history scans in ranking | Code reading | Open |
-| 7 | Search | Hard-coded (1, 1) spread targets stop the search before it is done | Measured | Open |
+| 7 | Search | Hard-coded (1, 1) spread targets stop the search before it is done | Measured | Fixed |
 | 8 | Search | The full-period refill discards improvements that miss the target | Code reading, test | Fixed |
 | 9 | Search | The rebalance reaches a small, mostly failing slice of each week | Measured | Open |
 | 10 | Search | Neutral (plateau) moves never happen in the rebalance | Code reading, measured | Open |
@@ -221,6 +222,33 @@ example, a role's spread can only be 0 when its slot total divides evenly by
 the nurse count), and stop only when every key reaches its bound. Stopping
 at a proven bound loses nothing, and it can end the search earlier than now.
 
+**Status: Fixed.** `ScheduleVariant.spread_lower_bounds()` gives proven
+lower bounds on the backup, main and total spreads, once no fillable weekday
+slot is empty. For a role with `T` shifts over `n` nurses:
+- the busiest nurse has at least `ceil(T / n)`, and at least their fixed
+  shifts (weekends and pinned cells);
+- the least busy nurse has at most `floor(T / n)`, and at most the most they
+  could ever be given: their fixed shifts plus, for each week, the weekly
+  limits (one Main, two shifts) applied to the open slots on days they are
+  available;
+- a spread of 0 needs `T` to divide evenly.
+
+The window refill and the full-period refill now stop early only when every
+spread reaches its bound, and the worker runs the full-period refill
+whenever they have not. That is what `None` now means for
+`window_refill_target_spread` and `full_period_target_spread`, which are the
+defaults. A `(backup, main)` tuple still gives the old behaviour. The week
+early stop was dead code: the statement after it already stopped at the
+first improvement. It is removed.
+
+On the 8 sampled demo variants, every one now finishes at (1, 1, 0), which
+finding 12 proved optimal. Before, 4 of them finished at (1, 1, 2). Two of
+those four got there by the window refill alone. The other two (variants 5
+and 7) needed the full-period refill, which the old gate never ran, at
+about 6.5 s more each. See [step 2 results](#step-2-results). Tests:
+`tests/test_spread_lower_bounds.py` checks the bounds against every legal
+fill of small instances, and checks where each pass stops.
+
 ### 8. The full-period refill discards improvements that miss the target
 
 **Where.** `scheduler/optimization/window_refill.py:244` (`required_spread`
@@ -323,9 +351,10 @@ that the spreads measure.
 | 0, 2, 3, 6 | (1, 1, 0) | (1, 1, 0) |
 | 1, 4, 5, 7 | **(1, 1, 2)** | **(1, 1, 0)** |
 
-Variants 5 and 7 stayed at 2 even with finding 7's target removed, so the
-current search misses these schedules outright; it doesn't just stop too
-soon.
+Removing only the window-refill target left variants 5 and 7 at 2. They
+reached 0 once step 2 also let the full-period refill run (finding 7). So
+these schedules were found only by the most expensive pass, which the exact
+approach would replace.
 
 **Fix.**
 - **Without a new dependency.** Keep each week's legal fills and run local
@@ -371,7 +400,7 @@ These would save time by pruning, so they are left out:
 
 1. **Findings 1, 2 and 8.** Small and low-risk: 2.0–2.4× faster, identical
    schedules, plus one search fix. *Done.*
-2. **Finding 7**, with computed lower bounds.
+2. **Finding 7**, with computed lower bounds. *Done.*
 3. **Findings 3 and 4**, behind a differential test that compares schedules
    from the old and new code on the demo, blocked-day and relaxed scenarios.
 4. **Findings 9 and 10, or go straight to 12.**
@@ -389,3 +418,24 @@ variants before and after, and require identical schedules.
 | One-day-gap relaxation on | 63.5–85.8 s | 32.2–42.6 s | identical |
 
 Default budgets, four variants evaluating at once on a 4-core container.
+
+### Step 2 results
+
+Evaluation with the proven bounds in place of the (1, 1) targets, against
+step 1 (the same 3 variants per scenario as above):
+
+| Scenario | Step 1 | Step 2 | Final (backup, main, total) spreads |
+|---|---|---|---|
+| Demo roster | 9.9–12.8 s | 13.1–19.4 s | 2 of 3 variants improved to total 0; all at their bounds |
+| Nobody available one Wednesday | 6.3–12.1 s | 6.5–12.2 s | identical schedules, already at their bounds |
+| One-day-gap relaxation on | 32.2–42.6 s | 30.9–41.3 s | identical schedules, already at their bounds |
+| One nurse on two weeks' leave (demo budgets) | 54.6–61.1 s | 54.6–61.0 s | identical schedules; bounds out of reach, so no pass stops early, as before |
+
+The extra time on the demo roster is the full-period refill finding the
+better schedules. Where a variant already reaches its bounds, nothing
+changes. Where it cannot, the passes run to their own limits, as they
+always did when (1, 1) was out of reach. One case is new: a variant within
+(1, 1) but above its bounds now also runs the full-period refill, which it
+used to skip. Under the shipped budgets (800 s per attempt, see the
+README's known limitations) that pass can run long when complete refills
+are hard to find. Steps 3 and 4 make it far cheaper, or replace it.

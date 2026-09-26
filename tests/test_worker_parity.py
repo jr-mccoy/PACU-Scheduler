@@ -83,9 +83,14 @@ class _StubVariant:
         self.calls.append("full_period_refill")
 
     def _spread_components(self):
-        # Returns (s_b, s_m, _) with both spreads at the target so full-period
-        # refill is short-circuited.
         return (1, 1, 0)
+
+    def spread_components(self):
+        return self._spread_components()
+
+    def spreads_at_lower_bound(self):
+        # At the proven bounds, so the full-period refill is short-circuited.
+        return True
 
 
 class _StubTracker:

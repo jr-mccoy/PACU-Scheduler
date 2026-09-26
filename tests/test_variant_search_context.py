@@ -155,6 +155,7 @@ def _make_fake_context():
     fake.inc_assign = inc_assign
     fake.dec_assign = dec_assign
     fake.spread_components = lambda: (0, 0, 0)
+    fake.spreads_at_lower_bound = lambda: True
     fake.lexi_better = lambda new, base: False
     fake.collect_weekday_windows = lambda window_weeks=2: []
     fake.backup_week_assignments = lambda days: None

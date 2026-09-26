@@ -137,16 +137,20 @@ class WindowRefillOptimizer:
         max_passes: int = 6000,
         time_limit_ms: int = 800000,
         node_limit: int = 8000000,
-        target_spread=(1, 1),
+        target_spread=None,
         tracker=None,
     ) -> bool:
+        """Refill sliding windows of weeks while that improves the spreads.
+
+        With ``target_spread`` None the passes stop early only once every
+        spread reaches its proven lower bound
+        (``ctx.spreads_at_lower_bound()``); a ``(backup, main)`` tuple stops
+        them as soon as both spreads are at most those values instead.
+        """
         ctx = self.context
 
         def good_enough() -> bool:
-            if target_spread is None:
-                return False
-            spread_b, spread_m, _ = ctx.spread_components()
-            return spread_b <= target_spread[0] and spread_m <= target_spread[1]
+            return spreads_reached(ctx, target_spread)
 
         created_tracker = tracker is None
         if created_tracker:
@@ -210,11 +214,7 @@ class WindowRefillOptimizer:
 
                 if (ctx.lexi_better(new_tuple, base_tuple)) and (new_gaps <= base_gaps):
                     schedule_changed = True
-                    if (
-                        target_spread is not None
-                        and new_tuple[0] <= target_spread[0]
-                        and new_tuple[1] <= target_spread[1]
-                    ):
+                    if good_enough():
                         target_hit_this_pass = True
                         break
                 else:
@@ -240,10 +240,17 @@ class WindowRefillOptimizer:
         max_orders: int = 10000,
         per_attempt_time_ms: int = 45000,
         per_attempt_nodes: int = 350000,
-        target_spread=(1, 1),
+        target_spread=None,
         required_spread: bool = True,
         tracker=None,
     ) -> bool:
+        """Clear every weekday and refill in several variable orders.
+
+        ``target_spread`` works as in :meth:`iterative_window_refill_rebalance`:
+        None means stop at the proven lower bounds. The first refill that
+        reaches the target is kept; failing that, the lexicographically best
+        refill is kept only when ``required_spread`` is false.
+        """
         ctx = self.context
         created_tracker = tracker is None
         if created_tracker:
@@ -254,8 +261,7 @@ class WindowRefillOptimizer:
             if initial_quality is None:
                 initial_quality = tracker.initialize()
 
-        spread_b, spread_m, _ = ctx.spread_components()
-        if spread_b <= target_spread[0] and spread_m <= target_spread[1]:
+        if spreads_reached(ctx, target_spread):
             return self._finalize_tracker(tracker, initial_quality, True, "FullRefill")
 
         days = ctx.get_all_weekdays()
@@ -294,11 +300,7 @@ class WindowRefillOptimizer:
             new_mask = mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
             new_gaps = int(new_mask.to_numpy().sum())
 
-            if (
-                new_tuple[0] <= target_spread[0]
-                and new_tuple[1] <= target_spread[1]
-                and new_gaps <= base_gaps
-            ):
+            if new_gaps <= base_gaps and spreads_reached(ctx, target_spread):
                 success_rows = ctx.state.schedule.loc[days, ["main", "backup"]].copy()
                 improved = True
                 break
@@ -322,3 +324,15 @@ class WindowRefillOptimizer:
             improved = True
 
         return self._finalize_tracker(tracker, initial_quality, improved, "FullRefill")
+
+
+def spreads_reached(ctx, target_spread) -> bool:
+    """Whether the spreads meet ``target_spread``.
+
+    None means every spread is at its proven lower bound; a ``(backup,
+    main)`` tuple means both spreads are at most those values.
+    """
+    if target_spread is None:
+        return ctx.spreads_at_lower_bound()
+    spread_b, spread_m, _ = ctx.spread_components()
+    return spread_b <= target_spread[0] and spread_m <= target_spread[1]

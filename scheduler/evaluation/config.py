@@ -22,13 +22,17 @@ class WorkerTuningConfig:
     window_refill_max_passes: int = 650
     window_refill_time_limit_ms: int = 800000
     window_refill_node_limit: int = 750000
-    window_refill_target_spread: tuple[int, int] = (1, 1)
+    # None stops the refill passes only once every spread is at its proven
+    # lower bound (ScheduleVariant.spread_lower_bounds). A (backup, main)
+    # tuple stops them as soon as both spreads are at most those values,
+    # which can leave a better schedule unfound.
+    window_refill_target_spread: tuple[int, int] | None = None
     # gen_full_orders produces at most 54 distinct orderings, so a larger
     # value changes nothing; 54 says what the search actually does.
     full_period_max_orders: int = 54
     full_period_per_attempt_time_ms: int = 800000
     full_period_per_attempt_nodes: int = 1500000
-    full_period_target_spread: tuple[int, int] = (1, 1)
+    full_period_target_spread: tuple[int, int] | None = None
 
 
 WORKER_TUNING = WorkerTuningConfig()

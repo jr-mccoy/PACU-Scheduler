@@ -238,7 +238,13 @@ Step 1 of the [optimization audit](docs/scheduler-optimization-audit.md)
 then cut the per-cell work in the rebalance pass without changing a single
 schedule. On the same container, with four variants evaluating at once,
 demo-roster variants went from 24–29 s to 10–13 s, and blocked-Wednesday
-variants from 15–28 s to 6–12 s, with byte-identical results.
+variants from 15–28 s to 6–12 s, with byte-identical results. Step 2
+replaced the fixed "both spreads at most 1" stopping point with proven lower
+bounds (`WorkerTuningConfig.window_refill_target_spread` and
+`full_period_target_spread` default to `None`), so the search keeps going
+while a fairer schedule may still exist. On the demo roster that takes a
+few seconds more on some variants, and on every variant sampled it finds a
+schedule where each nurse works the same total number of shifts.
 
 ### Parallelism
 

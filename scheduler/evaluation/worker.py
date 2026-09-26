@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 
 from ..domain import BestStateTracker
+from ..optimization.window_refill import spreads_reached
 from ..profiling import MetricsCollector
 from ..runtime import _count_main_backup_empties, _count_weekday_gaps
 from .config import WORKER_TUNING
@@ -104,8 +105,7 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                 tracker=tracker,
             )
 
-        s_b, s_m, _ = var._spread_components()
-        if s_b > 1 or s_m > 1:
+        if not spreads_reached(var, tuning.full_period_target_spread):
             with phase_timer("full_period_refill"):
                 var.iterative_full_period_refill(
                     max_orders=tuning.full_period_max_orders,

@@ -126,6 +126,8 @@ class VariantSearchContext(Protocol):
 
     def spreads_at_lower_bound(self) -> bool: ...
 
+    def is_slot_empty(self, date: Any, role: str) -> bool: ...
+
     def lexi_better(
         self,
         new_tuple: tuple[int, int, int],

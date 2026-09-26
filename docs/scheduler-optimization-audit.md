@@ -39,8 +39,8 @@ lists the ideas that would.
 |---|---|---|---|---|
 | 1 | Speedup | Weekday tie-breaker counts are rebuilt through pandas on every domain | Measured: 45% of rebalance | Fixed |
 | 2 | Speedup | Each slot's first domain member is re-checked by `_inc_assign` | Measured: ~10% | Fixed |
-| 3 | Speedup | The hot path reads and writes a pandas DataFrame cell by cell | Measured: `.at` is 45% after 1–2 | Open |
-| 4 | Speedup | Facts fixed once the weekends are fixed are recomputed on every check | Code reading | Open |
+| 3 | Speedup | The hot path reads and writes a pandas DataFrame cell by cell | Measured: `.at` is 45% after 1–2 | Fixed |
+| 4 | Speedup | Facts fixed once the weekends are fixed are recomputed on every check | Code reading | Fixed |
 | 5 | Speedup | Weekend generation repeats branch-independent work and clones every child | Measured: 6.5 s for 160 variants | Open |
 | 6 | Speedup | Smaller redundancies: count recalculations, history scans in ranking | Code reading | Open |
 | 7 | Search | Hard-coded (1, 1) spread targets stop the search before it is done | Measured | Fixed |
@@ -141,6 +141,32 @@ Build the DataFrame only when a result leaves the worker, and keep the
 `VariantSearchContext` interface so the optimizers do not change. Expected
 gain: another 3–5×.
 
+**Status: Fixed**, by a simpler route than the bitmasks, because the lists
+alone removed the pandas cost:
+- **Grid.** `ScheduleState` keeps the Main and Backup cells in a
+  `ScheduleGrid` of plain lists, which every search pass reads and writes.
+  The `schedule` frame stays the public form. Reading it first writes the
+  changed cells back and hands the cells to the frame, so code and tests
+  that read or write the frame directly keep working.
+- **Neighbours.** Spacing and weekly-limit checks find the neighbouring days
+  through cached row positions. These are computed with the same Timestamp
+  arithmetic as before, so a date falls inside the schedule exactly when it
+  did.
+- **Availability.** It is read into plain dicts once per variant (and shared
+  with its clones).
+- **Backups and counts.** Week backups copy grid cells instead of frame
+  slices. The total counts add the two count arrays directly instead of
+  aligning two Series. The domain sort reads plain dicts. Recounting
+  assignments counts over the grid and writes all counts in one step.
+
+Step 3 (with finding 4) made evaluation 7.6–10× faster than step 2, with
+byte-identical schedules on 33 variants across five scenarios (see
+[step 3 results](#step-3-results)). Tests: `tests/test_schedule_grid.py`
+checks the hand-over between grid and frame, clones and pickles, and the
+rewritten spacing and weekly-limit rules. It compares them with the
+frame-based versions on random schedules with weekends, a pinned cell and
+shifts just before the window.
+
 ### 4. Facts fixed once the weekends are fixed are recomputed on every check
 
 **Where.** `_validate_weekday_relative_to_weekend` (`domain.py:1744`) and its
@@ -156,6 +182,14 @@ every check.
 
 **Fix.** Compute a per-(nurse, day) table once, in
 `compute_unfillable_slots` or next to it, and look it up.
+
+**Status: Fixed**, as caches rather than a precomputed table.
+- Each nurse's neighbouring Fridays, which decide the pre- and post-weekend
+  windows and whether the relaxation applies, are cached per (nurse, day).
+- The cache is cleared by everything that edits the Friday lists:
+  `assign_weekend`, the pre-scheduled seeding, and snapshot restores.
+- The `WeekdayConstraintConfig` is built once and rebuilt only when its
+  settings change.
 
 ### 5. Weekend generation repeats branch-independent work and clones every child
 
@@ -403,6 +437,7 @@ These would save time by pruning, so they are left out:
 2. **Finding 7**, with computed lower bounds. *Done.*
 3. **Findings 3 and 4**, behind a differential test that compares schedules
    from the old and new code on the demo, blocked-day and relaxed scenarios.
+   *Done.*
 4. **Findings 9 and 10, or go straight to 12.**
 5. **Finding 5**, then **13**: raise the caps.
 
@@ -439,3 +474,30 @@ always did when (1, 1) was out of reach. One case is new: a variant within
 used to skip. Under the shipped budgets (800 s per attempt, see the
 README's known limitations) that pass can run long when complete refills
 are hard to find. Steps 3 and 4 make it far cheaper, or replace it.
+
+### Step 3 results
+
+Each variant evaluated with default budgets on the step-2 code and on the
+step-3 code, four at a time. The scenarios add a pinned Main and Backup, a
+pinned pair just after the window, and shifts worked just before it
+("edges"), and the midweek-pair spacing settings:
+
+| Scenario (variants) | Step 2 | Step 3 | Speed-up | Schedules |
+|---|---|---|---|---|
+| Demo roster (8) | 8.2–22.1 s | 1.2–2.7 s | 7.8× | identical |
+| Nobody available one Wednesday (8) | 8.1–14.1 s | 1.1–1.9 s | 7.7× | identical |
+| One-day-gap relaxation on (8) | 28.7–40.1 s | 3.6–5.1 s | 7.9× | identical |
+| Midweek-pair relaxations on (8) | 30.3–40.8 s | 4.0–5.4 s | 7.6× | identical |
+| Edges (1) | 133 s | 12.9 s | 10.3× | identical |
+
+Against the code before step 1, the demo roster is now about 10× faster.
+
+The other 7 edge variants did not finish on either version within the
+run's time limit, which led to the [step 2
+follow-up](#step-2-follow-up-bounding-the-extra-refill).
+
+Searches limited by wall time can in principle find more on faster code,
+because they get further within the same limit. None did here: the leave
+scenario, whose full-period refill attempts stop on their time limit, gave
+identical schedules too.
+

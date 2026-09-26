@@ -131,6 +131,7 @@ def _make_fake_context():
     fake.is_empty = lambda v: v is None or v == ""
     fake.is_pre_scheduled = lambda d, r: False
     fake.is_unfillable = lambda d, r: False
+    fake.is_slot_empty = lambda d, r: fake.is_empty(fake.state.schedule.at[d, r])
 
     def eligible_domain(d, r, diagnostics=None, *, force_relaxed=False):
         return ["Alice", "Bob"]

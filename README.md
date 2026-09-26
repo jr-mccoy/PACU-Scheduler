@@ -244,7 +244,10 @@ bounds (`WorkerTuningConfig.window_refill_target_spread` and
 `full_period_target_spread` default to `None`), so the search keeps going
 while a fairer schedule may still exist. On the demo roster that takes a
 few seconds more on some variants, and on every variant sampled it finds a
-schedule where each nurse works the same total number of shifts.
+schedule where each nurse works the same total number of shifts. Step 3
+moved the search's cell reads and writes from the DataFrame to plain Python
+lists, again with byte-identical results: demo-roster variants now take
+1–3 s, and the whole evaluation is 7–10× faster than after step 2.
 
 ### Parallelism
 
@@ -336,13 +339,10 @@ for operator control.
 
 ## Known limitations
 
-- **Evaluation is slow.** A single weekend variant takes on the order of tens
-  of seconds, and a realistic horizon produces hundreds of variants. The cost
-  is concentrated in per-cell pandas lookups (`DataFrame.at`) inside the
-  eligibility and spacing checks, which run millions of times per variant.
-  Making the hot path operate on plain dicts or arrays instead is the obvious
-  next optimization; `docs/scheduler-optimization-audit.md` measures it and
-  the other remaining ones.
+- **Evaluation takes seconds per variant**, and a realistic horizon produces
+  hundreds of variants. The search's inner loop now runs on plain Python
+  lists rather than pandas; `docs/scheduler-optimization-audit.md` measures
+  what remains and how to go further.
 - **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
   the per-attempt time limits are 800 seconds each, multiplied by hundreds of
   passes. They effectively never bind, so run time is governed by how quickly

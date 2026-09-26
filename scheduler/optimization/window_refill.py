@@ -61,7 +61,7 @@ class WindowRefillOptimizer:
                 )
             return False
 
-        unassigned = [(d, r) for (d, r) in vars_list if ctx.is_empty(ctx.state.schedule.at[d, r])]
+        unassigned = [(d, r) for (d, r) in vars_list if ctx.is_slot_empty(d, r)]
         if debug_mode:
             ctx.debug_print(
                 f"[ScheduleVariant] [MRV] enter depth={depth} remaining={len(unassigned)} gap={gap_mode}"
@@ -111,7 +111,7 @@ class WindowRefillOptimizer:
             for _, _, (dayv, rolev) in domains[1:]:
                 if (
                     abs((dayv - day0).days) <= fc_radius
-                    and ctx.is_empty(ctx.state.schedule.at[dayv, rolev])
+                    and ctx.is_slot_empty(dayv, rolev)
                     and not domain_fn(dayv, rolev)
                 ):
                     failed = True

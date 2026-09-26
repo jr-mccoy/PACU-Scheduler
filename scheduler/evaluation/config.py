@@ -33,6 +33,14 @@ class WorkerTuningConfig:
     full_period_per_attempt_time_ms: int = 800000
     full_period_per_attempt_nodes: int = 1500000
     full_period_target_spread: tuple[int, int] | None = None
+    # With proven lower bounds as the target, the full-period refill also
+    # runs when both spreads are already within (1, 1) but above their
+    # bounds, which it never did before. Its attempts can thrash there, and
+    # the budgets above would let them run for hours, so these bound that
+    # extra search: each attempt, and the whole pass. Above (1, 1) the pass
+    # keeps the budgets above, as before.
+    full_period_extra_attempt_time_ms: int = 2_000
+    full_period_extra_time_ms: int = 20_000
 
 
 WORKER_TUNING = WorkerTuningConfig()

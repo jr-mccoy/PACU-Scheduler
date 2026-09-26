@@ -2796,6 +2796,7 @@ class ScheduleVariant:
         target_spread: tuple[int, int] | None = None,
         required_spread: bool = True,
         tracker: BestStateTracker | None = None,
+        total_time_ms: int | None = None,
     ) -> bool:
         return self.window_optimizer.iterative_full_period_refill(
             max_orders=max_orders,
@@ -2804,6 +2805,7 @@ class ScheduleVariant:
             target_spread=target_spread,
             required_spread=required_spread,
             tracker=tracker,
+            total_time_ms=total_time_ms,
         )
 
     def _rebalance_all_weeks(self) -> bool:

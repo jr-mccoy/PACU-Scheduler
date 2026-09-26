@@ -216,6 +216,9 @@ def test_the_worker_keeps_full_period_improvements_that_miss_the_target(monkeypa
         def spreads_at_lower_bound(self):
             return False  # above the bounds, so the full-period refill runs
 
+        def spread_components(self):
+            return (2, 2, 0)
+
     monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
     _evaluate_variant_core((0, _Variant(), QUICK), with_profiling=False)
 

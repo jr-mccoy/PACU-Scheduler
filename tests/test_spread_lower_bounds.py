@@ -8,6 +8,8 @@ legal fill of small instances.
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 from scheduling_fixtures import weekday_only_variant
@@ -147,25 +149,25 @@ def test_window_refill_stops_only_at_the_bound(monkeypatch, at_bound):
     assert bool(searched) is not at_bound
 
 
-@pytest.mark.parametrize("at_bound", [True, False])
-def test_the_worker_runs_the_full_period_refill_until_the_bound(monkeypatch, at_bound):
-    calls = []
+class _Tracker:
+    def __init__(self, variant):
+        pass
 
-    class _Tracker:
-        def __init__(self, variant):
-            pass
+    def initialize(self):
+        return None
 
-        def initialize(self):
-            return None
+    def restore_global_best(self):
+        return None
 
-        def restore_global_best(self):
-            return None
+    def get_global_best_quality(self):
+        return None
 
-        def get_global_best_quality(self):
-            return None
+    def get_statistics(self):
+        return {}
 
-        def get_statistics(self):
-            return {}
+
+def _stub_variant(calls: list, *, spreads, at_bound):
+    """A variant whose passes only record how the worker called them."""
 
     class _Variant:
         nurses = ["A", "B"]
@@ -197,22 +199,70 @@ def test_the_worker_runs_the_full_period_refill_until_the_bound(monkeypatch, at_
             pass
 
         def iterative_window_refill_rebalance(self, **kwargs):
-            calls.append(("window", kwargs["target_spread"]))
+            calls.append(("window", kwargs))
 
         def iterative_full_period_refill(self, **kwargs):
-            calls.append(("full", kwargs["target_spread"]))
+            calls.append(("full", kwargs))
 
         def spread_components(self):
-            return (1, 1, 2)  # within the old (1, 1) target
+            return spreads
 
         def spreads_at_lower_bound(self):
             return at_bound
 
-    monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
-    _evaluate_variant_core((0, _Variant(), WorkerTuningConfig()), with_profiling=False)
+    return _Variant()
 
-    expected = [("window", None)] + ([] if at_bound else [("full", None)])
-    assert calls == expected
+
+@pytest.mark.parametrize("at_bound", [True, False])
+def test_the_worker_runs_the_full_period_refill_until_the_bound(monkeypatch, at_bound):
+    calls = []
+    monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
+    variant = _stub_variant(calls, spreads=(1, 1, 2), at_bound=at_bound)  # within (1, 1)
+    _evaluate_variant_core((0, variant, WorkerTuningConfig()), with_profiling=False)
+
+    assert [(name, kwargs["target_spread"]) for name, kwargs in calls] == [("window", None)] + (
+        [] if at_bound else [("full", None)]
+    )
+
+
+# ── step 2 follow-up: the extra refill is bounded ──────────────────────────
+@pytest.mark.parametrize(
+    ("spreads", "extra"),
+    [((1, 1, 2), True), ((2, 1, 2), False), ((1, 3, 0), False)],
+    ids=["within-1-1", "backup-above-1", "main-above-1"],
+)
+def test_only_the_refill_step_2_added_gets_the_extra_budget(monkeypatch, spreads, extra):
+    calls = []
+    monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
+    tuning = WorkerTuningConfig()
+    variant = _stub_variant(calls, spreads=spreads, at_bound=False)
+    _evaluate_variant_core((0, variant, tuning), with_profiling=False)
+
+    (full,) = [kwargs for name, kwargs in calls if name == "full"]
+    if extra:
+        assert full["per_attempt_time_ms"] == tuning.full_period_extra_attempt_time_ms
+        assert full["total_time_ms"] == tuning.full_period_extra_time_ms
+    else:
+        # Above (1, 1) the pass ran before step 2 too, with these budgets.
+        assert full["per_attempt_time_ms"] == tuning.full_period_per_attempt_time_ms
+        assert full["total_time_ms"] is None
+
+
+def test_the_full_period_refill_stops_at_its_total_time(monkeypatch):
+    variant = weekday_only_variant(NURSES, weeks=4)
+    next(_complete_fills(variant))
+    attempts = []
+
+    def slow_attempt(order, deadline, node_budget):
+        attempts.append(deadline)
+        time.sleep(0.05)
+        return False
+
+    monkeypatch.setattr(variant, "spreads_at_lower_bound", lambda: False)
+    monkeypatch.setattr(variant, "backtrack_full_order", slow_attempt)
+    variant.iterative_full_period_refill(max_orders=54, total_time_ms=120)
+
+    assert 1 <= len(attempts) <= 4  # of up to 54 orders
 
 
 def test_a_fixed_target_still_stops_as_before():

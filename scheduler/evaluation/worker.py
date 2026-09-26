@@ -106,10 +106,18 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
             )
 
         if not spreads_reached(var, tuning.full_period_target_spread):
+            s_b, s_m, _ = var.spread_components()
+            # Within (1, 1) this pass only chases the proven bounds, which it
+            # never ran for before; bound that extra search.
+            extra = s_b <= 1 and s_m <= 1
+            attempt_ms = tuning.full_period_per_attempt_time_ms
+            if extra:
+                attempt_ms = min(attempt_ms, tuning.full_period_extra_attempt_time_ms)
             with phase_timer("full_period_refill"):
                 var.iterative_full_period_refill(
                     max_orders=tuning.full_period_max_orders,
-                    per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
+                    per_attempt_time_ms=attempt_ms,
+                    total_time_ms=tuning.full_period_extra_time_ms if extra else None,
                     per_attempt_nodes=tuning.full_period_per_attempt_nodes,
                     target_spread=tuning.full_period_target_spread,
                     # Keep the best refill even when it misses the target

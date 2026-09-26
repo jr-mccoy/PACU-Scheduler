@@ -243,8 +243,12 @@ class WindowRefillOptimizer:
         target_spread=None,
         required_spread: bool = True,
         tracker=None,
+        total_time_ms: int | None = None,
     ) -> bool:
         """Clear every weekday and refill in several variable orders.
+
+        ``total_time_ms``, when given, bounds the whole pass as well as each
+        attempt; the orders it leaves untried are skipped.
 
         ``target_spread`` works as in :meth:`iterative_window_refill_rebalance`:
         None means stop at the proven lower bounds. The first refill that
@@ -285,8 +289,15 @@ class WindowRefillOptimizer:
         best_tuple = base_tuple
         success_rows = None
 
+        pass_deadline = (
+            None if total_time_ms is None else time.perf_counter() + total_time_ms / 1000.0
+        )
         for order in orders:
             deadline = time.perf_counter() + (per_attempt_time_ms / 1000.0)
+            if pass_deadline is not None:
+                if time.perf_counter() >= pass_deadline:
+                    break
+                deadline = min(deadline, pass_deadline)
             node_budget = [per_attempt_nodes]
             ctx.clear_window_assignments(days)
 

@@ -501,3 +501,35 @@ because they get further within the same limit. None did here: the leave
 scenario, whose full-period refill attempts stop on their time limit, gave
 identical schedules too.
 
+### Step 2 follow-up: bounding the extra refill
+
+Step 2 lets the full-period refill run whenever the spreads are above their
+proven bounds, including when both are already within (1, 1), where it
+never ran before. On a scenario with pinned cells and shifts just outside
+the window, some of its variable orders thrash: chronological backtracking
+through all the weekdays never completes a fill. The shipped budgets (800 s
+per attempt, up to 54 attempts) then let a single variant run for hours.
+The same variant took 2 s under the old (1, 1) rule.
+
+The full-period refill now has two budgets:
+- **Above (1, 1)**, where it always ran, it keeps the shipped budgets.
+- **Within (1, 1) but above the bounds** (the case step 2 added), each
+  attempt gets at most `full_period_extra_attempt_time_ms` (2 s) and the
+  whole pass `full_period_extra_time_ms` (20 s).
+
+So nothing searched before step 2 is cut; only the added search is bounded.
+Successful attempts on these rosters finish in under a second, and the
+attempts that thrash are the ones that hit the limit.
+
+| Scenario (variants) | Before | After |
+|---|---|---|
+| Edges, default budgets (8) | 1 finished in 133 s; 7 still running after 25 min | all 8 in 1.3–22 s: 4 at total spread 0, 4 at 2 (the old rule's result) |
+| Demo sample from finding 7 (8) | all at (1, 1, 0) | all at (1, 1, 0), 1.1–2.5 s each |
+
+Four edge variants stay at total spread 2 after using the whole 20 s. They
+are no worse than under the old rule, but it is not known whether 0 is
+reachable for them. The exact weekday solve (finding 12) would settle it,
+and makes this budget unnecessary. Tests: `tests/test_spread_lower_bounds.py`
+checks which budgets the worker passes, and that the pass stops at its total
+time.
+

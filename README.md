@@ -234,6 +234,12 @@ budgets do not bind, and run time is set by the per-cell work described
 under **Known limitations**. Re-measure on your own hardware before changing
 the defaults.
 
+Step 1 of the [optimization audit](docs/scheduler-optimization-audit.md)
+then cut the per-cell work in the rebalance pass without changing a single
+schedule. On the same container, with four variants evaluating at once,
+demo-roster variants went from 24–29 s to 10–13 s, and blocked-Wednesday
+variants from 15–28 s to 6–12 s, with byte-identical results.
+
 ### Parallelism
 
 Variants are evaluated in a process pool, and evaluation is CPU-bound pure
@@ -329,7 +335,8 @@ for operator control.
   is concentrated in per-cell pandas lookups (`DataFrame.at`) inside the
   eligibility and spacing checks, which run millions of times per variant.
   Making the hot path operate on plain dicts or arrays instead is the obvious
-  next optimization.
+  next optimization; `docs/scheduler-optimization-audit.md` measures it and
+  the other remaining ones.
 - **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
   the per-attempt time limits are 800 seconds each, multiplied by hundreds of
   passes. They effectively never bind, so run time is governed by how quickly
@@ -350,6 +357,9 @@ for operator control.
   conventions adopted, which settings were connected, and what was deferred.
 - [`docs/scheduler-audit.md`](docs/scheduler-audit.md) — logic errors and
   oversights found in the scheduling engine, and the phased plan to fix them.
+- [`docs/scheduler-optimization-audit.md`](docs/scheduler-optimization-audit.md)
+  — where evaluation spends its time, and how to make it faster and find
+  better schedules without pruning the search.
 
 ## License
 

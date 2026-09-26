@@ -1523,6 +1523,16 @@ class ScheduleVariant:
         self, date: pd.Timestamp, role: str, nurse: str, gap_phase: bool = False
     ) -> bool:
         """Assign nurse to schedule and update counters (with relaxed fallback if needed)."""
+        if not self._can_inc_assign(date, role, nurse, gap_phase=gap_phase):
+            return False
+
+        self._place_assignment(date, role, nurse)
+        return True
+
+    def _can_inc_assign(
+        self, date: pd.Timestamp, role: str, nurse: str, *, gap_phase: bool = False
+    ) -> bool:
+        """Whether :meth:`_inc_assign` would place *nurse* in the slot."""
         if self._is_pre_scheduled(date, role):
             return False
 
@@ -1545,9 +1555,14 @@ class ScheduleVariant:
         ):
             ok = check(nurse, date, role, relaxed_spacing=True)
 
-        if not ok:
-            return False
+        return ok
 
+    def _place_assignment(self, date: pd.Timestamp, role: str, nurse: str) -> None:
+        """Write *nurse* into an empty slot and update the counters, unchecked.
+
+        Only for a nurse the caller already knows is eligible for the slot in
+        the current state; :meth:`_inc_assign` checks first.
+        """
         apply_assignment(
             schedule_df=self.state.schedule,
             main_counts=self.state.main_assignment_counts,
@@ -1558,7 +1573,6 @@ class ScheduleVariant:
         )
 
         self._invalidate_weekday_cache()
-        return True
 
     # ────────────────────────────────────────────────────────────────────
     # 4.  ASSIGNMENT REMOVAL (fixes negative counters)
@@ -1857,18 +1871,37 @@ class ScheduleVariant:
         if cached is not None:
             return cached
 
+        # Every assignment clears this cache, so it is rebuilt thousands of
+        # times per variant: count over the weekday's rows directly instead
+        # of filtering the frame and calling value_counts, which cost almost
+        # half of the rebalance pass. Like value_counts, skip only missing
+        # values.
         sched = self.state.schedule
-        sub = sched.loc[~sched["is_weekend"], ["main", "backup"]]
-        sub = sub[sub.index.weekday == weekday]
-        if sub.empty:
-            self._weekday_counts_cache[weekday] = {}
-            return {}
-        m = sub["main"].value_counts()
-        b = sub["backup"].value_counts()
-        counts = m.add(b, fill_value=0).astype(int)
-        result = counts.to_dict()
+        mains = sched["main"].to_numpy()
+        backups = sched["backup"].to_numpy()
+        result: dict[str, int] = {}
+        for pos in self._weekday_row_positions()[weekday]:
+            for nurse in (mains[pos], backups[pos]):
+                if isinstance(nurse, str) or not pd.isna(nurse):
+                    result[nurse] = result.get(nurse, 0) + 1
         self._weekday_counts_cache[weekday] = result
         return result
+
+    def _weekday_row_positions(self) -> dict[int, list[int]]:
+        """Row positions of the Mon–Thu schedule rows, per weekday (cached).
+
+        The schedule's index never changes after construction.
+        """
+        positions = getattr(self, "_weekday_positions_cache", None)
+        if positions is None:
+            sched = self.state.schedule
+            weekend = sched["is_weekend"].to_numpy()
+            positions = {weekday: [] for weekday in (0, 1, 2, 3)}
+            for pos, day in enumerate(sched.index):
+                if day.weekday() in positions and not weekend[pos]:
+                    positions[day.weekday()].append(pos)
+            self._weekday_positions_cache = positions
+        return positions
 
     # ===== SCHEDULE UTILITY METHODS =====
 
@@ -1988,20 +2021,10 @@ class ScheduleVariant:
                     continue
                 return False
 
-            placed = False
-            for nurse in domain:
-                if self._inc_assign(date, role, nurse, gap_phase=gap_mode):
-                    placed = True
-                    break
-
-            if not placed:
-                self._debug_print(
-                    f"[ScheduleVariant] [SlotSeq] fail {date.date()} role={role} gap={gap_mode}"
-                )
-                if allow_partial:
-                    had_failure = True
-                    continue
-                return False
+            # The domain was just built from the current state with the same
+            # rules _inc_assign checks (gap-fill rules in gap mode), so its
+            # first nurse is eligible; re-checking cost a tenth of the pass.
+            self._place_assignment(date, role, domain[0])
 
         if update_state:
             self._recalculate_assignment_counts()

@@ -112,6 +112,9 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                     per_attempt_time_ms=tuning.full_period_per_attempt_time_ms,
                     per_attempt_nodes=tuning.full_period_per_attempt_nodes,
                     target_spread=tuning.full_period_target_spread,
+                    # Keep the best refill even when it misses the target
+                    # spread: the tracker accepts it only if it is better.
+                    required_spread=False,
                     tracker=tracker,
                 )
 

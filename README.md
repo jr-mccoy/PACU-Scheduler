@@ -246,7 +246,7 @@ without the cap against its top options
 (`scheduler.optimization.exhaustive.check_all_weekend_variants`). Bounds
 rule out most variants whatever the ranking weights, and only the ones that
 could still rank in the top are evaluated. It reports any discarded variant
-that would have. On the March 8-nurse roster (2,352 variants) it took 3
+that would have. On the March 8-nurse roster (2,352 variants) it took 2
 minutes where evaluating them all took 22, and confirmed the run's top
 five. On the 10-nurse roster (63,744 variants, about 22 hours to evaluate)
 it took 14 minutes and found five better schedules the cap had discarded.

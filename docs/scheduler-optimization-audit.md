@@ -642,6 +642,9 @@ process now keeps the fills of its 64 most recent situations
 (`exact_weekdays.week_options`), keyed by exactly those inputs plus a
 fingerprint of the run's fixed inputs, so entries never cross runs.
 Simulating the engine's order, about 55% of week listings hit the cache.
+A full 10-nurse March run (1,000 variants, 4 workers) took 19.5 minutes
+with the cache, against 21 and 25 minutes for the two earlier runs, which
+shared the machine with other work part of the time: roughly 8–20% faster.
 Tests compare every cached listing with a fresh one on four scenarios, and
 check that different time off in the same weekends is never shared.
 
@@ -675,7 +678,7 @@ more cheaply from bounds, in
 
 | Roster | Variants | Situations | Ruled out | Can only tie | Evaluated | Better | Time |
 |---|---|---|---|---|---|---|---|
-| March, 8 nurses | 2,352 | 1,462 | 896 | 1,456 | 0 | 0 | 3 min (full evaluation: 22 min) |
+| March, 8 nurses | 2,352 | 1,462 | 896 | 1,456 | 0 | 0 | 2 min after the run (full evaluation: 22 min) |
 | March, 10 nurses (Susan PRN) | 63,744 | 3,806 | 23,232 | 40,496 | 16 | **5** | 14 min after the run (full evaluation: about 22 h) |
 
 **The cap did discard better schedules on the 10-nurse roster.** The

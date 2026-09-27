@@ -132,7 +132,13 @@ def check_all_weekend_variants(
             base_main[vi].tolist(),
             base_backup[vi].tolist(),
             overage_row,
-            [m for m in ("balance", "long_term") if m in weighted],
+            # Only measures whose bound is below some top option's value
+            # can still keep the variant open.
+            [
+                m
+                for m in ("balance", "long_term")
+                if m in weighted and any(bounds[vi][m] < ref[m] for ref in reference)
+            ],
         )
         for vi in to_solve
     ]

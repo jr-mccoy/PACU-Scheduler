@@ -42,12 +42,12 @@ lists the ideas that would.
 | 3 | Speedup | The hot path reads and writes a pandas DataFrame cell by cell | Measured: `.at` is 45% after 1–2 | Fixed |
 | 4 | Speedup | Facts fixed once the weekends are fixed are recomputed on every check | Code reading | Fixed |
 | 5 | Speedup | Weekend generation repeats branch-independent work and clones every child | Measured: 6.5 s for 160 variants | Fixed |
-| 6 | Speedup | Smaller redundancies: count recalculations, history scans in ranking | Code reading | Open |
+| 6 | Speedup | Smaller redundancies: count recalculations, history scans in ranking | Measured: ~1.5 s per 1,000 candidates | Won't fix |
 | 7 | Search | Hard-coded (1, 1) spread targets stop the search before it is done | Measured | Fixed |
 | 8 | Search | The full-period refill discards improvements that miss the target | Code reading, test | Fixed |
-| 9 | Search | The rebalance reaches a small, mostly failing slice of each week | Measured | Open |
-| 10 | Search | Neutral (plateau) moves never happen in the rebalance | Code reading, measured | Open |
-| 11 | Search | The window refill keeps the first completion it finds, not the best | Code reading | Open |
+| 9 | Search | The rebalance reaches a small, mostly failing slice of each week | Measured | Superseded by 12 |
+| 10 | Search | Neutral (plateau) moves never happen in the rebalance | Code reading, measured | Superseded by 12 |
+| 11 | Search | The window refill keeps the first completion it finds, not the best | Code reading | Superseded by 12 |
 | 12 | Search | Weeks are independent; the weekday problem can be solved exactly | Measured | Fixed |
 | 13 | Search | Spend the time saved on the caps that do cut the search | — | Open |
 
@@ -264,6 +264,12 @@ check catches mutations that the generation scenarios do not.
   manager, history). A pool initializer could ship it once per worker. This
   is minor at 8 nurses.
 
+**Status: Won't fix, measured.** With the exact weekday solve the first
+item only affects the fallback search. On the March roster (10 nurses) the
+whole ranking of 1,000 candidates takes about 1.5 s (weekend gap penalty
+1.0 s, same-weekday repeats 0.4 s, rotation score 0.1 s) against about
+20 minutes of evaluation, and pickling is similarly small.
+
 ## Search fixes
 
 ### 7. Hard-coded (1, 1) spread targets stop the search before it is done
@@ -363,6 +369,12 @@ best completion (under a node budget as a safety net), and apply the best
 rather than the first improvement. Every fill the sampled orderings could
 produce is among them, so this can only do better.
 
+**Status: Superseded by finding 12.** The exact weekday solve lists every
+legal fill of every week, which is the fix proposed here, taken all the way.
+The rebalance now runs only when the exact solve steps aside (OR-Tools
+missing, spacing of 4 or more days, or too many fills in a week), so it is
+left as it is.
+
 ### 10. Neutral (plateau) moves never happen in the rebalance
 
 **Where.** `scheduler/domain.py:2540` (a week change needs a strict spread
@@ -381,6 +393,9 @@ minimum. It never trades against a primary key; it only gives the search a
 slope across ties. Then allow sideways moves, keeping the best schedule so
 far as the tracker already does.
 
+**Status: Superseded by finding 12.** The exact solve has no plateaus to
+cross; this affects only the fallback search.
+
 ### 11. The window refill keeps the first completion it finds, not the best
 
 **Where.** `scheduler/optimization/window_refill.py:198`, `:211`.
@@ -392,6 +407,10 @@ better, are never looked at.
 
 **Fix.** Keep searching after the first completion, within the node budget,
 and keep the best.
+
+**Status: Superseded by finding 12.** The exact solve compares every fill;
+this affects only the fallback search, whose refill passes now also have
+total budgets.
 
 ### 12. Weeks are independent; the weekday problem can be solved exactly
 

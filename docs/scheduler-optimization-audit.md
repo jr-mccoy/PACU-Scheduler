@@ -759,10 +759,38 @@ prove its second key (the larger spread) within its 20 s limit, and so
 never minimized the later keys; the month model solved the same weekdays
 at once. The March runs proved every variant optimal, so this is rare.
 
-Not modelled yet: the one-day spacing relaxation, allowing rotation
-repeats (the fallback when strict alternation has no solution), and a PRN
-nurse pinned into a weekend. `month_model.unsupported` says so, and
-`solve_month` returns nothing.
+**Now the default engine.** `NurseScheduler.run_generation`, which the
+GUI, the CLI and `generate_schedule()` share, solves with the month model
+(`SchedulerConfig.engine = "month"`, the `scheduling_engine` setting) and
+falls back to the weekend-variant pipeline when the model cannot be used:
+OR-Tools missing, a PRN nurse pinned into a weekend, no month within the
+time limit without a proof that none exists, a model failure, or a month
+that fails `replay`. Profiling runs use the pipeline, which is what they
+measure. The months are ranked with the pipeline's ranking, so options,
+scores and weights read the same either way.
+
+Two rules were added for that:
+- **Relaxed rotation.** When repeats are allowed (after the app asks, as
+  before), the nurses allowed to repeat (everyone, when none are listed)
+  may work a pattern twice in a row; repeats are counted and minimized
+  first. The variant pipeline allows a repeat only on a weekend a branch
+  could not staff otherwise, weekend by weekend; the model takes the fewest
+  repeats over the whole month, which is never more. Tests check that it
+  allows every arrangement the generator does, that strict alternation is
+  proven impossible where it is, and that only the allowed nurses repeat.
+- **The one-day gap.** Shifts closer than the spacing by one day (Mon–Wed,
+  Tue–Thu at 2-day spacing) are allowed only on days away from the nurse's
+  own weekends, for the role pairs the settings allow, and are counted and
+  minimized right after unfilled slots, so they are a coverage fallback as
+  in the exact weekday solve. `replay` re-checks every shift with the
+  relaxed rules and every other shift in place, as the exact solve does.
+
+The tie-breakers (Tuesday exceptions, same-weekday repeats) each get at most
+10 s to prove; on one small roster proving the exceptions key took up to
+90 s while every other key took under 3 s. A month is marked optimal when
+every other key is proven.
+
+Still not modelled: a PRN nurse pinned into a weekend (the pipeline runs).
 
 ## Excluded on purpose
 

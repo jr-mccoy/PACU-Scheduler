@@ -29,6 +29,7 @@ from .settings_support import (
     WEIGHTS_HELP,
     add_restore_defaults,
     apply_tooltips,
+    engine_combo,
     is_valid_accent,
     load_values,
     validate_and_accept,
@@ -115,12 +116,14 @@ class SettingsDialog(ToolDialog):
         self.variant_cap.setSpecialValueText("Unlimited")
         self.variant_cap.setSingleStep(100)
         self.variant_cap.setGroupSeparatorShown(True)
+        self.engine_combo = engine_combo()
         for r, (label, w) in enumerate(
             [
                 ("Minimum days between weekends:", self.weekend_gap),
                 ("Days off between weekday shifts:", self.min_between),
                 ("Fairness history window:", self.hist_window),
                 ("History to load:", self.hist_duration),
+                ("Scheduling engine:", self.engine_combo),
                 ("Weekend variants to evaluate:", self.variant_cap),
             ]
         ):
@@ -251,6 +254,7 @@ class SettingsDialog(ToolDialog):
             "history_window_days": self.hist_window.value(),
             "history_duration_months": self.hist_duration.value(),
             "max_weekend_variants": self.variant_cap.value(),
+            "scheduling_engine": self.engine_combo.currentData() or "month",
             "measure_phase_times": self.measure_chk.isChecked(),
             "analyse_initial_weekday_gaps": self.analyse_chk.isChecked(),
             "gap_report_file": self.gap_file.text().strip() or "weekday_gap_report.txt",

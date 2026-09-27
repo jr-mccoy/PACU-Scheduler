@@ -78,8 +78,12 @@ def test_the_run_says_when_the_beam_cut_the_search(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "ProcessPoolExecutor", ThreadPoolExecutor)
     db = seed_db(tmp_path)
 
-    capped = build_scheduler(db, START, "2026-11-15", max_weekend_variants=5).run_generation()
-    uncapped = build_scheduler(db, START, "2026-11-15", max_weekend_variants=0).run_generation()
+    capped = build_scheduler(
+        db, START, "2026-11-15", max_weekend_variants=5, engine="variants"
+    ).run_generation()
+    uncapped = build_scheduler(
+        db, START, "2026-11-15", max_weekend_variants=0, engine="variants"
+    ).run_generation()
 
     assert capped.search_capped and len(capped.candidates) == 5
     assert not uncapped.search_capped and len(uncapped.candidates) > 5

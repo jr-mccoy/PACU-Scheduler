@@ -11,7 +11,7 @@ def _crash():
 
 
 def test_generation_reports_a_crash_as_an_error(tmp_path, monkeypatch):
-    scheduler = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-29")
+    scheduler = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-29", engine="variants")
     monkeypatch.setattr(scheduler, "_get_weekends", _crash)
 
     result = scheduler.generate_weekend_candidates()
@@ -21,7 +21,7 @@ def test_generation_reports_a_crash_as_an_error(tmp_path, monkeypatch):
 
 
 def test_generate_schedule_raises_on_a_crash_without_offering_relaxation(tmp_path, monkeypatch):
-    scheduler = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-29")
+    scheduler = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-29", engine="variants")
     monkeypatch.setattr(scheduler, "_get_weekends", _crash)
     asked = []
 

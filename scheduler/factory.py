@@ -164,6 +164,12 @@ def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
         # Settings persisted before this knob existed fall back to the
         # SchedulerConfig default.
         max_weekend_variants = None
+    try:
+        engine = settings.get("scheduling_engine") or "month"
+    except KeyError:
+        engine = "month"
+    if engine not in ("month", "variants"):
+        engine = "month"
     return SchedulerConfig(
         weekend_gap_days=settings.get("weekend_gap_days"),
         main_score_factor=settings.get("main_score_factor"),
@@ -179,6 +185,7 @@ def build_scheduler_config_from_settings(settings) -> SchedulerConfig:
         allow_midweek_pair_mixed=settings.get("allow_midweek_pair_mixed"),
         scoring_weights=settings.get("scoring_weights"),
         max_weekend_variants=max_weekend_variants,
+        engine=engine,
     )
 
 

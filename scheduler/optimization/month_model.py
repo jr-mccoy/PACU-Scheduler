@@ -43,6 +43,7 @@ allowing rotation repeats, and a PRN nurse pinned into a weekend.
 from __future__ import annotations
 
 import itertools
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -72,6 +73,7 @@ WEEKEND_CELLS = {
 MONTH_ORDER = (
     "rotation",
     "gaps",
+    "relaxed",
     "rot_viol",
     "weekend_gap",
     "balance",
@@ -81,16 +83,20 @@ MONTH_ORDER = (
     "exceptions",
     "repeats",
 )
+# Tie-breakers: each gets at most TIE_BREAKER_S; if not proven by then, the
+# best found is kept (the month's other measures are still proven).
+TIE_BREAKERS = frozenset({"exceptions", "repeats"})
+TIE_BREAKER_S = 10.0
 # The exact weekday solve's order, for comparing with it.
-WEEKDAY_ORDER = ("gaps", "balance", "larger", "total", "exceptions", "long_term")
+WEEKDAY_ORDER = ("gaps", "relaxed", "balance", "larger", "total", "exceptions", "long_term")
 
 
 @dataclass
 class MonthSolution:
     weekends: dict  # friday -> (fsf, sfs)
     weekdays: dict  # (day, role) -> nurse, the modifiable weekday cells only
-    values: dict  # objective key -> value
-    optimal: bool
+    values: dict  # key -> value, for the keys proven optimal (replay() gives all)
+    optimal: bool  # every key but the tie-breakers proven optimal
     seconds: float
     status: list = field(default_factory=list)
 
@@ -112,8 +118,10 @@ def root_variant(scheduler) -> ScheduleVariant:
 
 def unsupported(scheduler) -> str | None:
     """Why the model cannot represent this scheduler's rules, or None."""
-    if scheduler.config.one_day_gap_enabled:
-        return "the one-day spacing relaxation is not modelled"
+    try:
+        import ortools.sat.python.cp_model  # noqa: F401
+    except ImportError:
+        return "OR-Tools is not installed"
     nurses = set(scheduler.nurses)
     for roles in scheduler._get_pre_scheduled_weekend_assignments().values():
         for nurse in (roles or {}).values():
@@ -128,27 +136,77 @@ def solve_month(
     top_n: int = 1,
     order=MONTH_ORDER,
     fixed_weekends: dict | None = None,
+    allow_rotation_violations: bool = False,
     time_limit_s: float = 600.0,
     workers: int = 8,
     log: bool = False,
+    is_cancelled=None,
+    on_month=None,
 ) -> list[MonthSolution]:
-    """The best ``top_n`` months, each with different weekends."""
+    """The best ``top_n`` months, each with different weekends.
+
+    With ``allow_rotation_violations`` a nurse the scheduler allows to
+    repeat (``nurses_allowed_rotation_violation``, or anyone when that is
+    empty) may work the same pattern twice in a row; repeats are counted
+    and minimized first. ``is_cancelled()`` is polled while solving;
+    ``on_month(number)`` is called as each month is found. The result is
+    shorter than ``top_n`` when fewer months exist, or time or a
+    cancellation ran out: see :func:`solve_month_status` for which.
+    """
+    return solve_month_status(
+        scheduler,
+        top_n=top_n,
+        order=order,
+        fixed_weekends=fixed_weekends,
+        allow_rotation_violations=allow_rotation_violations,
+        time_limit_s=time_limit_s,
+        workers=workers,
+        log=log,
+        is_cancelled=is_cancelled,
+        on_month=on_month,
+    )[1]
+
+
+def solve_month_status(
+    scheduler,
+    *,
+    top_n: int = 1,
+    order=MONTH_ORDER,
+    fixed_weekends: dict | None = None,
+    allow_rotation_violations: bool = False,
+    time_limit_s: float = 600.0,
+    workers: int = 8,
+    log: bool = False,
+    is_cancelled=None,
+    on_month=None,
+) -> tuple[str, list[MonthSolution]]:
+    """:func:`solve_month`, and how it ended.
+
+    The status is ``"ok"`` (``top_n`` months, or every month there is),
+    ``"infeasible"`` (no month satisfies the rules: proven),
+    ``"unsupported"``, ``"cancelled"``, or ``"unknown"`` (time ran out
+    before the first month was found).
+    """
     if unsupported(scheduler):
-        return []
+        return "unsupported", []
     solutions: list[MonthSolution] = []
     excluded: list[dict] = []
     for _ in range(top_n):
-        built = _Model(scheduler, fixed_weekends, excluded)
-        found = built.solve(order, time_limit_s, workers, log)
-        if found is None:
-            break
+        built = _Model(scheduler, fixed_weekends, excluded, allow_rotation_violations)
+        found = built.solve(order, time_limit_s, workers, log, is_cancelled)
+        if isinstance(found, str):
+            if solutions and found == "infeasible":
+                return "ok", solutions  # every month there is
+            return (found if not solutions or found == "cancelled" else "ok"), solutions
         solutions.append(found)
         excluded.append(found.weekends)
-    return solutions
+        if on_month is not None:
+            on_month(len(solutions))
+    return "ok", solutions
 
 
 class _Model:
-    def __init__(self, scheduler, fixed_weekends, excluded):
+    def __init__(self, scheduler, fixed_weekends, excluded, allow_rotation_violations=False):
         from ortools.sat.python import cp_model
 
         self.cp = cp_model
@@ -221,9 +279,14 @@ class _Model:
                         continue
                     model.Add(self.work[f1, n] + self.work[f2, n] <= 1)
 
-        # Strict alternation; a pinned weekend may repeat (counted).
+        # Strict alternation. A pinned weekend may repeat, and with repeats
+        # allowed so may the nurses allowed to (anyone, when none are
+        # listed): those repeats are counted instead.
         last = dict(root.state.last_pattern)
         self.violations = []  # (indicator, nurse)
+        may_repeat = set()
+        if allow_rotation_violations:
+            may_repeat = set(scheduler.nurses_allowed_rotation_violation) or set(nurses)
         for li, f2 in enumerate(self.fridays):
             for n in nurses:
                 before = [self.work[f, n] for f in self.fridays[:li]]
@@ -236,7 +299,7 @@ class _Model:
                         exprs.append(table[f1, n] - sum(between))
                     if not exprs:
                         continue
-                    if self.pinned_weekend.get((f2, n)) == pattern:
+                    if self.pinned_weekend.get((f2, n)) == pattern or n in may_repeat:
                         v = model.NewBoolVar("")
                         for e in exprs:
                             model.Add(v >= e + table[f2, n] - 1)
@@ -305,27 +368,107 @@ class _Model:
                 if cells:
                     self.x_day[d, n] = sum(cells)
 
-        # Spacing, against every shift within reach (and just outside the window).
+        # A nurse's neighbouring weekends are the month's weekends they work
+        # plus fixed ones (history, recorded, pinned cuts).
+        static_fridays = {
+            n: set(root.state.nurse_weekend_lists.get(n, [])) - set(self.fridays) for n in nurses
+        }
+
+        def neighbour(friday, n):
+            if friday in static_fridays[n]:
+                return 1
+            if friday in self.fridays:
+                return self.work[friday, n]
+            return 0
+
+        def around(d, n):
+            """(weekend before, weekend after) *d* that *n* works: 0/1 or expressions."""
+            weekday = d.weekday()
+            return (
+                neighbour(d - timedelta(days=weekday + 3), n),
+                neighbour(d + timedelta(days=4 - weekday), n),
+            )
+
+        # Spacing, against every shift within reach (and just outside the
+        # window). With the one-day gap on, shifts at the outer distance
+        # (Mon–Wed, Tue–Thu at 2-day spacing) are a relaxation: allowed only
+        # on days away from the nurse's own weekends
+        # (_weekday_relaxation_applicable), both days when both are placed
+        # here (the exact solve re-checks every placed shift), for the role
+        # pairs the settings allow, and counted.
         spacing = int(cfg.min_days_between_assignments)
+        relax = bool(cfg.one_day_gap_enabled)
+        hard = max(1, spacing - 1) if relax else spacing
+        master = bool(cfg.allow_one_day_weekday_gap)
+        self.relaxations = []
+
+        def use_relaxation(days_and_nurse):
+            r = model.NewBoolVar("")
+            for day, nurse in days_and_nurse:
+                before, after = around(day, nurse)
+                for side in (before, after):
+                    if isinstance(side, int):
+                        if side:
+                            model.Add(r == 0)
+                    else:
+                        model.Add(r + side <= 1)
+            self.relaxations.append(r)
+            return r
+
+        def role_of(day, n, role):
+            return self.x.get((day, role, n))
+
         for (d, n), xd in self.x_day.items():
             outside = root._worked_outside_window(n)
             for gap in range(1, spacing + 1):
+                relaxed_band = gap > hard
                 for other in (d - timedelta(days=gap), d + timedelta(days=gap)):
                     if other not in index:
                         if other in outside:
-                            model.Add(xd == 0)
-                        continue
-                    if other > d and (other, n) in self.x_day:
-                        model.Add(xd + self.x_day[other, n] <= 1)  # once per weekday pair
+                            if relaxed_band and master:
+                                model.Add(xd <= use_relaxation([(d, n)]))
+                            else:
+                                model.Add(xd == 0)
                         continue
                     if (other, n) in self.x_day:
+                        if other < d:
+                            continue  # once per weekday pair
+                        xo = self.x_day[other, n]
+                        if not relaxed_band:
+                            model.Add(xd + xo <= 1)
+                            continue
+                        r = use_relaxation([(d, n), (other, n)])
+                        model.Add(xd + xo <= 1 + r)
+                        if not master:
+                            for ra, rb in itertools.product(ROLES, ROLES):
+                                if not cfg.one_day_gap_allows_roles(ra, rb):
+                                    a, b = role_of(d, n, ra), role_of(other, n, rb)
+                                    if a is not None and b is not None:
+                                        model.Add(a + b <= 1)
                         continue
                     w = works(other, n)
+                    if not relaxed_band:
+                        if isinstance(w, int):
+                            if w:
+                                model.Add(xd == 0)
+                        else:
+                            model.Add(xd + w <= 1)
+                        continue
+                    if isinstance(w, int) and not w:
+                        continue
+                    r = use_relaxation([(d, n)])
                     if isinstance(w, int):
-                        if w:
-                            model.Add(xd == 0)
+                        model.Add(xd <= r)
                     else:
-                        model.Add(xd + w <= 1)
+                        model.Add(xd + w <= 1 + r)
+                    if not master and other not in generated_days:
+                        # A pinned shift: its role is known.
+                        for rb in ROLES:
+                            if (other, rb) not in slot_set and pinned(other, rb) == n:
+                                for ra in ROLES:
+                                    a = role_of(d, n, ra)
+                                    if a is not None and not cfg.one_day_gap_allows_roles(ra, rb):
+                                        model.Add(a == 0)
 
         # Weekly limits (Mon–Thu).
         for week in root.get_weeks():
@@ -350,11 +493,7 @@ class _Model:
                 elif alls:
                     model.Add(sum(alls) + pin_total <= MAX_TOTAL_ASSIGNMENTS_PER_WEEK)
 
-        # Weekend windows. A nurse's neighbouring weekends are the month's
-        # weekends they work plus fixed ones (history, recorded, pinned cuts).
-        static_fridays = {
-            n: set(root.state.nurse_weekend_lists.get(n, [])) - set(self.fridays) for n in nurses
-        }
+        # Weekend windows.
         post = root._weekday_constraint_config()
         self.exceptions = []
         for (d, r, n), var in self.x.items():
@@ -370,21 +509,14 @@ class _Model:
                 else post.allow_post_weekend_thursday_backup,
             }.get(weekday, False)
 
-            def neighbour(friday, n=n):
-                if friday in static_fridays[n]:
-                    return 1
-                if friday in self.fridays:
-                    return self.work[friday, n]
-                return 0
-
-            after = neighbour(prev_f)
+            after = neighbour(prev_f, n)
             if not allowed_after:
                 if isinstance(after, int):
                     if after:
                         model.Add(var == 0)
                 else:
                     model.Add(var + after <= 1)
-            ahead = neighbour(next_f)
+            ahead = neighbour(next_f, n)
             if weekday in (2, 3):
                 if isinstance(ahead, int):
                     if ahead:
@@ -483,6 +615,7 @@ class _Model:
         self.keys = {
             "rotation": rot,
             "gaps": gaps,
+            "relaxed": sum(self.relaxations) if self.relaxations else 0,
             "rot_viol": rot_viol,
             "weekend_gap": self._weekend_gap_penalty(start),
             "balance": sb + sm,
@@ -599,7 +732,8 @@ class _Model:
         extend([], 0)
         return subsets
 
-    def solve(self, order, time_limit_s, workers, log):
+    def solve(self, order, time_limit_s, workers, log, is_cancelled=None):
+        """A :class:`MonthSolution`, or "infeasible", "unknown" or "cancelled"."""
         cp = self.cp
         model = self.m
         solver = cp.CpSolver()
@@ -611,53 +745,107 @@ class _Model:
         solver.parameters.log_search_progress = log
         began = time.perf_counter()
         deadline = began + time_limit_s
-        values, status_names, optimal = {}, [], True
-        for key in order:
-            expr = self.keys[key]
-            if isinstance(expr, int):
-                values[key] = expr
-                continue
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                optimal = False
-                break
-            solver.parameters.max_time_in_seconds = remaining
-            model.Minimize(expr)
-            status = solver.Solve(model)
-            status_names.append((key, solver.StatusName(status), round(solver.WallTime(), 2)))
-            if status not in (cp.OPTIMAL, cp.FEASIBLE):
-                if not values:
-                    return None
-                optimal = False
-                break
-            value = int(round(solver.ObjectiveValue()))
-            values[key] = value
-            if status != cp.OPTIMAL:
-                optimal = False
-            model.Add(expr == value)
-            model.ClearHints()
-            for i in range(len(model.Proto().variables)):
-                var = model.GetIntVarFromProtoIndex(i)
-                model.AddHint(var, solver.Value(var))
+        stop = threading.Event()
+        cancelled = [False]
+
+        def watch():
+            while not stop.wait(0.2):
+                if is_cancelled():
+                    cancelled[0] = True
+                    solver.StopSearch()
+                    return
+
+        watcher = None
+        if is_cancelled is not None:
+            watcher = threading.Thread(target=watch, daemon=True)
+            watcher.start()
+        exprs = {k: v for k, v in self.keys.items() if not isinstance(v, int)}
+        snapshot = None  # the cells of the last solution found
+        proven: dict = {}  # keys minimized to proven optimality, and their values
+        status_names, optimal = [], True
+        try:
+            for key in order:
+                expr = self.keys[key]
+                if isinstance(expr, int):
+                    continue
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0 or cancelled[0]:
+                    optimal = False
+                    break
+                tie_breaker = key in TIE_BREAKERS
+                solver.parameters.max_time_in_seconds = (
+                    min(remaining, TIE_BREAKER_S) if tie_breaker else remaining
+                )
+                model.Minimize(expr)
+                status = solver.Solve(model)
+                status_names.append((key, solver.StatusName(status), round(solver.WallTime(), 2)))
+                if cancelled[0]:
+                    return "cancelled"
+                if status == cp.INFEASIBLE and snapshot is None:
+                    return "infeasible"
+                if status not in (cp.OPTIMAL, cp.FEASIBLE):
+                    if tie_breaker and snapshot is not None:
+                        continue  # keep the month found so far
+                    optimal = False
+                    break
+                snapshot = self._snapshot(solver, exprs)
+                if status != cp.OPTIMAL:
+                    if tie_breaker:
+                        # Keep this one's best, and go on to the next.
+                        model.Add(expr <= int(round(solver.ObjectiveValue())))
+                        self._hint(solver)
+                        continue
+                    optimal = False
+                    break
+                value = snapshot[0][key]
+                proven[key] = value
+                model.Add(expr == value)
+                self._hint(solver)
+        finally:
+            stop.set()
+        if snapshot is None:
+            return "cancelled" if cancelled[0] else "unknown"
+        _values, weekends, weekdays = snapshot
+        # Only keys minimized to optimality have tight values (a spread's
+        # high and low marks are free otherwise); replay() gives them all.
+        values = {k: v for k, v in self.keys.items() if isinstance(v, int)}
+        values.update(proven)
+        values = {k: values[k] for k in self.keys if k in values}
+        return MonthSolution(
+            weekends, weekdays, values, optimal, time.perf_counter() - began, status_names
+        )
+
+    def _hint(self, solver):
+        """Start the next solve from the solution just found."""
+        model = self.m
+        model.ClearHints()
+        for i in range(len(model.Proto().variables)):
+            var = model.GetIntVarFromProtoIndex(i)
+            model.AddHint(var, solver.Value(var))
+
+    def _snapshot(self, solver, exprs):
+        values = {k: int(round(solver.Value(e))) for k, e in exprs.items()}
         weekends = {}
         for f in self.fridays:
             a = next(n for n in self.nurses if solver.BooleanValue(self.fsf[f, n]))
             b = next(n for n in self.nurses if solver.BooleanValue(self.sfs[f, n]))
             weekends[f] = (a, b)
         weekdays = {(d, r): n for (d, r, n), v in self.x.items() if solver.BooleanValue(v)}
-        return MonthSolution(
-            weekends, weekdays, values, optimal, time.perf_counter() - began, status_names
-        )
+        return values, weekends, weekdays
 
 
 # ── replay through the scheduler's own checks ─────────────────────────────
-def replay(scheduler, solution: MonthSolution):
+def replay(scheduler, solution: MonthSolution, *, allow_rotation_violations: bool = False):
     """Place *solution* with the scheduler's checks.
 
+    Each weekend pair must be one weekend generation allows at that point
+    (with repeats only for nurses allowed to, when *allow_rotation_violations*),
+    and each weekday shift must pass the gap-filling rules with every other
+    shift in place (with the one-day gap when it is on), as the exact weekday
+    solve re-checks its fills.
+
     Returns the variant, its measures (the ``MONTH_ORDER`` keys) and the
-    per-nurse counts. Raises ValueError when a weekend pair is not one the
-    generator allows at that point, or a weekday shift fails the
-    gap-filling rules.
+    per-nurse counts. Raises ValueError when a rule is broken.
     """
     from scheduler.scoring import weekday_repeats
 
@@ -666,23 +854,30 @@ def replay(scheduler, solution: MonthSolution):
     v = root.clone()
     for f in scheduler._get_weekends():
         fsf, sfs = solution.weekends[f]
-        pairs = scheduler._get_valid_nurse_pairs(
-            f,
-            v.state.last_pattern,
-            pre.get(f, {}),
-            v.state.weekend_tracking,
-            schedule=v.state.schedule,
-            all_pre_scheduled_weekends=pre,
-            enforce_rotation=True,
-        )
-        if (fsf, sfs) not in pairs:
+        common = dict(schedule=v.state.schedule, all_pre_scheduled_weekends=pre)
+        args = (f, v.state.last_pattern, pre.get(f, {}), v.state.weekend_tracking)
+        allowed = scheduler._get_valid_nurse_pairs(*args, enforce_rotation=True, **common)
+        if (fsf, sfs) not in allowed and allow_rotation_violations:
+            allowed = scheduler._get_valid_nurse_pairs(
+                *args,
+                enforce_rotation=False,
+                nurses_allowed_rotation_violation=scheduler.nurses_allowed_rotation_violation,
+                **common,
+            )
+        if (fsf, sfs) not in allowed:
             raise ValueError(f"weekend {f.date()}: ({fsf}, {sfs}) is not allowed there")
         v.assign_weekend(f, fsf, sfs)
     v.compute_unfillable_slots()
     for (d, r), n in sorted(solution.weekdays.items()):
-        if n not in v.get_eligible_nurses_for_day_gap(d, r, log=False):
-            raise ValueError(f"{d.date()} {r}: {n} is not allowed there")
         v.place_assignment(d, r, n)
+    relax = bool(scheduler.config.one_day_gap_enabled)
+    grid = v.state.grid()
+    for (d, r), n in sorted(solution.weekdays.items()):
+        grid.set(d, r, None)
+        ok = n in v.get_eligible_nurses_for_day_gap(d, r, relaxed_spacing=relax, log=False)
+        grid.set(d, r, n)
+        if not ok:
+            raise ValueError(f"{d.date()} {r}: {n} is not allowed there")
     v.recalculate_assignment_counts()
     sb, sm, st = v.spread_components()
     counts = {
@@ -706,6 +901,7 @@ def replay(scheduler, solution: MonthSolution):
         {
             "rotation": len(v.rotation_violations),
             "gaps": gaps,
+            "relaxed": _relaxations(v, solution) if relax else 0,
             "rot_viol": scheduler._rotation_violation_score(
                 df, scheduler._prior_violation_counts()
             ),
@@ -721,4 +917,34 @@ def replay(scheduler, solution: MonthSolution):
     )
 
 
-__all__ = ["MONTH_ORDER", "WEEKDAY_ORDER", "MonthSolution", "replay", "solve_month", "unsupported"]
+def _relaxations(v, solution) -> int:
+    """Pairs of a nurse's shifts only the one-day gap allows, one per pair.
+
+    At least one shift of each pair is a weekday shift the month placed.
+    """
+    spacing = int(v.config.min_days_between_assignments)
+    hard = max(1, spacing - 1)
+    placed = {(d, n) for (d, _r), n in solution.weekdays.items()}
+    count = 0
+    for d, n in placed:
+        outside = v._worked_outside_window(n)
+        for gap in range(hard + 1, spacing + 1):
+            for other in (d - timedelta(days=gap), d + timedelta(days=gap)):
+                if (other, n) in placed:
+                    count += other > d  # count a placed pair once
+                elif other in v.state.positions():
+                    count += v._nurse_assigned_on_date(n, other)
+                else:
+                    count += other in outside
+    return count
+
+
+__all__ = [
+    "MONTH_ORDER",
+    "WEEKDAY_ORDER",
+    "MonthSolution",
+    "replay",
+    "solve_month",
+    "solve_month_status",
+    "unsupported",
+]

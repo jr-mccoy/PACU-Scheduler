@@ -41,6 +41,7 @@ SCENARIOS = {
 
 def _scheduler(tmp_path, scenario, **config):
     db = _roster_db(tmp_path, **SCENARIOS[scenario])
+    config.setdefault("engine", "variants")  # the check is of capped variant runs
     return build_scheduler(db, "2026-11-02", "2026-11-15", **config)
 
 

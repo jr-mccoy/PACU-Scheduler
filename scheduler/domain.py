@@ -162,6 +162,9 @@ class SchedulerConfig:
         max_plateau_depth: int = 10,
         max_weekend_variants: int | None = DEFAULT_MAX_WEEKEND_VARIANTS,
         max_week_permutations: int | None = 200,
+        engine: str = "month",
+        month_options: int = 5,
+        month_time_limit_s: float = 300.0,
         **extra,
     ):
 
@@ -192,6 +195,17 @@ class SchedulerConfig:
         if max_week_permutations is None:
             max_week_permutations = 200
         self.max_week_permutations = max(0, int(max_week_permutations))
+        # How schedules are generated. "month" solves the whole month as one
+        # CP-SAT model (scheduler.optimization.month_model), with no weekend
+        # variant cap, and falls back to "variants" (weekend variants, each
+        # with its weekdays filled, capped at max_weekend_variants) where
+        # that model cannot be used. month_options is how many months with
+        # different weekends it offers; month_time_limit_s bounds each.
+        if engine not in ("month", "variants"):
+            raise ValueError(f"engine must be 'month' or 'variants', not {engine!r}")
+        self.engine = engine
+        self.month_options = max(1, int(month_options))
+        self.month_time_limit_s = float(month_time_limit_s)
         self.weekend_gap_days = weekend_gap_days
         self.main_score_factor = main_score_factor
         self.backup_score_factor = backup_score_factor

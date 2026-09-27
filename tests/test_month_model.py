@@ -217,10 +217,150 @@ def test_longer_spacing_the_exact_solve_cannot_split_by_week(tmp_path):
     assert replayed == solution.values
 
 
-def test_unsupported_rules_are_refused(tmp_path):
-    scheduler = _scheduler(tmp_path, "six", allow_one_day_weekday_gap=True)
-    assert "one-day" in mm.unsupported(scheduler)
-    assert mm.solve_month(scheduler) == []
+def test_a_prn_nurse_pinned_into_a_weekend_is_refused(tmp_path):
+    roster = (*((n, False, False) for n in "ABCDEF"), ("P", True, False))
+    db = seed_db(
+        tmp_path,
+        roster=roster,
+        pre_scheduled=[("2026-11-06", "P", None), ("2026-11-07", None, "P")],
+    )
+    scheduler = build_scheduler(db, "2026-11-02", "2026-11-15")
+    assert "P" in mm.unsupported(scheduler)
+    assert mm.solve_month_status(scheduler)[0] == "unsupported"
+
+
+# ── the one-day gap ────────────────────────────────────────────────────────
+def _short_staffed(tmp_path, **config):
+    """Six nurses, three of them off every weekday of the first week.
+
+    With 2-day spacing three nurses cannot cover four days; the one-day gap
+    (Mon–Wed, Tue–Thu) can.
+    """
+    off = _only(["ABC", "DEF"], "ABCDEF")
+    off += [(n, f"2026-11-0{d}") for n in "DEF" for d in (2, 3, 4, 5)]
+    db = seed_db(tmp_path, roster=ROSTER6, time_off=off)
+    return build_scheduler(db, "2026-11-02", "2026-11-15", **config)
+
+
+def test_the_one_day_gap_fills_what_spacing_alone_cannot(tmp_path):
+    (strict,) = mm.solve_month(_short_staffed(tmp_path))
+    relaxed_scheduler = _short_staffed(tmp_path, allow_one_day_weekday_gap=True)
+    (relaxed,) = mm.solve_month(relaxed_scheduler)
+
+    assert relaxed.values["gaps"] < strict.values["gaps"]
+    assert relaxed.values["relaxed"] > 0
+    _variant, replayed, _counts = mm.replay(relaxed_scheduler, relaxed)
+    assert replayed == relaxed.values
+    # Without the setting the same month breaks the spacing rule.
+    with pytest.raises(ValueError):
+        mm.replay(_short_staffed(tmp_path), relaxed)
+
+
+def test_the_one_day_gap_is_only_a_fallback(tmp_path):
+    """Eight nurses fill every slot with ordinary spacing: no gap is used."""
+    plain = _scheduler(tmp_path, "history")
+    relaxed_scheduler = _scheduler(tmp_path, "history", allow_one_day_weekday_gap=True)
+    (without,) = mm.solve_month(plain)
+    (with_gap,) = mm.solve_month(relaxed_scheduler)
+    assert without.values["gaps"] == with_gap.values["gaps"] == 0
+    assert with_gap.values["relaxed"] == 0
+
+
+def test_role_limited_one_day_gaps_keep_to_their_roles(tmp_path):
+    """Only a Main and a Backup may be a day apart: never two Backups."""
+    scheduler = _short_staffed(tmp_path, allow_midweek_pair_mixed=True)
+    (solution,) = mm.solve_month(scheduler)
+    _variant, replayed, _counts = mm.replay(scheduler, solution)  # re-checks the roles
+    assert replayed == solution.values
+    days = {}
+    for (day, role), nurse in solution.weekdays.items():
+        days.setdefault(nurse, []).append((day, role))
+    pairs = [
+        (a, b)
+        for shifts in days.values()
+        for a in shifts
+        for b in shifts
+        if a[0] < b[0] and (b[0] - a[0]).days == 2
+    ]
+    assert pairs and all({a[1], b[1]} == {"main", "backup"} for a, b in pairs)
+
+
+def test_one_day_gap_coverage_matches_the_exact_solve(tmp_path):
+    scheduler = _short_staffed(tmp_path, allow_one_day_weekday_gap=True)
+    variants, _ = _generated_arrangements(scheduler)
+    for variant in variants[:4]:
+        schedule = variant.state.schedule
+        fixed = {f: tuple(schedule.loc[f, ["main", "backup"]]) for f in scheduler._get_weekends()}
+        (solution,) = mm.solve_month(scheduler, fixed_weekends=fixed, order=mm.WEEKDAY_ORDER)
+        exact = variant.clone()
+        exact.compute_unfillable_slots()
+        outcome = solve_weekdays_exactly(exact)
+        assert solution.values["gaps"] == outcome.gaps + len(exact.unfillable_slots)
+        _v, replayed, _counts = mm.replay(scheduler, solution)
+        assert {k: replayed[k] for k in solution.values} == solution.values
+
+
+# ── relaxed rotation ───────────────────────────────────────────────────────
+def _no_alternation(tmp_path):
+    """Only nurses whose last weekend was FSF can work the first weekend,
+    and only ones whose last was SFS the second: strict alternation fails."""
+    history = [("2026-09-25", "A", "D"), ("2026-10-02", "B", "E"), ("2026-10-09", "C", "F")]
+    db = seed_db(
+        tmp_path, roster=ROSTER6, weekends=history, time_off=_only(["ABC", "DEF"], "ABCDEF")
+    )
+    return build_scheduler(db, "2026-11-02", "2026-11-15")
+
+
+def test_strict_alternation_can_be_proven_impossible(tmp_path):
+    assert mm.solve_month_status(_no_alternation(tmp_path))[0] == "infeasible"
+
+
+def test_relaxed_rotation_repeats_as_little_as_possible(tmp_path):
+    scheduler = _no_alternation(tmp_path)
+    (solution,) = mm.solve_month(scheduler, allow_rotation_violations=True)
+    _v, replayed, _counts = mm.replay(scheduler, solution, allow_rotation_violations=True)
+    assert replayed == solution.values
+    assert solution.values["rotation"] == 2  # one repeat on each weekend
+
+    generated = _no_alternation(tmp_path).generate_weekend_candidates(
+        allow_rotation_violations=True
+    )
+    assert min(len(v.rotation_violations) for v in generated.variants) >= 2
+
+
+def test_relaxed_rotation_allows_every_arrangement_the_generator_does(tmp_path):
+    built = mm._Model(_no_alternation(tmp_path), None, [], allow_rotation_violations=True)
+    solver = built.cp.CpSolver()
+    solver.parameters.num_workers = 8
+    model_set = set()
+    while solver.Solve(built.m) in (built.cp.OPTIMAL, built.cp.FEASIBLE):
+        arrangement = tuple(
+            (
+                f,
+                next(n for n in built.nurses if solver.BooleanValue(built.fsf[f, n])),
+                next(n for n in built.nurses if solver.BooleanValue(built.sfs[f, n])),
+            )
+            for f in built.fridays
+        )
+        model_set.add(arrangement)
+        built.m.Add(sum(built.fsf[f, a] + built.sfs[f, b] for f, a, b in arrangement) <= 3)
+    scheduler = _no_alternation(tmp_path)
+    fridays = scheduler._get_weekends()
+    generated = {
+        tuple(
+            (f, v.state.schedule.at[f, "main"], v.state.schedule.at[f, "backup"]) for f in fridays
+        )
+        for v in scheduler.generate_weekend_candidates(allow_rotation_violations=True).variants
+    }
+    assert generated and generated <= model_set
+
+
+def test_only_the_nurses_allowed_to_repeat_do(tmp_path):
+    scheduler = _no_alternation(tmp_path)
+    scheduler.nurses_allowed_rotation_violation = {"B", "E"}
+    (solution,) = mm.solve_month(scheduler, allow_rotation_violations=True)
+    variant, _replayed, _counts = mm.replay(scheduler, solution, allow_rotation_violations=True)
+    assert {nurse for _f, nurse, _p in variant.rotation_violations} <= {"B", "E"}
 
 
 def test_replay_rejects_a_month_that_breaks_a_rule(tmp_path):

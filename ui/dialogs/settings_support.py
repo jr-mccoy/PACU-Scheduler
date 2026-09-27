@@ -38,6 +38,7 @@ WIDGET_FOR_KEY = {
     "history_window_days": "hist_window",
     "history_duration_months": "hist_duration",
     "max_weekend_variants": "variant_cap",
+    "scheduling_engine": "engine_combo",
     "measure_phase_times": "measure_chk",
     "analyse_initial_weekday_gaps": "analyse_chk",
     "gap_report_file": "gap_file",
@@ -123,7 +124,15 @@ TOOLTIPS = {
     "max_weekend_variants": (
         "Weekend combinations kept after each weekend and fully evaluated.\n"
         "Higher explores more candidate schedules; run time grows roughly\n"
-        "in proportion. Unlimited can take hours on long horizons."
+        "in proportion. Unlimited can take hours on long horizons.\n"
+        "Used by the weekend-variant engine only."
+    ),
+    "scheduling_engine": (
+        "Whole month: solves weekends and weekdays together and proves the best\n"
+        "months, with no cap on the weekend combinations searched.\n"
+        "Weekend variants: the earlier method, which evaluates at most the\n"
+        "number of weekend variants above. The whole-month engine uses it\n"
+        "by itself when it cannot be used."
     ),
     "measure_phase_times": (
         "Time each evaluation phase and save performance_metrics.json next to the exported PDFs."
@@ -259,3 +268,14 @@ __all__ = [
     "validate_and_accept",
     "weight_values",
 ]
+
+
+ENGINES = (("Whole month (exact)", "month"), ("Weekend variants", "variants"))
+
+
+def engine_combo(parent=None) -> QComboBox:
+    """The scheduling-engine choice both settings dialogs offer."""
+    combo = QComboBox(parent)
+    for label, value in ENGINES:
+        combo.addItem(label, value)
+    return combo

@@ -136,3 +136,36 @@ def test_gui_dialogs_preserve_unlimited(home, qapp, dialog_name):
 
     assert dialog.variant_cap.text() == "Unlimited"
     assert dialog.values()["max_weekend_variants"] == 0
+
+
+# --- the scheduling engine ---------------------------------------------------
+
+
+def test_the_engine_setting_persists_and_reaches_the_scheduler(home):
+    assert SharedSettings().get("scheduling_engine") == "month"
+    SharedSettings().update({"scheduling_engine": "variants"})
+    assert build_scheduler_config_from_settings(SharedSettings()).engine == "variants"
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"), [("2", "variants"), ("1", "month"), ("", "month"), ("x", "month")]
+)
+def test_cli_chooses_the_engine(cli, monkeypatch, reply, expected):
+    _answer(monkeypatch, reply)
+    cli._handle_set_scheduling_engine()
+    assert SharedSettings().get("scheduling_engine") == expected
+
+
+@pytest.mark.parametrize("dialog_name", ["SettingsDialog", "CompactSettingsDialog"])
+def test_both_dialogs_show_and_save_the_engine(qapp, home, dialog_name):
+    import ui.dialogs as dialogs
+    from ui.settings import AppSettings
+
+    settings = AppSettings()
+    settings.set("scheduling_engine", "variants")
+    dialog = getattr(dialogs, dialog_name)(settings)
+    assert dialog.engine_combo.currentData() == "variants"
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("month"))
+    settings.bulk_set(dialog.values())
+    assert SharedSettings().get("scheduling_engine") == "month"

@@ -34,6 +34,8 @@ class SharedSettings:
         "allow_midweek_pair_backup_only": False,
         "allow_midweek_pair_mixed": False,
         "max_weekend_variants": DEFAULT_MAX_WEEKEND_VARIANTS,
+        # "month": the whole month as one model; "variants": weekend variants.
+        "scheduling_engine": "month",
         "scoring_weights": {
             "rot_viol": 0.15,
             "weekend_gap": 0.15,

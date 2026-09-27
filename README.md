@@ -57,8 +57,38 @@ repository.
 
 ## How it works
 
-Generation runs in two stages, because weekends are the scarce resource and
-constrain everything else:
+**The default engine solves the whole month at once.** Weekends and
+weekdays are one OR-Tools CP-SAT model
+(`scheduler/optimization/month_model.py`): for each weekend and nurse,
+whether they work it as FSF or SFS, and for each weekday slot and nurse,
+whether they take it, with every scheduling rule written as a constraint.
+The solver searches every weekend arrangement without listing them, so no
+variant cap applies, and proves the best month. It minimizes, in order:
+
+1. rotation repeats (none unless repeats are allowed, below);
+2. unfilled slots, then uses of the one-day gap (when it is on);
+3. who absorbs any repeats, then the weekend spacing penalty;
+4. the Main plus Backup spread, then the larger of the two;
+5. long-term fairness, then the total-shift spread;
+6. Tuesday exceptions, then same-weekday repeats (tie-breakers, each given
+   at most 10 seconds to prove).
+
+It then finds further months with different weekends, five in all
+(`SchedulerConfig.month_options`), and ranks them as described below.
+Every month is placed through the scheduler's own checks before it is
+offered. As with the variant engine, strict FSF/SFS alternation is tried
+first; if no month satisfies it, the app asks before allowing repeats, and
+then only the nurses allowed to repeat do, as few times as possible.
+
+The variant engine below runs instead when the whole-month engine cannot:
+OR-Tools is missing, a PRN nurse is pinned into a weekend, the model finds
+no month within its time limit (`month_time_limit_s`, 300 s per month)
+without proving that none exists, or a month fails the checks. Choose it
+outright under Settings → Scheduling engine (`scheduling_engine` in
+`settings.json`), or in the terminal UI's Settings menu.
+
+**The weekend-variant engine** runs in two stages, because weekends are the
+scarce resource and constrain everything else:
 
 1. **Weekend generation.** The scheduler enumerates valid `FSF`/`SFS` pairs for
    each weekend in the horizon, branching on every complete pair. Because the
@@ -86,7 +116,7 @@ constrain everything else:
    Where that cannot promise an exact answer, the earlier local search runs
    instead: greedy fill, gap fill, then rebalance and refill passes.
 
-Surviving variants are then ranked:
+Candidates, months or surviving variants, are then ranked:
 
 1. fewest weekend-pattern repeats;
 2. then fewest unfilled slots;
@@ -256,8 +286,7 @@ it took 14 minutes and found five better schedules the cap had discarded.
 (`scheduler.optimization.month_model`), with no weekend-variant cap, and
 verifies each month through the scheduler's own checks. On the March
 10-nurse roster it proves the best month in seconds, better than the capped
-run's top option. It does not yet model the one-day spacing relaxation or
-relaxed rotation.
+run's top option. It is the app's default engine (see **How it works**).
 
 Slots that no nurse can legally take (everyone is off, or the weekends rule
 them all out) are detected once per variant and skipped by every search, so

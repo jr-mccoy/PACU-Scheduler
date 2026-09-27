@@ -111,6 +111,9 @@ class GenerationRun:
     # The max_weekend_variants beam discarded branches: other workable
     # schedules (or, when infeasible, a feasible one) may exist.
     search_capped: bool = False
+    # "month" when the whole-month model produced the candidates, "variants"
+    # when the weekend-variant pipeline did (also its fallback).
+    engine: str = "variants"
 
 
 @dataclass(frozen=True)
@@ -1990,6 +1993,18 @@ class NurseScheduler:
         sleep_handle = inhibit_sleep()
         self.last_weekend_generation = None
         try:
+            if self.config.engine == "month" and not profile:
+                run = self._run_month_model(
+                    confirm_rotation_callback,
+                    weekend_variant_mode,
+                    stage,
+                    on_progress,
+                    is_cancelled,
+                    max_workers,
+                )
+                if run is not None:
+                    return run
+                stage("Using weekend variants instead…")
             stage("Building weekend rotation variants…")
             variants = self._generate_weekend_variants(
                 self._setup_rotation_callback(confirm_rotation_callback), weekend_variant_mode
@@ -2032,6 +2047,131 @@ class NurseScheduler:
             )
         finally:
             allow_sleep(sleep_handle)
+
+    def _run_month_model(
+        self,
+        confirm_rotation_callback,
+        weekend_variant_mode,
+        stage,
+        on_progress,
+        is_cancelled,
+        max_workers,
+    ) -> GenerationRun | None:
+        """Generate with the whole-month model, or return None to fall back.
+
+        The model (``scheduler.optimization.month_model``) searches every
+        weekend arrangement at once, so no weekend-variant cap applies. It
+        follows the same rotation policy as the variant pipeline: strict
+        alternation first, and repeats only if ``weekend_variant_mode``
+        allows them (after ``confirm_rotation_callback`` agrees, for
+        STRICT_THEN_RELAXED). Every month it returns is replayed through the
+        scheduler's own checks before it is offered.
+
+        Returns None, so the variant pipeline runs instead, when the model
+        cannot represent the rules, when it finds no month within its time
+        limit without proving that none exists, when it fails, or when a
+        month fails the replay.
+        """
+        from .optimization import month_model
+
+        reason = month_model.unsupported(self)
+        if reason is not None:
+            logger.info("Whole-month model not used: %s", reason)
+            return None
+        mode = self._normalize_weekend_variant_mode(weekend_variant_mode)
+        confirm = self._setup_rotation_callback(confirm_rotation_callback)
+        count = int(self.config.month_options)
+        workers = max(1, min(8, max_workers or usable_cpu_count()))
+
+        def solve(relaxed: bool):
+            stage(
+                "Solving the whole month (rotation repeats allowed)…"
+                if relaxed
+                else "Solving the whole month…"
+            )
+            if on_progress is not None:
+                on_progress(0, count)
+            return month_model.solve_month_status(
+                self,
+                top_n=count,
+                allow_rotation_violations=relaxed,
+                time_limit_s=self.config.month_time_limit_s,
+                workers=workers,
+                is_cancelled=is_cancelled,
+                on_month=(lambda done: on_progress(done, count)) if on_progress else None,
+            )
+
+        relaxed = mode == self.WeekendVariantMode.RELAXED_ALLOWED
+        try:
+            status, months = solve(relaxed)
+            if status == "infeasible" and mode == self.WeekendVariantMode.STRICT_THEN_RELAXED:
+                if not confirm():
+                    logger.info("User declined to allow rotation repeats – abort.")
+                    return GenerationRun("infeasible", engine="month")
+                relaxed = True
+                status, months = solve(True)
+        except Exception:
+            logger.exception("The whole-month model failed; using weekend variants instead.")
+            return None
+        if status == "cancelled":
+            return GenerationRun("cancelled", engine="month")
+        if status == "infeasible":
+            return GenerationRun("infeasible", engine="month")
+        if status != "ok" or not months:
+            logger.warning(
+                "The whole-month model found no month (%s); using weekend variants instead.",
+                status,
+            )
+            return None
+
+        stage("Checking the months…")
+        candidates = []
+        for idx, month in enumerate(months):
+            try:
+                variant, measures, counts = month_model.replay(
+                    self, month, allow_rotation_violations=relaxed
+                )
+            except ValueError:
+                logger.exception(
+                    "A month from the whole-month model failed the scheduler's checks; "
+                    "using weekend variants instead."
+                )
+                return None
+            candidates.append(
+                (
+                    idx,
+                    self._month_stats(variant, month, measures),
+                    counts,
+                    variant.state.schedule.copy(),
+                )
+            )
+        # Ranked as the variant pipeline's candidates are, so the options,
+        # their scores and the ranking weights read the same either way.
+        stage("Ranking months…")
+        self._score_and_rank_variants(candidates)
+        return GenerationRun("ok", candidates=candidates, engine="month")
+
+    @staticmethod
+    def _month_stats(variant, month, measures) -> dict:
+        """Candidate stats, as the variant pipeline records them, for one month."""
+        backup_spread, main_spread, _total = variant.spread_components()
+        return {
+            "gaps": int(measures["gaps"]),
+            "early_gaps": int(measures["gaps"]),
+            "balance_main": int(main_spread),
+            "balance_backup": int(backup_spread),
+            "rotation_rep": int(measures["rotation"]),
+            "unfillable": len(variant.unfillable_slots),
+            "unfillable_slots": [
+                f"{day.date().isoformat()} {role}" for day, role in sorted(variant.unfillable_slots)
+            ],
+            "solver": "month",
+            "solver_optimal": bool(month.optimal),
+            "one_day_gaps": int(measures["relaxed"]),
+            "weekend_gap_penalty": int(measures["weekend_gap"]),
+            "exceptions": int(measures["exceptions"]),
+            "t_total": float(month.seconds),
+        }
 
     def _setup_rotation_callback(self, confirm_rotation_callback):
         """Use an explicit caller callback; backend code never prompts for input."""

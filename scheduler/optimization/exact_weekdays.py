@@ -14,8 +14,16 @@ and lets OR-Tools CP-SAT choose one fill per week that minimizes, in order,
 the keys the local search optimizes (``ScheduleQuality.compare_to``):
 unfilled slots, backup spread, main spread, total spread, and the long-term
 history penalty. Rotation repeats and weekend spacing are fixed by the
-weekends, so they do not vary here. The chosen fills are then placed through
-the normal assignment checks, which re-verifies every one of them.
+weekends, so they do not vary here.
+
+Many fills of a week share one count pattern and so score the same. Among
+them a second, small CP-SAT solve picks the fills that spread each nurse's
+shifts over different weekdays (the search's same-weekday tie-break): it
+minimizes the sum over nurses and Mon–Thu weekdays of the squared number of
+shifts, which counts the pairs of shifts a nurse works on the same weekday.
+It keeps every week's chosen pattern, so none of the keys above changes. The
+chosen fills are then placed through the normal assignment checks, which
+re-verifies every one of them.
 
 A week is filled under the strictest rules that can fill it: the ordinary
 weekday rules first, then the one-day spacing relaxation if it is enabled,
@@ -55,6 +63,10 @@ class ExactOutcome:
     # one-day spacing relaxation, or leaves fillable slots empty.
     relaxed_weeks: list[str] = field(default_factory=list)
     patterns: int = 0  # distinct per-week count patterns the solver chose among
+    # Pairs of shifts one nurse works on the same Mon–Thu weekday, and whether
+    # that is proved the fewest among fills with the chosen patterns.
+    weekday_repeats: int = 0
+    weekday_repeats_optimal: bool = True
 
 
 class _TooManyFills(Exception):
@@ -67,7 +79,7 @@ class _WeekOptions:
     gap_mode: bool
     relaxed: bool
     empties: int  # slots each fill leaves empty (the fewest possible)
-    fills: dict  # count pattern -> first fill with it (tuple of nurse or None)
+    fills: dict  # count pattern -> every fill with it (tuples of nurse or None)
 
 
 def unavailable_reason(variant) -> str | None:
@@ -252,9 +264,11 @@ def solve_weekdays_exactly(
         logger.info("Exact weekday solve found no solution within its time limit")
         return None
 
+    chosen, repeats, repeats_optimal = _vary_weekdays(
+        probe, options, solution, deadline - time.perf_counter()
+    )
     placed: list[tuple] = []
-    for week, pattern in zip(options, solution, strict=True):
-        fill = week.fills[pattern]
+    for week, fill in zip(options, chosen, strict=True):
         for (day, role), nurse in zip(week.slots, fill, strict=True):
             if nurse is None:
                 continue
@@ -283,7 +297,88 @@ def solve_weekdays_exactly(
             if week.slots and (pattern[-1] or week.relaxed or week.empties)
         ],
         patterns=sum(len(week.fills) for week in options),
+        weekday_repeats=repeats,
+        weekday_repeats_optimal=repeats_optimal,
     )
+
+
+def _vary_weekdays(probe, options, solution, remaining_s: float):
+    """One fill per week, among those with its chosen pattern, for variety.
+
+    Minimizes the sum over nurses and Mon–Thu weekdays of the squared shift
+    count. Returns the fills, the pairs of same-weekday shifts they give,
+    and whether that is proved the fewest. Out of time, it keeps the best
+    fills found so far, or each week's first fill.
+    """
+    from ortools.sat.python import cp_model
+
+    candidates = [week.fills[pattern] for week, pattern in zip(options, solution, strict=True)]
+    base: dict[tuple, int] = {}  # (nurse, weekday) -> shifts in cells no fill changes
+    grid = probe.state.grid()
+    for day in probe.get_weekdays():
+        if day.weekday() < 4:
+            for role in ROLES:
+                nurse = grid.get(day, role)
+                if nurse is not None:
+                    base[(nurse, day.weekday())] = base.get((nurse, day.weekday()), 0) + 1
+
+    def contributions(week, fill) -> dict[tuple, int]:
+        out: dict[tuple, int] = {}
+        for (day, _role), nurse in zip(week.slots, fill, strict=True):
+            if nurse is not None and day.weekday() < 4:
+                out[(nurse, day.weekday())] = out.get((nurse, day.weekday()), 0) + 1
+        return out
+
+    def repeats_of(fills) -> int:
+        counts = dict(base)
+        for week, fill in zip(options, fills, strict=True):
+            for key, value in contributions(week, fill).items():
+                counts[key] = counts.get(key, 0) + value
+        return sum(c * (c - 1) // 2 for c in counts.values())
+
+    first = [fills[0] for fills in candidates]
+    if all(len(fills) == 1 for fills in candidates):
+        return first, repeats_of(first), True
+    if remaining_s <= 0:
+        return first, repeats_of(first), False
+
+    model = cp_model.CpModel()
+    terms: dict[tuple, list] = {}
+    picks = []
+    for w, (week, fills) in enumerate(zip(options, candidates, strict=True)):
+        xs = []
+        for f, fill in enumerate(fills):
+            x = model.NewBoolVar(f"w{w}f{f}")
+            xs.append(x)
+            for key, value in contributions(week, fill).items():
+                terms.setdefault(key, []).append(value * x)
+        model.AddExactlyOne(xs)
+        model.AddHint(xs[0], 1)
+        picks.append(xs)
+    squares = []
+    for key in sorted(terms, key=str):
+        top = base.get(key, 0) + 2 * len(options)  # loose: a week adds at most 2
+        count = model.NewIntVar(0, top, f"count_{len(squares)}")
+        model.Add(count == base.get(key, 0) + sum(terms[key]))
+        square = model.NewIntVar(0, top * top, f"square_{len(squares)}")
+        model.AddMultiplicationEquality(square, [count, count])
+        squares.append(square)
+    model.Minimize(sum(squares))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_workers = 1
+    solver.parameters.random_seed = 0
+    solver.parameters.cp_model_presolve = False
+    solver.parameters.cp_model_probing_level = 0
+    solver.parameters.max_time_in_seconds = remaining_s
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return first, repeats_of(first), False
+    fills = [
+        next(fill for x, fill in zip(xs, options_w, strict=True) if solver.BooleanValue(x))
+        for xs, options_w in zip(picks, candidates, strict=True)
+    ]
+    return fills, repeats_of(fills), status == cp_model.OPTIMAL
 
 
 def _week_options(probe, week, max_fills: int, gap_rule_exceptions: str) -> _WeekOptions:
@@ -320,7 +415,7 @@ def _week_options(probe, week, max_fills: int, gap_rule_exceptions: str) -> _Wee
 
 
 def _enumerate(probe, slots, gap_mode: bool, relaxed: bool, max_fills: int, *, max_empty: int):
-    """``{count pattern: first fill}`` over every legal fill of *slots*.
+    """``{count pattern: [fills]}`` over every legal fill of *slots*.
 
     A fill leaves at most *max_empty* slots empty. Each nurse is checked
     against the slots already filled, with the scheduler's eligibility
@@ -339,7 +434,7 @@ def _enumerate(probe, slots, gap_mode: bool, relaxed: bool, max_fills: int, *, m
     nurses = list(probe.state.main_assignment_counts.index)
     index = {nurse: i for i, nurse in enumerate(nurses)}
     n = len(nurses)
-    fills: dict[tuple, tuple] = {}
+    fills: dict[tuple, list] = {}
     count = [0]
     nodes = [0]
     current: list = []
@@ -371,7 +466,7 @@ def _enumerate(probe, slots, gap_mode: bool, relaxed: bool, max_fills: int, *, m
                 pattern[index[nurse] + (0 if role == "main" else n)] += 1
                 if gap_mode and is_exception(nurse, day, role):
                     pattern[-1] += 1
-        fills.setdefault(tuple(pattern), tuple(current))
+        fills.setdefault(tuple(pattern), []).append(tuple(current))
 
     def dfs(k: int, empties: int) -> None:
         if k == len(slots):

@@ -247,7 +247,7 @@ def test_only_the_refill_step_2_added_gets_the_extra_budget(monkeypatch, spreads
     else:
         # Above (1, 1) the pass ran before step 2 too, with these budgets.
         assert full["per_attempt_time_ms"] == tuning.full_period_per_attempt_time_ms
-        assert full["total_time_ms"] is None
+        assert full["total_time_ms"] == tuning.full_period_total_time_ms
 
 
 def test_the_full_period_refill_stops_at_its_total_time(monkeypatch):
@@ -265,6 +265,41 @@ def test_the_full_period_refill_stops_at_its_total_time(monkeypatch):
     variant.iterative_full_period_refill(max_orders=54, total_time_ms=120)
 
     assert 1 <= len(attempts) <= 4  # of up to 54 orders
+
+
+# ── fallback search: every pass has a total budget ─────────────────────────
+def test_the_window_refill_stops_at_its_total_time(monkeypatch):
+    variant = weekday_only_variant(NURSES, weeks=4)
+    next(_complete_fills(variant))
+    searches = []
+
+    def slow_search(vars_list, deadline, node_budget):
+        searches.append(deadline)
+        time.sleep(0.05)
+        return False
+
+    monkeypatch.setattr(variant, "spreads_at_lower_bound", lambda: False)
+    monkeypatch.setattr(variant.window_optimizer, "backtrack_window", slow_search)
+    before = variant.state.schedule.copy()
+    variant.iterative_window_refill_rebalance(max_passes=50, total_time_ms=120)
+
+    assert 1 <= len(searches) <= 4  # of up to 50 passes over every window
+    pd.testing.assert_frame_equal(variant.state.schedule, before)  # windows restored
+
+
+def test_the_worker_bounds_every_fallback_pass(monkeypatch):
+    calls = []
+    monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
+    tuning = WorkerTuningConfig(weekday_solver="search")
+    variant = _stub_variant(calls, spreads=(3, 3, 0), at_bound=False)
+    _evaluate_variant_core((0, variant, tuning), with_profiling=False)
+
+    budgets = {name: kwargs["total_time_ms"] for name, kwargs in calls}
+    assert budgets == {
+        "window": tuning.window_refill_total_time_ms,
+        "full": tuning.full_period_total_time_ms,
+    }
+    assert None not in budgets.values()
 
 
 def test_a_fixed_target_still_stops_as_before():

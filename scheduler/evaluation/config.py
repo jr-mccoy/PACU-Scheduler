@@ -41,6 +41,12 @@ class WorkerTuningConfig:
     # keeps the budgets above, as before.
     full_period_extra_attempt_time_ms: int = 2_000
     full_period_extra_time_ms: int = 20_000
+    # The per-attempt limits above are generous and multiply by hundreds of
+    # passes or dozens of orders, so on a hard variant the fallback search
+    # could run for hours. These bound each whole pass (None: unbounded).
+    # The exact weekday solve never runs these passes.
+    window_refill_total_time_ms: int | None = 120_000
+    full_period_total_time_ms: int | None = 120_000
     # How the weekdays are filled. "exact" lists every legal fill of each
     # week and lets OR-Tools CP-SAT choose the optimal combination
     # (scheduler.optimization.exact_weekdays); it falls back to "search", the

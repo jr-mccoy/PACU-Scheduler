@@ -20,6 +20,7 @@ from scheduler import WorkerTuningConfig
 from scheduler.domain import ScheduleQuality
 from scheduler.evaluation.worker import _evaluate_variant_core
 from scheduler.optimization.exact_weekdays import solve_weekdays_exactly, unavailable_reason
+from scheduler.scoring import weekday_repeats
 
 NURSES = ["N1", "N2", "N3", "N4", "N5", "N6"]
 MONDAY = pd.Timestamp("2026-01-05")
@@ -194,6 +195,82 @@ def test_unfillable_slots_stay_empty_and_everything_else_is_filled(tmp_path):
     assert outcome is not None and outcome.gaps == 0
     assert variant.state.schedule.loc[wednesday, ["main", "backup"]].isna().all()
     assert variant._count_fillable_weekday_gaps() == 0
+
+
+# ── weekday variety among equal fills ──────────────────────────────────────
+def _weekday_repeats(variant) -> int:
+    """Pairs of shifts one nurse works on the same Mon–Thu weekday."""
+    counts: dict[tuple, int] = {}
+    grid = variant.state.grid()
+    for day in variant.get_weekdays():
+        for role in ("main", "backup"):
+            nurse = grid.get(day, role)
+            if nurse is not None and day.weekday() < 4:
+                counts[(nurse, day.weekday())] = counts.get((nurse, day.weekday()), 0) + 1
+    return sum(c * (c - 1) // 2 for c in counts.values())
+
+
+def _signature(variant, days):
+    """Per-nurse Main and Backup counts and gap-rule exceptions over *days*."""
+    grid = variant.state.grid()
+    counts: dict[tuple, int] = {}
+    exceptions = 0
+    for day in days:
+        for role in ("main", "backup"):
+            nurse = grid.get(day, role)
+            if nurse is not None:
+                counts[(nurse, role)] = counts.get((nurse, role), 0) + 1
+                exceptions += variant.is_gap_rule_exception(nurse, day, role)
+    return counts, exceptions
+
+
+def test_it_picks_the_most_varied_fill_with_the_chosen_counts():
+    variant = _small_two_week_variant()
+    probe = variant.clone()
+    outcome = solve_weekdays_exactly(variant)
+    week = [_day(offset) for offset in range(4)]
+    chosen = _signature(variant, week)
+
+    # Brute force over every legal fill of week 1 with the same counts.
+    slots = [(day, role) for day in week for role in ("main", "backup")]
+    fewest = None
+
+    def fill(k):
+        nonlocal fewest
+        if k == len(slots):
+            if _signature(probe, week) == chosen:
+                repeats = _weekday_repeats(probe)
+                fewest = repeats if fewest is None else min(fewest, repeats)
+            return
+        day, role = slots[k]
+        for nurse in probe.get_eligible_nurses_for_day_gap(day, role, log=False):
+            probe.place_assignment(day, role, nurse)
+            fill(k + 1)
+            probe.dec_assign(day, role, nurse)
+
+    fill(0)
+    assert outcome.weekday_repeats_optimal
+    assert outcome.weekday_repeats == _weekday_repeats(variant) == fewest
+    assert weekday_repeats(variant.state.schedule) == fewest  # the ranking's count
+
+
+def test_variety_never_changes_the_counts(monkeypatch):
+    import scheduler.optimization.exact_weekdays as exact
+
+    varied, first = _small_two_week_variant(), _small_two_week_variant()
+    solve_weekdays_exactly(varied)
+    original = exact._vary_weekdays
+    monkeypatch.setattr(
+        exact,
+        "_vary_weekdays",
+        lambda probe, options, solution, _s: original(probe, options, solution, -1),
+    )
+    unvaried = solve_weekdays_exactly(first)
+
+    assert not unvaried.weekday_repeats_optimal
+    days = varied.get_weekdays()
+    assert _signature(varied, days) == _signature(first, days)
+    assert _weekday_repeats(varied) < _weekday_repeats(first)  # 1 against 2 here
 
 
 # ── stepping aside for the search ──────────────────────────────────────────

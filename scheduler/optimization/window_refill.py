@@ -139,6 +139,7 @@ class WindowRefillOptimizer:
         node_limit: int = 8000000,
         target_spread=None,
         tracker=None,
+        total_time_ms: int | None = None,
     ) -> bool:
         """Refill sliding windows of weeks while that improves the spreads.
 
@@ -146,6 +147,9 @@ class WindowRefillOptimizer:
         spread reaches its proven lower bound
         (``ctx.spreads_at_lower_bound()``); a ``(backup, main)`` tuple stops
         them as soon as both spreads are at most those values instead.
+
+        ``total_time_ms``, when given, bounds all the passes together as well
+        as each window search; a window cut off by it gets its shifts back.
         """
         ctx = self.context
 
@@ -167,9 +171,15 @@ class WindowRefillOptimizer:
 
         improved = False
         target_hit = good_enough()
+        pass_deadline = (
+            None if total_time_ms is None else time.perf_counter() + total_time_ms / 1000.0
+        )
+
+        def out_of_time() -> bool:
+            return pass_deadline is not None and time.perf_counter() >= pass_deadline
 
         for pass_idx in range(1, max_passes + 1):
-            if target_hit:
+            if target_hit or out_of_time():
                 break
 
             if created_tracker:
@@ -187,6 +197,8 @@ class WindowRefillOptimizer:
             for days in windows:
                 if not days:
                     continue
+                if out_of_time():
+                    break
                 base_tuple = ctx.spread_components()
                 sub = ctx.state.schedule.loc[days, ["main", "backup"]]
                 mapper = getattr(sub, "map", None)
@@ -198,6 +210,8 @@ class WindowRefillOptimizer:
                 vars_list = ctx.build_window_varlist(days)
 
                 deadline = time.perf_counter() + (time_limit_ms / 1000.0)
+                if pass_deadline is not None:
+                    deadline = min(deadline, pass_deadline)
                 node_budget = [node_limit]
                 found = self.backtrack_window(vars_list, deadline, node_budget)
                 if not found:

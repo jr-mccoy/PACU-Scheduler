@@ -2,7 +2,9 @@
 
 Covers audit findings 6 and 15 as decided: fewest weekend-pattern repeats
 ranks first, then fewest unfilled slots; the weighted score only orders
-ties, and rot_viol measures the new repeats a candidate introduces.
+ties, and rot_viol measures the new repeats a candidate introduces. Exact
+ties in the weighted score go to the smaller total spread, then the fewest
+same-weekday repeats.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import pandas as pd
 from scheduling_fixtures import build_scheduler, seed_db
 
 from scheduler import SchedulerConfig, WeekendHistory, WeekendPattern
-from scheduler.scoring import rank_rows
+from scheduler.scoring import rank_rows, weekday_repeats
 
 WEIGHTS = SchedulerConfig().scoring_weights
 
@@ -50,6 +52,36 @@ def test_the_weights_of_ranked_metrics_are_ignored():
 
 def test_ties_keep_candidate_order():
     assert _order([_row(3), _row(1), _row(2)]) == [1, 2, 3]
+
+
+def test_exact_ties_go_to_total_spread_then_weekday_variety():
+    rows = [
+        _row(0, total_spread=3, weekday_repeats=0),
+        _row(1, total_spread=2, weekday_repeats=6),
+        _row(2, total_spread=2, weekday_repeats=4),
+    ]
+    assert _order(rows) == [2, 1, 0]
+
+
+def test_tie_breakers_never_override_the_weighted_score():
+    rows = [
+        _row(0, balance=2, total_spread=9, weekday_repeats=9),
+        _row(1, balance=6, total_spread=0, weekday_repeats=0),
+    ]
+    assert _order(rows) == [0, 1]
+
+
+def test_weekday_repeats_counts_same_weekday_pairs_per_nurse():
+    days = pd.date_range("2026-11-02", periods=21, freq="D")  # Mon 2 Nov, three weeks
+    df = pd.DataFrame({"main": None, "backup": None, "is_weekend": days.weekday >= 4}, index=days)
+    for monday in days[days.weekday == 0]:
+        df.loc[monday, ["main", "backup"]] = ["A", "B"]  # A and B: three Mondays each
+    df.loc[days[1], "main"] = "A"  # one Tuesday: no pair
+    df.loc[days[4], "main"] = "A"  # a Friday: not a weekday row
+    df.loc[days[11], "main"] = "C"  # Thursday, but marked as a weekend (a holiday)
+    df.loc[days[11], "is_weekend"] = True
+    df.loc[days[18], "main"] = "C"
+    assert weekday_repeats(df) == 3 + 3
 
 
 # ── rot_viol: new repeats, weighted by past violations ────────────────────
@@ -126,3 +158,5 @@ def test_the_engine_ranks_candidates_best_first(tmp_path):
 
     assert [c[0] for c in candidates] == [2, 1, 0]
     assert [c[1]["rank"] for c in candidates] == [1, 2, 3]
+    assert candidates[0][1]["weekday_repeats"] == weekday_repeats(df)
+    assert "total_spread" in candidates[0][1]

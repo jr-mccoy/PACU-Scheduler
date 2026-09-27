@@ -30,7 +30,8 @@ class AppSettings:
         "analyse_initial_weekday_gaps": False,
         "gap_report_file": "weekday_gap_report.txt",
         "debug_variant_logging": "off",
-        "assignment_debug_enabled": True,
+        # Verbose, and slows every run: turn it on only while debugging.
+        "assignment_debug_enabled": False,
         # Post-weekend weekday relaxations
         "allow_post_weekend_wednesday_main": False,
         "allow_post_weekend_wednesday_backup": True,

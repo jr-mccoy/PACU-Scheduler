@@ -450,9 +450,9 @@ Making it fast needed three things:
 - **Enumeration on the grid only.** Trial placements skip the count Series,
   and the exception check is cached per nurse and day.
 
-The GUI runs with the assignment debug logger on by default (see
-`ui/settings.py`). Logging every enumeration probe made the solve run out of
-time there, so enumeration no longer logs.
+The GUI ran with the assignment debug logger on by default (see
+`ui/settings.py`; now off). Logging every enumeration probe made the solve
+run out of time there, so enumeration no longer logs.
 
 Results, sampled variants, default settings:
 
@@ -461,6 +461,14 @@ Results, sampled variants, default settings:
 | Demo | 2.5–2.7 s | 8/8 | same on 6, better total spread on 2 |
 | March, 10 nurses (Susan PRN) | 4.0–6.4 s | 8/8 | same on 8 (the search already reached the optimum) |
 | March, 8 nurses | 0.8–1.9 s | 8/8 | better on 8: total spread 3 instead of 4–6 |
+
+Full runs, default settings, 4 workers on a 4-core container (other work
+shared the machine during part of them):
+
+| Roster | Variants | Wall time | Exact solve per variant | Proven optimal |
+|---|---|---|---|---|
+| March, 10 nurses (Susan PRN) | 1,000 | 21 min | 2.1–11.0 s | 1,000/1,000 |
+| March, 8 nurses | 856 | 7.8 min | 0.2–19.4 s | 856/856 |
 
 Tests: `tests/test_exact_weekdays.py`. Checks include:
 - brute force over every legal schedule of a small instance, under both
@@ -472,6 +480,31 @@ Tests: `tests/test_exact_weekdays.py`. Checks include:
 - each fallback;
 - never worse than the search;
 - the debug-logger regression.
+
+#### Follow-ups
+
+- **Weekday variety.** Fills with the same count pattern score the same, and
+  the solve used to take the first one it listed. It now keeps every fill
+  and, once the patterns are chosen, a second CP-SAT solve picks one fill
+  per week that minimizes the sum over nurses and Mon–Thu weekdays of the
+  squared shift count. That counts the pairs of shifts one nurse works on
+  the same weekday, the search's same-weekday tie-break made global. It
+  keeps every week's pattern, so no quality key changes, and it takes a few
+  milliseconds. On four sampled March variants (10 nurses) it cut the pairs
+  from 8–12 to 5–6. It only chooses among fills with the patterns the first
+  solve chose; other optimal pattern choices might allow fewer repeats.
+  `ExactOutcome.weekday_repeats` reports the count, and tests check it
+  against brute force.
+- **Ranking ties.** On the March runs the top five candidates all had a
+  weighted score of 0.000, so candidate order decided among them. Exact ties
+  in the weighted score now go to the smaller total-shift spread, then to
+  fewer same-weekday repeats (`scheduler.scoring.TIE_BREAKERS`), before
+  candidate order. They never override the weighted score.
+- **Fallback budgets.** The local search still runs when the exact solve
+  steps aside. Its per-attempt limits (800 s, over hundreds of passes or 54
+  orders) never bound it, so each refill pass now also has a total budget
+  (`window_refill_total_time_ms`, `full_period_total_time_ms`, 120 s each).
+- **GUI debug default.** `assignment_debug_enabled` now defaults to off.
 
 ### 13. Spend the time saved on the caps that do cut the search
 

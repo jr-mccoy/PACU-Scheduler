@@ -2724,6 +2724,7 @@ class ScheduleVariant:
         node_limit: int = 8000000,
         target_spread: tuple[int, int] | None = None,
         tracker: BestStateTracker | None = None,
+        total_time_ms: int | None = None,
     ) -> bool:
         return self.window_optimizer.iterative_window_refill_rebalance(
             window_weeks=window_weeks,
@@ -2732,6 +2733,7 @@ class ScheduleVariant:
             node_limit=node_limit,
             target_spread=target_spread,
             tracker=tracker,
+            total_time_ms=total_time_ms,
         )
 
     def _get_all_weekdays(self) -> list[pd.Timestamp]:

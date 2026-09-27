@@ -78,6 +78,11 @@ constrain everything else:
      weekend);
    - recent-history overuse.
 
+   Many fills of a week share the same per-nurse counts and so score the
+   same. Among those, a second CP-SAT solve spreads each nurse's shifts over
+   different weekdays: it minimizes the pairs of shifts one nurse works on
+   the same weekday. None of the keys above changes.
+
    Where that cannot promise an exact answer, the earlier local search runs
    instead: greedy fill, gap fill, then rebalance and refill passes.
 
@@ -86,7 +91,10 @@ Surviving variants are then ranked:
 1. fewest weekend-pattern repeats;
 2. then fewest unfilled slots;
 3. then a weighted score over weekend spacing, balance, long-term fairness,
-   and who absorbs any repeats.
+   and who absorbs any repeats;
+4. exact ties in that score go to the smaller total-shift spread, then to
+   fewer same-weekday repeats (each candidate's stats report
+   `total_spread` and `weekday_repeats`).
 
 The weights (Settings → Ranking weights) only order candidates that tie on
 the first two. The top candidates are surfaced in a review dialog. The GUI,
@@ -222,7 +230,10 @@ budgets are tunable rather than fixed:
   `"when_needed"`) and `exact_time_limit_ms` tune it. Each candidate's stats
   report `solver` and `solver_optimal`.
 - `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
-  gap-fill, rebalance, and refill passes of the local search. Hand it to `NurseScheduler` as
+  gap-fill, rebalance, and refill passes of the local search. The per-attempt
+  limits are generous, so `window_refill_total_time_ms` and
+  `full_period_total_time_ms` (120 s each; None means unbounded) cap each
+  whole refill pass. Hand it to `NurseScheduler` as
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
 
@@ -359,19 +370,20 @@ for operator control.
 ## Known limitations
 
 - **Evaluation takes seconds per variant**, and a realistic horizon produces
-  hundreds of variants. On a 4-core container the exact weekday solve took
-  about 1–3 s per variant for an eight-nurse month and 4–6 s for a
-  ten-nurse one.
+  hundreds of variants. On a 4-core container a full March run with the
+  exact weekday solve took 21 minutes for ten nurses (1,000 variants, 2–11 s
+  each) and 8 minutes for eight (856 variants, mostly 1–3 s each).
   `docs/scheduler-optimization-audit.md` measures where the time goes.
-- **The GUI turns on assignment debug logging by default**
-  (`assignment_debug_enabled` in `ui/settings.py`), which writes a record for
-  many eligibility checks and slows every run. Turn it off in Settings unless
-  you are debugging.
-- **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
-  the per-attempt time limits are 800 seconds each, multiplied by hundreds of
-  passes. They effectively never bind, so run time is governed by how quickly
-  the search happens to converge. Use `scripts/benchmark.py` to find budgets
-  that bind without costing result quality on your hardware.
+- **Assignment debug logging used to be on by default in the GUI.** It is
+  off now, but saving settings writes every value to
+  `~/.nurse_scheduler/settings.json`, so a settings file saved earlier still
+  has it on. Uncheck it in Settings: it writes a record for many eligibility
+  checks and slows every run.
+- **The local search's per-attempt budgets are far larger than they look**
+  (800 seconds each). The exact weekday solve does not use them, and the
+  refill passes stop at their total budgets, but a variant that falls back
+  to the search can still take minutes. Use `scripts/benchmark.py` to find
+  budgets that bind without costing result quality on your hardware.
 - **Weekend generation grows combinatorially.** Rosters much beyond ten nurses
   or horizons beyond about six weeks push variant counts up sharply.
 

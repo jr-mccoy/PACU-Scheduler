@@ -54,7 +54,7 @@ from .platform import allow_sleep, default_worker_count, inhibit_sleep, usable_c
 from .profiling import PerformanceReport, WorkerMetrics
 from .repositories import AssignmentHistory, DateUtils
 from .runtime import is_empty
-from .scoring import long_term_score, rank_rows
+from .scoring import long_term_score, rank_rows, weekday_repeats
 
 logger = logging.getLogger(__name__)
 MEASURE_PHASE_TIMES = True
@@ -2081,9 +2081,11 @@ class NurseScheduler:
         """Score and rank candidates in place, best first.
 
         Order: fewest weekend-pattern repeats, then fewest unfilled slots,
-        then the weighted score over the remaining metrics (see
-        :func:`scheduler.scoring.rank_rows`). Each candidate's stats gain
-        ``weighted_score`` and ``rank``.
+        then the weighted score over the remaining metrics, with exact ties
+        going to the smaller total spread, then the fewest same-weekday
+        repeats (see :func:`scheduler.scoring.rank_rows`). Each candidate's
+        stats gain ``weighted_score``, ``total_spread``, ``weekday_repeats``
+        and ``rank``.
 
         Semantics alignment note:
         - ``BestStateTracker`` uses lexicographic ``ScheduleQuality`` comparison
@@ -2096,6 +2098,9 @@ class NurseScheduler:
 
         rows = []
         for idx, stats, nurse_counts, sched_df in candidate_schedules:
+            totals = [c["total"] for c in nurse_counts.values()]
+            stats["total_spread"] = max(totals) - min(totals) if totals else 0
+            stats["weekday_repeats"] = weekday_repeats(sched_df)
             rows.append(
                 {
                     "idx": idx,
@@ -2105,6 +2110,8 @@ class NurseScheduler:
                     "weekend_gap": self._weekend_gap_penalty(sched_df),
                     "balance": stats["balance_main"] + stats["balance_backup"],
                     "long_term": self._long_term_score(nurse_counts, overage),
+                    "total_spread": stats["total_spread"],
+                    "weekday_repeats": stats["weekday_repeats"],
                 }
             )
 

@@ -1280,11 +1280,14 @@ class ScheduleVariant:
 
     def _initialize_pre_scheduled_slots(self) -> None:
         """Initialize schedule with pre-scheduled assignments and update counters."""
-        sched = self.state.schedule
+        # On the grid: every clone runs this, and cell-by-cell frame access
+        # made it most of the cost of weekend generation's clones.
+        grid = self.state.grid()
+        positions = self.state.positions()
         for day, slot in self.pre_scheduled.items():
             for role, nurse in slot.items():
-                if nurse and is_empty(sched.at[day, role]):
-                    sched.at[day, role] = nurse
+                if nurse and is_empty(grid.cells[role][positions[day]]):
+                    grid.set(day, role, nurse)
 
         self._invalidate_weekday_cache()
         # Ensure counters & last-assignment dictionaries reflect the seeding
@@ -1292,17 +1295,17 @@ class ScheduleVariant:
 
         # After placing pre-scheduled cells, ensure our per-nurse Friday lists
         # include any weekend already seeded (Fri/Sat/Sun).
-        for friday in [d for d in sched.index if d.weekday() == FRIDAY_WEEKDAY]:
+        for friday in [d for d in positions if d.weekday() == FRIDAY_WEEKDAY]:
             weekend_days = [
                 friday,
                 friday + timedelta(days=1),
                 friday + timedelta(days=2),
             ]
             for wd in weekend_days:
-                if wd not in sched.index:
+                if wd not in positions:
                     continue
                 for role in ("main", "backup"):
-                    n = sched.at[wd, role]
+                    n = grid.cells[role][positions[wd]]
                     if n is None or is_empty(n):
                         continue
                     lst = self.state.nurse_weekend_lists.setdefault(n, [])

@@ -41,7 +41,7 @@ lists the ideas that would.
 | 2 | Speedup | Each slot's first domain member is re-checked by `_inc_assign` | Measured: ~10% | Fixed |
 | 3 | Speedup | The hot path reads and writes a pandas DataFrame cell by cell | Measured: `.at` is 45% after 1–2 | Fixed |
 | 4 | Speedup | Facts fixed once the weekends are fixed are recomputed on every check | Code reading | Fixed |
-| 5 | Speedup | Weekend generation repeats branch-independent work and clones every child | Measured: 6.5 s for 160 variants | Open |
+| 5 | Speedup | Weekend generation repeats branch-independent work and clones every child | Measured: 6.5 s for 160 variants | Fixed |
 | 6 | Speedup | Smaller redundancies: count recalculations, history scans in ranking | Code reading | Open |
 | 7 | Search | Hard-coded (1, 1) spread targets stop the search before it is done | Measured | Fixed |
 | 8 | Search | The full-period refill discards improvements that miss the target | Code reading, test | Fixed |
@@ -218,6 +218,39 @@ every check.
   survivors.
 
 This matters most once the beam cap is raised (finding 13).
+
+**Status: Fixed**, without the light branch records, which turned out not
+to be needed. A profile of the March roster (10 nurses) put 80% of the time
+in the per-nurse checks: half in reading availability through `.loc`, a
+third in the gap checks scanning the branch's schedule.
+- **Per-run cache.** A nurse's availability for a weekend, their last
+  weekend in history, and their next pre-scheduled or recorded weekend
+  depend only on the nurse and the weekend, so one generation run caches
+  them (`NurseScheduler._weekend_generation_cache`, cleared when the run
+  ends).
+- **One pass per branch.** Each branch's schedule is read once per weekend
+  (`_weekend_occupancy`); the backward and forward gap checks are answered
+  from that (`_check_weekend_gap_from_occupancy`).
+- **Pair filter.** The weekend's prefilled cells are read once, not once per
+  pair.
+- **Clones.** Seeding the pre-scheduled cells, which every clone repeats,
+  works on the grid instead of cell by cell on the frame.
+
+Called directly, `_check_weekend_gap_constraints` still takes the original
+path. Every variant is identical (SHA-1 over schedules, rotation repeats
+and weekend lists, on four rosters), and so is every answer.
+`tests/test_weekend_generation_speed.py` checks the variants against the
+uncached path on eight scenarios, strict and relaxed, and the gap check on
+random schedules, including a window starting on a cut weekend. The random
+check catches mutations that the generation scenarios do not.
+
+| Roster | Variants | Before | After |
+|---|---|---|---|
+| March, 10 nurses (Susan PRN) | 1,000 | 34 s | 5.7 s |
+| March, 8 nurses | 856 | 25 s | 4.8 s |
+| Demo | 160 | 2.6 s | 0.6 s |
+
+(Timed with a four-worker run sharing the machine; the ratios hold.)
 
 ### 6. Smaller redundancies
 

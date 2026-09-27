@@ -596,6 +596,99 @@ run. So on real data the cap cut work, not quality. It stays a per-machine
 setting (**Weekend variants to evaluate**); raise it when a run reports that
 the beam pruned and there is time to spare.
 
+## Beyond the cap
+
+Asked afterwards: can the runs that produce tens of thousands of weekend
+variants be sped up, and can we know whether a better schedule is among the
+variants the cap discards?
+
+### How the cap chooses
+
+Weekends are generated one at a time. After each, every (branch, valid
+pair) child is scored on weekend-only measures: rotation repeats, then how
+evenly recent weekends are spread, then the smallest Friday-to-Friday gap.
+The best `max_weekend_variants` (1,000) are kept, ties going to generation
+order, and the rest are dropped for good. The key cannot see weekdays:
+balance and fairness, which decide the final ranking, need the weekday
+solve.
+
+On the March roster (10 nurses, Susan PRN) the 63,744 uncapped variants
+all have 0 rotation repeats. Their weekend spacing penalty is 35 for
+40,512 of them and 70 for 23,232. The cap kept 1,000 of the 40,512 tied at
+the best spacing, so it discarded no better-spaced variant; which 1,000 it
+kept among the ties was effectively arbitrary.
+
+### Sharing week fills between variants (option 1)
+
+A variant takes about 4.5 s on that roster: 3–3.5 s in CP-SAT and about
+0.6 s listing week fills. Several ways of making CP-SAT itself faster were
+measured on 12 variants and none helped:
+- search strategies (pseudo-cost, LP-guided, quick restarts: 2× slower);
+- linearization level 2, no symmetry detection, feasibility jump;
+- table constraints instead of one Boolean per pattern (faster on average
+  but sometimes failing to prove optimality within 20 s);
+- warm starts from a neighbouring variant's solution (no gain).
+
+The first key's time is mostly propagation through the pairwise clauses of
+each week's "exactly one pattern" constraint (about 2.8 million on one
+variant), and it varies with search luck: 0.2 s or 1.9 s on similar models.
+
+What can be shared is the listing. A week's legal fills depend only on the
+cells within spacing reach of it (±3 days), on who works the weekends
+either side of it (the weekend windows reach at most 6 days back and 4
+forward), on its unfillable slots, and on inputs fixed for the whole run.
+The 63,744 variants have only 3,806 distinct week situations. Each worker
+process now keeps the fills of its 64 most recent situations
+(`exact_weekdays.week_options`), keyed by exactly those inputs plus a
+fingerprint of the run's fixed inputs, so entries never cross runs.
+Simulating the engine's order, about 55% of week listings hit the cache.
+Tests compare every cached listing with a fresh one on four scenarios, and
+check that different time off in the same weekends is never shared.
+
+### Checking every weekend variant (option 3)
+
+A single CP-SAT model choosing weekends and weekdays together was the
+first idea, but on this roster it would hold about 3,806 situations times
+1,836 patterns each, around 7 million choices. The same guarantee comes
+more cheaply from bounds, in
+`scheduler/optimization/exhaustive.py` (`check_all_weekend_variants`, and
+`scripts/check_all_variants.py` for a database):
+
+1. Generate every weekend variant, uncapped. Rotation repeats, the rotation
+   score and the weekend spacing penalty are exact before any weekday is
+   filled.
+2. List each distinct week situation once, as the count patterns of its
+   fills.
+3. From those, give every variant its exact number of unfilled slots and
+   lower bounds on balance and on the long-term fairness penalty. A variant
+   is ruled out when, against each of the top options, it ranks lower on
+   the rank-first measures or is no better on any weighted measure. That
+   holds for any positive weights and any shared normalization.
+4. For each variant still open, CP-SAT finds the least balance and the
+   least fairness penalty any legal fill gives (a small solve each), and
+   step 3 is repeated.
+5. Evaluate only what is still open, as a run would, and rank it with the
+   run's candidates.
+
+| Roster | Variants | Situations | Ruled out | Can only tie | Evaluated | Better | Time |
+|---|---|---|---|---|---|---|---|
+| March, 8 nurses | 2,352 | 1,462 | 896 | 1,456 | 0 | 0 | 3 min (full evaluation: 22 min) |
+| March, 10 nurses (Susan PRN) | 63,744 | 3,806 | (run in progress) | | | | (full evaluation: about 22 h) |
+
+Tests (`tests/test_exhaustive_check.py`) compare the bounds with full
+evaluations of every variant of three small rosters, check the exact minima
+and the ranking logic, and check that a discarded variant that ranks higher
+is found.
+
+The tests also found a bug in the exact weekday solve. In a week that
+cannot be filled completely, fills can differ in whether they leave a Main
+or a Backup slot empty, so each role's total is not fixed. The per-role
+spread bounds assumed it was, and could force worse spreads while
+reporting them optimal. They are now added only when each role's total is
+fixed. Both March rosters fill every slot, so their results were not
+affected. A brute-force test over every combination of week patterns
+covers it.
+
 ## Excluded on purpose
 
 These would save time by pruning, so they are left out:

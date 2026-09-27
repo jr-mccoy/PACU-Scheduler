@@ -237,6 +237,18 @@ budgets are tunable rather than fixed:
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
 
+Variants of one run share most of their weeks, so each worker process keeps
+the weekday fills of recent week situations and lists each only once.
+
+**Checking the cap.** `scripts/check_all_variants.py --db … --start …
+--end …` runs a normal generation, then checks every weekend variant
+without the cap against its top options
+(`scheduler.optimization.exhaustive.check_all_weekend_variants`). Bounds
+rule out most variants whatever the ranking weights, and only the ones that
+could still rank in the top are evaluated. It reports any discarded variant
+that would have. On the March roster's 2,352 variants it took 3 minutes
+where evaluating them all took 22.
+
 Slots that no nurse can legally take (everyone is off, or the weekends rule
 them all out) are detected once per variant and skipped by every search, so
 one impossible day no longer stalls the passes around it.

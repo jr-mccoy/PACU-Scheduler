@@ -49,7 +49,7 @@ lists the ideas that would.
 | 10 | Search | Neutral (plateau) moves never happen in the rebalance | Code reading, measured | Superseded by 12 |
 | 11 | Search | The window refill keeps the first completion it finds, not the best | Code reading | Superseded by 12 |
 | 12 | Search | Weeks are independent; the weekday problem can be solved exactly | Measured | Fixed |
-| 13 | Search | Spend the time saved on the caps that do cut the search | — | Open |
+| 13 | Search | Spend the time saved on the caps that do cut the search | Measured | Done; beam cap kept |
 
 ## Where the time goes
 
@@ -569,6 +569,32 @@ The search is cut in exactly three places:
 
 Once the speedups land, remove the fixed targets, make the week search
 exhaustive (finding 9 or 12), and raise or remove the beam cap.
+
+**Status: Done where it pays; the beam cap is kept, measured.**
+- **Fixed targets:** removed (finding 7).
+- **Week search:** exhaustive, by the exact solve (finding 12);
+  `max_week_permutations` now only limits the fallback search.
+- **Beam cap:** kept at 1,000. Weekend generation is now fast enough to run
+  uncapped (finding 5), but every variant still costs an exact weekday
+  solve. On the March rosters:
+
+| Roster | Capped (1,000) | Uncapped | Best found |
+|---|---|---|---|
+| 8 nurses | 856 variants, 6.5 min | 2,352 variants, 22 min | identical |
+| 10 nurses (Susan PRN) | 1,000 variants, 25 min | 63,744 variants, about 22 h estimated | not run |
+
+On the 8-nurse roster the uncapped run's best is the same as the capped
+run's on every measure:
+- spreads: backup + main 3, total 3, the best any of its 1,472
+  repeat-free, gap-free variants reach;
+- weekend spacing penalty 28;
+- rotation score 0;
+- long-term score 16.
+
+The raw metrics are compared, because the weighted score is normalized per
+run. So on real data the cap cut work, not quality. It stays a per-machine
+setting (**Weekend variants to evaluate**); raise it when a run reports that
+the beam pruned and there is time to spare.
 
 ## Excluded on purpose
 

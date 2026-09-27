@@ -747,8 +747,8 @@ On March:
 
 | Roster | Best month | Top 5 | The run's pipeline |
 |---|---|---|---|
-| 10 nurses (Susan PRN) | spacing 35, balance 2, fairness 1, total spread 1, 1 same-weekday pair | about 1 min, all proven | 20 min, and missed it (fairness 10) |
-| 8 nurses | spacing 28, balance 3, fairness 16, total spread 3 | about 4 min, all proven | 6.5 min, same measures |
+| 10 nurses (Susan PRN) | spacing 35, balance 2, fairness 1, total spread 1, 1 same-weekday pair | 49 s through the app's engine, all proven | 20 min, and missed it (fairness 10) |
+| 8 nurses | spacing 28, balance 3, fairness 16, total spread 3 | 128 s through the app's engine, all proven | 6.5 min, same measures |
 
 Both match what the full-variant check proved best. On the 10-nurse
 roster the model also has fewer same-weekday repeats (1 pair against 6),

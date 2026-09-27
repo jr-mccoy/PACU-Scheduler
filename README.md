@@ -420,11 +420,12 @@ for operator control.
 
 ## Known limitations
 
-- **Evaluation takes seconds per variant**, and a realistic horizon produces
-  hundreds of variants. On a 4-core container a full March run with the
-  exact weekday solve took 21 minutes for ten nurses (1,000 variants, 2–11 s
-  each) and 8 minutes for eight (856 variants, mostly 1–3 s each).
-  `docs/scheduler-optimization-audit.md` measures where the time goes.
+- **Run time.** On a 4-core container the whole-month engine offered five
+  proven months for the March 10-nurse roster in 49 s and for the 8-nurse
+  roster in 128 s. The weekend-variant engine, when it runs, takes seconds
+  per variant, and a realistic horizon produces hundreds: 21 and 8 minutes
+  for the same rosters. `docs/scheduler-optimization-audit.md` measures
+  where the time goes.
 - **Assignment debug logging used to be on by default in the GUI.** It is
   off now, but saving settings writes every value to
   `~/.nurse_scheduler/settings.json`, so a settings file saved earlier still

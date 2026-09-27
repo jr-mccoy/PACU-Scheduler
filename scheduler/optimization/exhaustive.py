@@ -19,11 +19,15 @@ run's top options, without filling the weekdays of every one of them:
    the top options, it ranks lower on the rank-first measures (rotation
    repeats, then unfilled slots) or is no better on any weighted measure.
    That holds whatever the weights and however the ranking normalizes them.
-4. **Exact minima.** For each variant still open, CP-SAT finds the least
+4. **Exact minima.** For a variant still open, CP-SAT finds the least
    balance and the least fairness penalty any legal fill can give (one
    small solve each), and step 3 is repeated with those.
-5. **Full evaluation.** Only the variants still open are evaluated as a run
-   would evaluate them, then ranked together with the run's candidates.
+5. **Full evaluation, best first.** The variants still open are evaluated
+   as a run would evaluate them, most promising first, and ranked together
+   with the run's candidates. After each round the new top options become
+   the reference and the waiting variants are checked against them again,
+   so a variant that can at best tie a better schedule found meanwhile is
+   never evaluated.
 
 The per-variant objective is the run's own (fewest unfilled slots, then
 balance, ...), so "better" means better as a run would have found and
@@ -66,8 +70,8 @@ class VariantCheckReport:
     better: list = field(default_factory=list)  # (idx, stats, counts, schedule) ranking in the top
     reference: list = field(default_factory=list)  # measures of the top options
     seconds: float = 0.0
-    # Per variant, in uncapped generation order: "ruled out", "tie", "open"
-    # (evaluated in full) or "unchecked".
+    # Per variant, in uncapped generation order: "ruled out", "tie",
+    # "evaluated" or "unchecked".
     statuses: list = field(default_factory=list)
 
 
@@ -120,61 +124,84 @@ def check_all_weekend_variants(
     )
     status = [_status(b, reference, weighted) for b in bounds]
 
-    # 4. Exact minima for the variants still open.
-    open_ids = [vi for vi, s in enumerate(status) if s == "open"]
+    # 4–5. Best first: for each variant still open, the exact minima of the
+    # weighted measures its bounds leave below a top option; then, if it is
+    # still open, a full evaluation. Each round joins the pool, the pool's
+    # top options become the reference, and the variants still waiting are
+    # checked against them again, so a variant that can at best tie a better
+    # schedule found meanwhile needs neither.
+    open_ids = [vi for vi, st in enumerate(status) if st == "open"]
     unchecked = [vi for vi in open_ids if bounds[vi] is None]
-    to_solve = [vi for vi in open_ids if bounds[vi] is not None]
-    overage_row = [int(overage.get(n, 0)) for n in nurses]
-    jobs = [
-        (
-            vi,
-            [situations[sid][1] for sid in keys[vi]],
-            base_main[vi].tolist(),
-            base_backup[vi].tolist(),
-            overage_row,
-            # Only measures whose bound is below some top option's value
-            # can still keep the variant open.
-            [
-                m
-                for m in ("balance", "long_term")
-                if m in weighted and any(bounds[vi][m] < ref[m] for ref in reference)
-            ],
-        )
-        for vi in to_solve
-    ]
-    for done, (vi, minima) in enumerate(_pool_map(_exact_minima, jobs, workers), 1):
-        bounds[vi].update({m: max(bounds[vi][m], value) for m, value in minima.items()})
-        status[vi] = _status(bounds[vi], reference, weighted)
-        if done % 100 == 0:
-            report("exact minima", done, len(jobs))
-
-    # 5. Full evaluation of what is left, ranked with the run's candidates.
     for vi in unchecked:
         status[vi] = "unchecked"
-    still_open = [vi for vi in to_solve if status[vi] == "open"]
+    order = (*RANK_FIRST, "long_term", "balance", "weekend_gap", "rot_viol")
+    queue = sorted(
+        (vi for vi in open_ids if bounds[vi] is not None),
+        key=lambda vi: tuple(bounds[vi][k] for k in order),
+    )
+    overage_row = [int(overage.get(n, 0)) for n in nurses]
     offset = 1 + max(idx for idx, *_ in candidates)
-    items = [(offset + vi, variants[vi], tuning) for vi in still_open]
+    pool = [(idx, dict(stats), counts, df) for idx, stats, counts, df in candidates]
+    new: set = set()
+    solved = 0
     from ..evaluation.worker import _evaluate_variant_worker
 
-    evaluated = []
-    for done, result in enumerate(_pool_map(_evaluate_variant_worker, items, workers), 1):
-        evaluated.append(result)
-        report("evaluate", done, len(items))
-    better = []
-    if evaluated:
-        pool = [(idx, dict(stats), counts, df) for idx, stats, counts, df in candidates]
-        pool += [(idx, dict(stats), counts, df) for idx, stats, counts, df in evaluated]
-        scheduler._score_and_rank_variants(pool)
-        new = {idx for idx, *_ in evaluated}
-        better = [c for c in pool[:top_n] if c[0] in new]
+    with _Workers(workers) as run:
+        while queue:
+            take, queue = queue[: 4 * workers], queue[4 * workers :]
+            jobs = []
+            for vi in take:
+                wanted = [
+                    m
+                    for m in ("balance", "long_term")
+                    if m in weighted and any(bounds[vi][m] < ref[m] for ref in reference)
+                ]
+                if wanted:
+                    patterns = [situations[sid][1] for sid in keys[vi]]
+                    jobs.append(
+                        (
+                            vi,
+                            patterns,
+                            base_main[vi].tolist(),
+                            base_backup[vi].tolist(),
+                            overage_row,
+                            wanted,
+                        )
+                    )
+            for vi, minima in run(_exact_minima, jobs):
+                bounds[vi].update({m: max(bounds[vi][m], v) for m, v in minima.items()})
+            solved += len(jobs)
+            items = []
+            for vi in take:
+                status[vi] = _status(bounds[vi], reference, weighted)
+                if status[vi] == "open":
+                    items.append((offset + vi, variants[vi], tuning))
+            for idx, stats, counts, df in run(_evaluate_variant_worker, items):
+                pool.append((idx, dict(stats), counts, df))
+                new.add(idx)
+                status[idx - offset] = "evaluated"
+            if items:
+                scheduler._score_and_rank_variants(pool)
+                reference = [
+                    _measures(scheduler, stats, counts, df, prior, overage)
+                    for _idx, stats, counts, df in pool[:top_n]
+                ]
+            waiting = []
+            for vi in queue:
+                status[vi] = _status(bounds[vi], reference, weighted)
+                if status[vi] == "open":
+                    waiting.append(vi)
+            queue = waiting
+            report("check", len(new) + solved, len(new) + solved + len(queue))
+    better = [c for c in pool[:top_n] if c[0] in new]
 
     return VariantCheckReport(
         variants=len(variants),
         situations=len(situations),
         ruled_out=status.count("ruled out"),
         can_only_tie=status.count("tie"),
-        solved=len(jobs),
-        evaluated=len(evaluated),
+        solved=solved,
+        evaluated=len(new),
         unchecked=len(unchecked),
         better=better,
         reference=reference,
@@ -333,8 +360,8 @@ def _bounds(situations, keys, measures, base_main, base_backup, nurses, overage)
         total_lo, total_hi = bm + bb + lo_t[ids].sum(0), bm + bb + hi_t[ids].sum(0)
         # long_term = sum max(0, overage + total - min total), and min total
         # is at most the smallest most-possible total.
-        most_min = int(total_hi.min())
         shifts = main_total[0] + backup_total[0]
+        most_min = min(int(total_hi.min()), shifts // n)  # the least is at most the mean
         long_term = max(
             int(np.maximum(0, over + total_lo - most_min).sum()),
             int(over.sum()) + shifts - n * most_min,
@@ -416,6 +443,29 @@ def _exact_minima(job):
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             minima[measure] = int(round(solver.BestObjectiveBound()))
     return vi, minima
+
+
+class _Workers:
+    """One spawn-started process pool for several rounds of ``map``."""
+
+    def __init__(self, workers: int):
+        self.workers = workers
+        self.pool = None
+
+    def __enter__(self):
+        if self.workers > 1:
+            context = multiprocessing.get_context("spawn")
+            self.pool = ProcessPoolExecutor(self.workers, mp_context=context)
+        return self.map
+
+    def __exit__(self, *exc):
+        if self.pool is not None:
+            self.pool.shutdown(cancel_futures=True)
+
+    def map(self, fn, jobs):
+        if self.pool is None:
+            return list(map(fn, jobs))
+        return list(self.pool.map(fn, jobs))
 
 
 def _pool_map(fn, jobs, workers):

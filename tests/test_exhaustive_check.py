@@ -159,8 +159,27 @@ def test_a_better_discarded_variant_is_found(tmp_path):
 
     report = check_all_weekend_variants(scheduler, weak, top_n=1, workers=1)
 
-    assert report.evaluated == report.variants  # nothing could be ruled out
+    # The better schedules found first become the reference, so the rest
+    # need no evaluation.
+    assert 0 < report.evaluated < report.variants
     assert len(report.better) == 1
-    _idx, better_stats, _counts, better_schedule = report.better[0]
-    assert better_stats["gaps"] < stats["gaps"] + 3
-    assert isinstance(better_schedule, pd.DataFrame)
+    _idx, found_stats, found_counts, found_schedule = report.better[0]
+    assert isinstance(found_schedule, pd.DataFrame)
+
+    # Ground truth: every variant evaluated in full, ranked with the weak option.
+    scheduler.config.max_weekend_variants = 0
+    everything = [
+        _evaluate_variant_core((1000 + i, v, scheduler.worker_tuning), with_profiling=False)
+        for i, v in enumerate(scheduler.generate_all_weekend_variants())
+    ]
+    pool = [(i, dict(st), c, df) for i, st, c, df in [*weak, *everything]]
+    scheduler._score_and_rank_variants(pool)
+    _i, best_stats, best_counts, best_schedule = pool[0]
+    prior, overage = scheduler._prior_violation_counts(), scheduler._historic_overage()
+
+    def measures(st, c, df):
+        return exhaustive._measures(scheduler, st, c, df, prior, overage)
+
+    assert measures(found_stats, found_counts, found_schedule) == measures(
+        best_stats, best_counts, best_schedule
+    )

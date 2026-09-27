@@ -218,7 +218,9 @@ def test_the_worker_runs_the_full_period_refill_until_the_bound(monkeypatch, at_
     calls = []
     monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
     variant = _stub_variant(calls, spreads=(1, 1, 2), at_bound=at_bound)  # within (1, 1)
-    _evaluate_variant_core((0, variant, WorkerTuningConfig()), with_profiling=False)
+    _evaluate_variant_core(
+        (0, variant, WorkerTuningConfig(weekday_solver="search")), with_profiling=False
+    )
 
     assert [(name, kwargs["target_spread"]) for name, kwargs in calls] == [("window", None)] + (
         [] if at_bound else [("full", None)]
@@ -234,7 +236,7 @@ def test_the_worker_runs_the_full_period_refill_until_the_bound(monkeypatch, at_
 def test_only_the_refill_step_2_added_gets_the_extra_budget(monkeypatch, spreads, extra):
     calls = []
     monkeypatch.setattr(worker, "BestStateTracker", _Tracker)
-    tuning = WorkerTuningConfig()
+    tuning = WorkerTuningConfig(weekday_solver="search")
     variant = _stub_variant(calls, spreads=spreads, at_bound=False)
     _evaluate_variant_core((0, variant, tuning), with_profiling=False)
 

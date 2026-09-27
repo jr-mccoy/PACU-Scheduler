@@ -48,7 +48,7 @@ lists the ideas that would.
 | 9 | Search | The rebalance reaches a small, mostly failing slice of each week | Measured | Open |
 | 10 | Search | Neutral (plateau) moves never happen in the rebalance | Code reading, measured | Open |
 | 11 | Search | The window refill keeps the first completion it finds, not the best | Code reading | Open |
-| 12 | Search | Weeks are independent; the weekday problem can be solved exactly | Measured | Open |
+| 12 | Search | Weeks are independent; the weekday problem can be solved exactly | Measured | Fixed |
 | 13 | Search | Spend the time saved on the caps that do cut the search | — | Open |
 
 ## Where the time goes
@@ -408,6 +408,71 @@ approach would replace.
 - The final ranking normalizes against the candidate pool, which does not
   map directly onto one solver objective; keep that ranking as it is.
 
+**Status: Fixed**, with OR-Tools CP-SAT (`scheduler/optimization/exact_weekdays.py`),
+now the default way the weekdays are filled (`WorkerTuningConfig.weekday_solver
+= "exact"`).
+
+How it works:
+- **Fills.** For each week, every legal fill is listed with the scheduler's
+  own eligibility checks, so the rules still have one implementation. Fills
+  are grouped by the per-nurse Main and Backup counts they add.
+- **Choice.** CP-SAT chooses one fill per week.
+- **Objective.** It minimizes, in order: unfilled slots, then main + backup
+  spread, then the larger of the two, then total spread, then gap-rule
+  exceptions, then the long-term history penalty (`exact_objective =
+  "balanced"`, chosen by the owner). `"backup_first"` keeps the search's
+  order instead (backup, main, total, history), which on the 8-nurse March
+  roster gives lopsided results such as backup spread 0 with main spread 5.
+- **Gap-rule exception.** Working the Tuesday right before your own weekend
+  is allowed only by the gap-filling rules. By the owner's decision it may be
+  used anywhere, but as few times as give the best spreads
+  (`exact_gap_rule_exceptions = "for_balance"`). `"when_needed"` allows it
+  only in a week that cannot be staffed otherwise.
+- **Verification.** The chosen fills are placed through the normal checks,
+  so every shift is re-verified; a failure undoes the placement and hands the
+  variant to the search.
+- **Fallback.** The existing local search runs instead when OR-Tools is not
+  installed, when `min_days_between_assignments` is 4 or more (spacing then
+  reaches across a weekend), or when a week has more than
+  `exact_max_fills_per_week` fills. If CP-SAT runs out of time
+  (`exact_time_limit_ms`) it keeps its best schedule and reports it as not
+  proven.
+- **Reporting.** Each candidate's stats say which filled it (`solver`) and
+  whether it is proven optimal (`solver_optimal`).
+
+Making it fast needed three things:
+- **Solver settings.** CP-SAT's presolve and probing spent 6–8 s loading this
+  model (thousands of fill choices feeding a few per-nurse sums) before
+  searching. With both off, each key solves and proves in well under a
+  second.
+- **Proven lower bounds** (from step 2) as constraints, so a schedule that
+  reaches them is proven at once.
+- **Enumeration on the grid only.** Trial placements skip the count Series,
+  and the exception check is cached per nurse and day.
+
+The GUI runs with the assignment debug logger on by default (see
+`ui/settings.py`). Logging every enumeration probe made the solve run out of
+time there, so enumeration no longer logs.
+
+Results, sampled variants, default settings:
+
+| Roster (8 variants) | Exact solve | Proven optimal | Against the search |
+|---|---|---|---|
+| Demo | 2.5–2.7 s | 8/8 | same on 6, better total spread on 2 |
+| March, 10 nurses (Susan PRN) | 4.0–6.4 s | 8/8 | same on 8 (the search already reached the optimum) |
+| March, 8 nurses | 0.8–1.9 s | 8/8 | better on 8: total spread 3 instead of 4–6 |
+
+Tests: `tests/test_exact_weekdays.py`. Checks include:
+- brute force over every legal schedule of a small instance, under both
+  objectives, with and without an unfillable week, on an instance where the
+  two objectives have different optima;
+- every placed nurse legal, with ordinary-rule refusals only ever the
+  gap-rule exception;
+- deterministic results;
+- each fallback;
+- never worse than the search;
+- the debug-logger regression.
+
 ### 13. Spend the time saved on the caps that do cut the search
 
 The search is cut in exactly three places:
@@ -438,7 +503,7 @@ These would save time by pruning, so they are left out:
 3. **Findings 3 and 4**, behind a differential test that compares schedules
    from the old and new code on the demo, blocked-day and relaxed scenarios.
    *Done.*
-4. **Findings 9 and 10, or go straight to 12.**
+4. **Findings 9 and 10, or go straight to 12.** *Done: finding 12.*
 5. **Finding 5**, then **13**: raise the caps.
 
 Every lossless step is verified the way step 1 was: evaluate the same

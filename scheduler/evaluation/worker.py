@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 
 from ..domain import BestStateTracker
+from ..optimization.exact_weekdays import solve_weekdays_exactly
 from ..optimization.window_refill import spreads_reached
 from ..profiling import MetricsCollector
 from ..runtime import _count_main_backup_empties, _count_weekday_gaps
@@ -72,59 +73,22 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
             # can take, so every search below skips them.
             var.compute_unfillable_slots()
 
-        with phase_timer("assign_weekdays"):
-            var.assign_weekdays()
+        exact = None
+        if tuning.weekday_solver == "exact":
+            with phase_timer("exact"):
+                exact = solve_weekdays_exactly(
+                    var,
+                    time_limit_ms=tuning.exact_time_limit_ms,
+                    max_fills_per_week=tuning.exact_max_fills_per_week,
+                    objective=tuning.exact_objective,
+                    gap_rule_exceptions=tuning.exact_gap_rule_exceptions,
+                )
+        if exact is not None:
             tracker = BestStateTracker(var)
             tracker.initialize()
-
-        early_gaps = _count_weekday_gaps(var.state.schedule)
-
-        with phase_timer("gap_fill"):
-            var.iterative_gap_fill_no_revert(
-                max_iterations=tuning.gap_fill_iterations,
-                tracker=tracker,
-                node_limit=tuning.gap_fill_node_limit,
-                time_limit_ms=tuning.gap_fill_time_limit_ms,
-            )
-
-        with phase_timer("rebalance"):
-            var.iterative_rebalance_no_revert(
-                tolerance=tuning.rebalance_tolerance,
-                max_iterations=tuning.rebalance_iterations,
-                early_stop_spread=tuning.rebalance_early_stop_spread,
-                tracker=tracker,
-            )
-
-        with phase_timer("window_refill"):
-            var.iterative_window_refill_rebalance(
-                window_weeks=tuning.window_refill_weeks,
-                max_passes=tuning.window_refill_max_passes,
-                time_limit_ms=tuning.window_refill_time_limit_ms,
-                node_limit=tuning.window_refill_node_limit,
-                target_spread=tuning.window_refill_target_spread,
-                tracker=tracker,
-            )
-
-        if not spreads_reached(var, tuning.full_period_target_spread):
-            s_b, s_m, _ = var.spread_components()
-            # Within (1, 1) this pass only chases the proven bounds, which it
-            # never ran for before; bound that extra search.
-            extra = s_b <= 1 and s_m <= 1
-            attempt_ms = tuning.full_period_per_attempt_time_ms
-            if extra:
-                attempt_ms = min(attempt_ms, tuning.full_period_extra_attempt_time_ms)
-            with phase_timer("full_period_refill"):
-                var.iterative_full_period_refill(
-                    max_orders=tuning.full_period_max_orders,
-                    per_attempt_time_ms=attempt_ms,
-                    total_time_ms=tuning.full_period_extra_time_ms if extra else None,
-                    per_attempt_nodes=tuning.full_period_per_attempt_nodes,
-                    target_spread=tuning.full_period_target_spread,
-                    # Keep the best refill even when it misses the target
-                    # spread: the tracker accepts it only if it is better.
-                    required_spread=False,
-                    tracker=tracker,
-                )
+            early_gaps = _count_weekday_gaps(var.state.schedule)
+        else:
+            tracker, early_gaps = _search_weekdays(var, tuning, phase_timer)
 
         tracker.restore_global_best()
 
@@ -155,6 +119,10 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                 "rotation_rep": int(rotation_rep),
                 # Slots no nurse could legally take; counted in "gaps" too.
                 "unfillable": len(var.unfillable_slots),
+                # "exact" when the exact weekday solve filled the weekdays
+                # (with whether it proved optimality), else "search".
+                "solver": "exact" if exact is not None else "search",
+                "solver_optimal": bool(exact.optimal) if exact is not None else None,
                 "unfillable_slots": [
                     f"{day.date().isoformat()} {role}" for day, role in sorted(var.unfillable_slots)
                 ],
@@ -190,6 +158,7 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
                     "t_rebalance": _phase_duration("rebalance"),
                     "t_lns_2w": _phase_duration("window_refill"),
                     "t_full": _phase_duration("full_period_refill"),
+                    "t_exact": _phase_duration("exact"),
                     "t_total": total_duration,
                 }
             )
@@ -203,6 +172,68 @@ def _evaluate_variant_core(args, *, with_profiling: bool):
             collector.finalize()
             logger.error("Worker %d failed during profiling", idx)
         raise
+
+
+def _search_weekdays(var, tuning, phase_timer):
+    """The local search over weekdays: greedy fill, then the repair passes.
+
+    Returns the tracker holding the best state found, and the unfilled
+    weekday slots after the greedy fill.
+    """
+    with phase_timer("assign_weekdays"):
+        var.assign_weekdays()
+        tracker = BestStateTracker(var)
+        tracker.initialize()
+
+    early_gaps = _count_weekday_gaps(var.state.schedule)
+
+    with phase_timer("gap_fill"):
+        var.iterative_gap_fill_no_revert(
+            max_iterations=tuning.gap_fill_iterations,
+            tracker=tracker,
+            node_limit=tuning.gap_fill_node_limit,
+            time_limit_ms=tuning.gap_fill_time_limit_ms,
+        )
+
+    with phase_timer("rebalance"):
+        var.iterative_rebalance_no_revert(
+            tolerance=tuning.rebalance_tolerance,
+            max_iterations=tuning.rebalance_iterations,
+            early_stop_spread=tuning.rebalance_early_stop_spread,
+            tracker=tracker,
+        )
+
+    with phase_timer("window_refill"):
+        var.iterative_window_refill_rebalance(
+            window_weeks=tuning.window_refill_weeks,
+            max_passes=tuning.window_refill_max_passes,
+            time_limit_ms=tuning.window_refill_time_limit_ms,
+            node_limit=tuning.window_refill_node_limit,
+            target_spread=tuning.window_refill_target_spread,
+            tracker=tracker,
+        )
+
+    if not spreads_reached(var, tuning.full_period_target_spread):
+        s_b, s_m, _ = var.spread_components()
+        # Within (1, 1) this pass only chases the proven bounds, which it
+        # never ran for before; bound that extra search.
+        extra = s_b <= 1 and s_m <= 1
+        attempt_ms = tuning.full_period_per_attempt_time_ms
+        if extra:
+            attempt_ms = min(attempt_ms, tuning.full_period_extra_attempt_time_ms)
+        with phase_timer("full_period_refill"):
+            var.iterative_full_period_refill(
+                max_orders=tuning.full_period_max_orders,
+                per_attempt_time_ms=attempt_ms,
+                total_time_ms=tuning.full_period_extra_time_ms if extra else None,
+                per_attempt_nodes=tuning.full_period_per_attempt_nodes,
+                target_spread=tuning.full_period_target_spread,
+                # Keep the best refill even when it misses the target
+                # spread: the tracker accepts it only if it is better.
+                required_spread=False,
+                tracker=tracker,
+            )
+    return tracker, early_gaps
 
 
 def _evaluate_variant_worker(args):

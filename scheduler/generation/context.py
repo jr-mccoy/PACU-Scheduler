@@ -107,6 +107,7 @@ class VariantSearchContext(Protocol):
         diagnostics: dict[str, list[str]] | None = ...,
         *,
         relaxed_spacing: bool = ...,
+        log: bool = ...,
     ) -> list[str]: ...
 
     # ----- Mutation primitives -----

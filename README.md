@@ -66,10 +66,20 @@ constrain everything else:
    pruned after each weekend to `max_weekend_variants` (default 1,000), keeping
    the variants with the fewest rotation repeats, the most even weekend spread,
    and the largest minimum weekend gap.
-2. **Weekday completion and rebalancing.** Each surviving weekend variant is
-   filled in across weekdays, then run through an iterative window-refill
-   rebalance pass that evens out Main/Backup counts without violating the hard
-   constraints.
+2. **Weekday completion.** Each surviving weekend variant's Monday–Thursday
+   shifts are filled optimally. Once the weekends are fixed, each week's
+   legal fills do not depend on the other weeks, so the scheduler lists every
+   legal fill of each week with its own rule checks. OR-Tools CP-SAT then
+   picks one fill per week that minimizes, in order:
+   - unfilled slots;
+   - the Main plus Backup spread, then the larger of the two;
+   - the total-shift spread;
+   - uses of the gap-fill exception (a Tuesday right before the nurse's
+     weekend);
+   - recent-history overuse.
+
+   Where that cannot promise an exact answer, the earlier local search runs
+   instead: greedy fill, gap fill, then rebalance and refill passes.
 
 Surviving variants are then ranked:
 
@@ -202,8 +212,17 @@ budgets are tunable rather than fixed:
   (8! = 40,320 orderings). Below the cap every ordering is tried; above it,
   the given order plus seeded random shuffles, so every slot gets to go
   first.
+- `WorkerTuningConfig.weekday_solver` — `"exact"` (the default) fills the
+  weekdays with the CP-SAT solve described under **How it works**; `"search"`
+  uses the local search. The exact solve falls back to the search by itself
+  when OR-Tools is missing, when `min_days_between_assignments` is 4 or more
+  (spacing then reaches across weekends), or when a week has more than
+  `exact_max_fills_per_week` legal fills. `exact_objective` (`"balanced"` or
+  `"backup_first"`), `exact_gap_rule_exceptions` (`"for_balance"` or
+  `"when_needed"`) and `exact_time_limit_ms` tune it. Each candidate's stats
+  report `solver` and `solver_optimal`.
 - `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
-  gap-fill, rebalance, and refill passes. Hand it to `NurseScheduler` as
+  gap-fill, rebalance, and refill passes of the local search. Hand it to `NurseScheduler` as
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
 
@@ -340,9 +359,14 @@ for operator control.
 ## Known limitations
 
 - **Evaluation takes seconds per variant**, and a realistic horizon produces
-  hundreds of variants. The search's inner loop now runs on plain Python
-  lists rather than pandas; `docs/scheduler-optimization-audit.md` measures
-  what remains and how to go further.
+  hundreds of variants. On a 4-core container the exact weekday solve took
+  about 1–3 s per variant for an eight-nurse month and 4–6 s for a
+  ten-nurse one.
+  `docs/scheduler-optimization-audit.md` measures where the time goes.
+- **The GUI turns on assignment debug logging by default**
+  (`assignment_debug_enabled` in `ui/settings.py`), which writes a record for
+  many eligibility checks and slows every run. Turn it off in Settings unless
+  you are debugging.
 - **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
   the per-attempt time limits are 800 seconds each, multiplied by hundreds of
   passes. They effectively never bind, so run time is governed by how quickly

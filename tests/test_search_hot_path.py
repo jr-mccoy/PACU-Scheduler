@@ -23,6 +23,7 @@ from scheduler import ScheduleVariant, WorkerTuningConfig
 from scheduler.evaluation.worker import _evaluate_variant_core
 
 QUICK = WorkerTuningConfig(
+    weekday_solver="search",  # these tests exercise the local search
     gap_fill_iterations=3,
     rebalance_iterations=3,
     window_refill_max_passes=2,

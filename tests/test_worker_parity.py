@@ -119,7 +119,7 @@ def stubbed_worker_env(monkeypatch):
     monkeypatch.setattr(
         legacy_core,
         "WORKER_TUNING",
-        WorkerTuningConfig(),
+        WorkerTuningConfig(weekday_solver="search"),  # the stub drives the search
     )
     return None
 

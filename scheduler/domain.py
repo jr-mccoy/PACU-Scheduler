@@ -618,13 +618,19 @@ def _spread_lower_bound(counts: pd.Series, fixed: dict[str, int], caps: dict[str
     total; ``fixed`` and ``caps`` hold each nurse's least and most possible
     count. See :meth:`ScheduleVariant.spread_lower_bounds`.
     """
-    n = len(counts)
+    return spread_lower_bound_for_total(int(counts.sum()), list(counts.index), fixed, caps)
+
+
+def spread_lower_bound_for_total(
+    total: int, nurses: list[str], fixed: dict[str, int], caps: dict[str, int]
+) -> int:
+    """:func:`_spread_lower_bound` for *total* shifts shared among *nurses*."""
+    n = len(nurses)
     if n == 0:
         return 0
-    total = int(counts.sum())
     floor, ceil = total // n, -(-total // n)
-    most_fixed = max(fixed.get(nurse, 0) for nurse in counts.index)
-    least_cap = min(caps.get(nurse, 0) for nurse in counts.index)
+    most_fixed = max(fixed.get(nurse, 0) for nurse in nurses)
+    least_cap = min(caps.get(nurse, 0) for nurse in nurses)
     # max >= ceil and >= most_fixed; min <= floor and <= least_cap.
     return max(
         0,
@@ -1165,9 +1171,10 @@ class ScheduleVariant:
         diagnostics: dict[str, list[str]] | None = None,
         *,
         relaxed_spacing: bool = False,
+        log: bool = True,
     ) -> list[str]:
         return self._get_eligible_nurses_for_day_gap(
-            date, role, diagnostics, relaxed_spacing=relaxed_spacing
+            date, role, diagnostics, relaxed_spacing=relaxed_spacing, log=log
         )
 
     def inc_assign(
@@ -1182,6 +1189,20 @@ class ScheduleVariant:
 
     def dec_assign(self, date: pd.Timestamp, role: str, nurse: str) -> None:
         return self._dec_assign(date, role, nurse)
+
+    def is_gap_rule_exception(self, nurse: str, date: pd.Timestamp, role: str) -> bool:
+        """True when only the gap-filling rules allow this shift around a weekend.
+
+        That is a Tuesday right before the nurse's worked weekend: the
+        ordinary rules allow only Monday there.
+        """
+        return not self._validate_weekday_relative_to_weekend(
+            nurse, date, role
+        ) and self._validate_weekday_relative_to_weekend_gap(nurse, date, role)
+
+    def place_assignment(self, date: pd.Timestamp, role: str, nurse: str) -> None:
+        """Place *nurse* without checking; only for a nurse known to be eligible."""
+        self._place_assignment(date, role, nurse)
 
     def spread_components(self) -> tuple[int, int, int]:
         return self._spread_components()
@@ -2389,12 +2410,20 @@ class ScheduleVariant:
         diagnostics: dict[str, list[str]] | None = None,
         *,
         relaxed_spacing: bool = False,
+        log: bool = True,
     ) -> list[str]:
+        """Nurses the gap-filling rules allow in the slot.
+
+        With the assignment debug logger on, each call is logged as a
+        candidate pool unless *log* is false (for probes that are not
+        assignment decisions, such as the exact solve's enumeration).
+        """
+        log = log and _debug.ASSIGNMENT_DEBUG_LOGGER.enabled
         other_role = "backup" if role == "main" else "main"
         other_nurse = self.state.grid().get(date, other_role)
         capture = diagnostics
         created_local_diag = False
-        if capture is None and _debug.ASSIGNMENT_DEBUG_LOGGER.enabled:
+        if capture is None and log:
             capture = {}
             created_local_diag = True
 
@@ -2443,7 +2472,7 @@ class ScheduleVariant:
             if capture is not None:
                 capture[nurse] = list(reasons)
             out.append(nurse)
-        if _debug.ASSIGNMENT_DEBUG_LOGGER.enabled:
+        if log:
             diag_for_log = capture or {}
             self._log_assignment_debug(
                 context="gap_candidates",

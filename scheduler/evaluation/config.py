@@ -41,6 +41,23 @@ class WorkerTuningConfig:
     # keeps the budgets above, as before.
     full_period_extra_attempt_time_ms: int = 2_000
     full_period_extra_time_ms: int = 20_000
+    # How the weekdays are filled. "exact" lists every legal fill of each
+    # week and lets OR-Tools CP-SAT choose the optimal combination
+    # (scheduler.optimization.exact_weekdays); it falls back to "search", the
+    # passes above, when OR-Tools is missing, when the spacing rule couples
+    # weeks, or when a week has more than exact_max_fills_per_week fills.
+    weekday_solver: str = "exact"
+    # "balanced": fewest unfilled slots, then main + backup spread, then the
+    # larger of the two, then total spread, then recent-history fairness.
+    # "backup_first": the search's order (backup, main, total, history).
+    exact_objective: str = "balanced"
+    # "for_balance": the gap-filling rules' exception (a Tuesday right before
+    # the nurse's worked weekend) may be used anywhere, as few times as give
+    # the best spreads. "when_needed": only in a week that cannot be staffed
+    # under the ordinary rules.
+    exact_gap_rule_exceptions: str = "for_balance"
+    exact_time_limit_ms: int = 20_000
+    exact_max_fills_per_week: int = 200_000
 
 
 WORKER_TUNING = WorkerTuningConfig()

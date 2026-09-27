@@ -32,6 +32,12 @@ weekend), and only if none of those fills the week, the fills that leave the
 fewest slots empty. So a relaxation is used only in a week that needs it for
 coverage, as the search intends.
 
+Variants of one run share most of their weeks: a week's legal fills depend
+only on the cells within spacing reach of it, on who works the weekends on
+either side, and on inputs fixed for the whole run. Each process keeps the
+fills of recent week situations (:func:`week_options`), keyed by exactly
+those, so a situation is listed once however many variants contain it.
+
 It returns None, leaving the variant untouched, whenever it cannot promise
 an exact answer: OR-Tools is not installed, the spacing rule couples weeks,
 or a week has more legal fills than ``max_fills_per_week``. Callers then use
@@ -41,8 +47,12 @@ the local search.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
+
+import pandas as pd
 
 from ..domain import spread_lower_bound_for_total
 
@@ -71,6 +81,15 @@ class ExactOutcome:
 
 class _TooManyFills(Exception):
     pass
+
+
+# Week fills of recent situations, per process. An entry can hold tens of
+# thousands of fills, so the cache stays small; evaluation order keeps
+# neighbouring variants, which share most weeks, close together.
+WEEK_CACHE_SIZE = 64
+_week_cache: OrderedDict = OrderedDict()
+_week_cache_lock = threading.Lock()
+_TOO_MANY = object()  # cached: the situation has more fills than allowed
 
 
 @dataclass
@@ -121,7 +140,7 @@ def solve_weekdays_exactly(
     weeks = variant.get_weeks()
     try:
         options = [
-            _week_options(probe, week, max_fills_per_week, gap_rule_exceptions) for week in weeks
+            week_options(probe, week, max_fills_per_week, gap_rule_exceptions) for week in weeks
         ]
     except _TooManyFills:
         logger.info(
@@ -179,19 +198,25 @@ def solve_weekdays_exactly(
     # Proven lower bounds (see ScheduleVariant.spread_lower_bounds). CP-SAT
     # cannot easily see, say, that 28 shifts cannot split evenly among 9
     # nurses; with these it proves a schedule optimal as soon as it reaches
-    # them. Every week fills the same number of slots in every one of its
-    # fills, so each role's total is known up front.
+    # them. Every fill of a week leaves the same number of slots empty, so
+    # the total number of shifts is known up front. Each role's total is
+    # known only when no week's fills differ in which role they leave empty.
     fixed, caps = probe._spread_bound_inputs()
-    first = [options_i[0] for options_i in (list(week.fills) for week in options) if options_i]
-    main_total = sum(base_main) + sum(sum(p[: len(nurses)]) for p in first)
-    backup_total = sum(base_backup) + sum(sum(p[len(nurses) : 2 * len(nurses)]) for p in first)
-    model.Add(
-        backup_spread
-        >= spread_lower_bound_for_total(backup_total, nurses, fixed["backup"], caps["backup"])
-    )
-    model.Add(
-        main_spread >= spread_lower_bound_for_total(main_total, nurses, fixed["main"], caps["main"])
-    )
+    n = len(nurses)
+    role_totals = [
+        {(sum(p[:n]), sum(p[n : 2 * n])) for p in week.fills} for week in options if week.fills
+    ]
+    main_total = sum(base_main) + sum(min(t)[0] for t in role_totals)
+    backup_total = sum(base_backup) + sum(min(t)[1] for t in role_totals)
+    if all(len(t) == 1 for t in role_totals):
+        model.Add(
+            backup_spread
+            >= spread_lower_bound_for_total(backup_total, nurses, fixed["backup"], caps["backup"])
+        )
+        model.Add(
+            main_spread
+            >= spread_lower_bound_for_total(main_total, nurses, fixed["main"], caps["main"])
+        )
     model.Add(
         total_spread
         >= spread_lower_bound_for_total(
@@ -381,6 +406,103 @@ def _vary_weekdays(probe, options, solution, remaining_s: float):
     return fills, repeats_of(fills), status == cp_model.OPTIMAL
 
 
+def week_options(probe, week, max_fills: int, gap_rule_exceptions: str) -> _WeekOptions:
+    """:func:`_week_options`, shared between variants in the same situation.
+
+    *probe* holds the fixed weekends and pinned cells, with every other
+    weekday cell empty. The result is shared: do not modify it.
+    """
+    key = (
+        _run_fingerprint(probe),
+        max_fills,
+        gap_rule_exceptions,
+        _situation_key(probe, week),
+    )
+    with _week_cache_lock:
+        found = _week_cache.get(key)
+        if found is not None:
+            _week_cache.move_to_end(key)
+    if found is None:
+        try:
+            found = _week_options(probe, week, max_fills, gap_rule_exceptions)
+        except _TooManyFills:
+            found = _TOO_MANY
+        with _week_cache_lock:
+            _week_cache[key] = found
+            while len(_week_cache) > WEEK_CACHE_SIZE:
+                _week_cache.popitem(last=False)
+    if found is _TOO_MANY:
+        raise _TooManyFills
+    return found
+
+
+def clear_week_cache() -> None:
+    with _week_cache_lock:
+        _week_cache.clear()
+
+
+def _situation_key(probe, week) -> tuple:
+    """Everything about *week* that its eligibility checks can read.
+
+    Spacing reaches at most MAX_INDEPENDENT_SPACING days either side, and
+    the weekend windows only look at the Friday of the weekend just before
+    the week and just after it (at most 6 days before, 4 days after).
+    """
+    reach = pd.Timedelta(days=MAX_INDEPENDENT_SPACING)
+    first, last = week[0] - reach, week[-1] + reach
+    grid = probe.state.grid()
+    cells = tuple(
+        (day, _cell(grid.get(day, "main")), _cell(grid.get(day, "backup")))
+        for day in probe.state.frame_index
+        if first <= day <= last
+    )
+    near = pd.Timedelta(days=7)
+    fridays = tuple(
+        sorted(
+            (nurse, friday)
+            for nurse, weekend_fridays in probe.state.nurse_weekend_lists.items()
+            for friday in weekend_fridays
+            if week[0] - near <= friday <= week[-1] + near
+        )
+    )
+    unfillable = tuple(sorted(slot for slot in probe.unfillable_slots if slot[0] in week))
+    return (tuple(week), cells, fridays, unfillable)
+
+
+def _cell(value):
+    """A cell as the rules see it: a nurse, or None (NaN never equals itself)."""
+    return value if isinstance(value, str) and value else None
+
+
+def _run_fingerprint(probe) -> tuple:
+    """The inputs fixed for a whole run that the eligibility checks read.
+
+    Computed once per variant (and cached on it): a process can evaluate
+    more than one run, so cached week fills must never cross runs.
+    """
+    found = probe.__dict__.get("_exact_run_fingerprint")
+    if found is None:
+        found = (
+            tuple(probe.nurses),
+            tuple(sorted(probe._late_set)),
+            tuple(sorted((k, repr(v)) for k, v in vars(probe.config).items())),
+            # Availability as the checks read it (missing or NaN is off).
+            tuple(
+                (day, tuple(n for n in probe.nurses if probe._is_available(n, day)))
+                for day in probe.availability.index
+            ),
+            tuple(
+                sorted(
+                    (day, tuple(sorted(slot.items()))) for day, slot in probe.pre_scheduled.items()
+                )
+            ),
+            tuple(sorted((n, tuple(sorted(d))) for n, d in probe.state.pre_window_worked.items())),
+            tuple(sorted((n, tuple(sorted(d))) for n, d in probe.state.post_window_worked.items())),
+        )
+        probe.__dict__["_exact_run_fingerprint"] = found
+    return found
+
+
 def _week_options(probe, week, max_fills: int, gap_rule_exceptions: str) -> _WeekOptions:
     """Every legal fill of one week, under the strictest rules that fill it.
 
@@ -510,4 +632,10 @@ def _recheck(probe, slots, fill, eligible) -> bool:
     return ok
 
 
-__all__ = ["ExactOutcome", "solve_weekdays_exactly", "unavailable_reason"]
+__all__ = [
+    "ExactOutcome",
+    "clear_week_cache",
+    "solve_weekdays_exactly",
+    "unavailable_reason",
+    "week_options",
+]

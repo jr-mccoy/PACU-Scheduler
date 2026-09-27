@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import builtins
 import dataclasses
+import itertools
 
 import pandas as pd
 import pytest
 from scheduling_fixtures import REGULAR, build_scheduler, seed_db, weekday_only_variant
 
+import scheduler.optimization.exact_weekdays as exact
 from scheduler import WorkerTuningConfig
 from scheduler.domain import ScheduleQuality
 from scheduler.evaluation.worker import _evaluate_variant_core
@@ -119,6 +121,62 @@ def test_the_exact_solve_matches_brute_force(objective, order, short_week):
     assert order(_spreads(variant)) == expected
     assert outcome.gaps == expected[0]
     assert (expected[0] > 0) is short_week
+
+
+def _six_nurse_variants(tmp_path):
+    """Two weekends, each open to three of six nurses, and a few days off.
+
+    Several weeks cannot be filled completely, and their fills differ in
+    whether they leave a Main or a Backup slot empty.
+    """
+    roster = tuple((name, False, False) for name in "ABCDEF")
+    weekend_1, weekend_2 = ("2026-11-06", "2026-11-07", "2026-11-08"), ("2026-11-13", "2026-11-14")
+    off = [(n, d) for n in "DEF" for d in weekend_1] + [(n, d) for n in "ABC" for d in weekend_2]
+    off += [("A", "2026-11-03"), ("E", "2026-11-10"), ("B", "2026-11-12")]
+    db = seed_db(tmp_path, roster=roster, time_off=off)
+    return build_scheduler(db, "2026-11-02", "2026-11-15").generate_all_weekend_variants()
+
+
+def test_weeks_with_empty_slots_are_still_solved_optimally(tmp_path):
+    """Brute force over every combination of the weeks' count patterns.
+
+    The proven spread bounds once assumed each role's total was fixed, which
+    fails when a week's fills leave different roles empty, and forced worse
+    spreads there.
+    """
+    checked_uneven = 0
+    for variant in _six_nurse_variants(tmp_path)[:16]:
+        variant = variant.clone()
+        variant.compute_unfillable_slots()
+        probe = variant.clone()
+        options = [
+            exact._week_options(probe, week, 200_000, "for_balance") for week in variant.get_weeks()
+        ]
+        nurses = list(probe.state.main_assignment_counts.index)
+        n = len(nurses)
+        base_main = [int(probe.state.main_assignment_counts[x]) for x in nurses]
+        base_backup = [int(probe.state.backup_assignment_counts[x]) for x in nurses]
+        checked_uneven += any(len({sum(p[:n]) for p in week.fills}) > 1 for week in options)
+        best = None
+        for combo in itertools.product(*(list(week.fills) for week in options)):
+            main = [base_main[i] + sum(p[i] for p in combo) for i in range(n)]
+            backup = [base_backup[i] + sum(p[n + i] for p in combo) for i in range(n)]
+            total = [a + b for a, b in zip(main, backup, strict=True)]
+            b, m, t = max(backup) - min(backup), max(main) - min(main), max(total) - min(total)
+            key = (b + m, max(b, m), t, sum(p[-1] for p in combo))
+            best = key if best is None or key < best else best
+
+        outcome = solve_weekdays_exactly(variant)
+        b, m, t = variant.spread_components()
+        exceptions = sum(
+            variant.is_gap_rule_exception(nurse, day, role)
+            for day, role, nurse in _placed_nurses(variant)
+        )
+        assert outcome.optimal
+        assert (b + m, max(b, m), t, exceptions) == best
+    assert checked_uneven > 0, (
+        "the scenario should have weeks whose fills leave different roles empty"
+    )
 
 
 def test_the_two_objectives_really_differ_here():
@@ -271,6 +329,67 @@ def test_variety_never_changes_the_counts(monkeypatch):
     days = varied.get_weekdays()
     assert _signature(varied, days) == _signature(first, days)
     assert _weekday_repeats(varied) < _weekday_repeats(first)  # 1 against 2 here
+
+
+# ── week fills shared between variants ─────────────────────────────────────
+def _options_tuple(options):
+    return (options.slots, options.gap_mode, options.relaxed, options.empties, options.fills)
+
+
+@pytest.mark.parametrize(
+    "db_kwargs",
+    [
+        {},
+        {"time_off": [("A", "2026-11-03"), ("B", "2026-11-10"), ("C", "2026-11-19")]},
+        {"pre_scheduled": [("2026-11-11", "D", None), ("2026-11-13", "E", "F")]},
+        {"weekends": [("2026-10-30", "A", "B")]},
+    ],
+    ids=["plain", "time-off", "pinned", "history"],
+)
+def test_shared_week_fills_match_a_fresh_listing(tmp_path, db_kwargs):
+    """Every week of every variant: what the cache hands out is what listing gives."""
+    db = seed_db(tmp_path, **db_kwargs)
+    variants = build_scheduler(db, "2026-11-02", "2026-11-29").generate_all_weekend_variants()
+    assert len(variants) > 5
+    exact.clear_week_cache()
+    hits = 0
+    for variant in variants:
+        variant = variant.clone()
+        variant.compute_unfillable_slots()
+        for week in variant.get_weeks():
+            size = len(exact._week_cache)
+            shared = exact.week_options(variant.clone(), week, 200_000, "for_balance")
+            hits += len(exact._week_cache) == size
+            fresh = exact._week_options(variant.clone(), week, 200_000, "for_balance")
+            assert _options_tuple(shared) == _options_tuple(fresh), week[0]
+    assert hits > 0, "variants should share some weeks"
+
+
+def test_shared_week_fills_never_cross_runs(tmp_path):
+    """Same weekends, different time off: a different run, so no sharing."""
+    variant = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-15")
+    variant = variant.generate_all_weekend_variants()[0].clone()
+    variant.compute_unfillable_slots()
+    week = variant.get_weeks()[1]
+    exact.clear_week_cache()
+    first = exact.week_options(variant.clone(), week, 200_000, "for_balance")
+
+    # Take away a Tuesday from a nurse who works it in some fill.
+    tuesday = week[1]
+    column = first.slots.index((tuesday, "main"))
+    nurse = next(fill[column] for fills in first.fills.values() for fill in fills)
+    other = variant.clone()
+    other.__dict__.pop("_exact_run_fingerprint", None)
+    other.availability = other.availability.copy()
+    other.availability.loc[tuesday, nurse] = False
+    other.__dict__.pop("_availability_cache", None)
+    second = exact.week_options(other.clone(), week, 200_000, "for_balance")
+
+    assert len(exact._week_cache) == 2
+    assert second.fills != first.fills
+    assert _options_tuple(second) == _options_tuple(
+        exact._week_options(other.clone(), week, 200_000, "for_balance")
+    )
 
 
 # ── stepping aside for the search ──────────────────────────────────────────

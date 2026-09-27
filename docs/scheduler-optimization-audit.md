@@ -664,21 +664,39 @@ more cheaply from bounds, in
    is ruled out when, against each of the top options, it ranks lower on
    the rank-first measures or is no better on any weighted measure. That
    holds for any positive weights and any shared normalization.
-4. For each variant still open, CP-SAT finds the least balance and the
-   least fairness penalty any legal fill gives (a small solve each), and
-   step 3 is repeated.
-5. Evaluate only what is still open, as a run would, and rank it with the
-   run's candidates.
+4. Best first, for each variant still open: CP-SAT finds the least balance
+   and the least fairness penalty any legal fill gives (a small solve each)
+   where its bounds leave them below a top option, and step 3 is repeated.
+5. If it is still open, evaluate it as a run would and rank it with the
+   run's candidates. After each round the pool's top options become the
+   reference, and the variants still waiting are checked against them
+   again, so once better schedules are found, the variants that can at best
+   tie them need neither step.
 
 | Roster | Variants | Situations | Ruled out | Can only tie | Evaluated | Better | Time |
 |---|---|---|---|---|---|---|---|
 | March, 8 nurses | 2,352 | 1,462 | 896 | 1,456 | 0 | 0 | 3 min (full evaluation: 22 min) |
-| March, 10 nurses (Susan PRN) | 63,744 | 3,806 | (run in progress) | | | | (full evaluation: about 22 h) |
+| March, 10 nurses (Susan PRN) | 63,744 | 3,806 | 23,232 | 40,496 | 16 | **5** | 14 min after the run (full evaluation: about 22 h) |
+
+**The cap did discard better schedules on the 10-nurse roster.** The
+capped run's top five all have balance 2, total spread 2 and a long-term
+fairness penalty of 10: Julia, the nurse with the most days off, gets 6
+shifts. Five discarded variants have balance 2, total spread 1 and a
+fairness penalty of 1: every nurse gets 7 shifts, and the one working two
+weekends gets 8. They are equal on every other measure, so they rank above
+the capped five whatever the weights. The check proves nothing ranks above
+them: 23,232 variants rank lower and 40,496 can at best tie them. Ties
+could still reorder them through the tie-breakers (the new five have 6
+same-weekday repeats), which the check does not search.
+
+Bounds alone left 7,296 variants open (their fairness bound was 0 or 1
+against 10). Before the best-first loop, solving all of their minima took
+over two hours; with it, 16 minima and 16 full evaluations were enough.
 
 Tests (`tests/test_exhaustive_check.py`) compare the bounds with full
 evaluations of every variant of three small rosters, check the exact minima
-and the ranking logic, and check that a discarded variant that ranks higher
-is found.
+and the ranking logic, and check that the best discarded variant found
+matches a full evaluation of every variant.
 
 The tests also found a bug in the exact weekday solve. In a week that
 cannot be filled completely, fills can differ in whether they leave a Main

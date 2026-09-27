@@ -251,6 +251,14 @@ minutes where evaluating them all took 22, and confirmed the run's top
 five. On the 10-nurse roster (63,744 variants, about 22 hours to evaluate)
 it took 14 minutes and found five better schedules the cap had discarded.
 
+**Solving the whole month at once.** `scripts/solve_month.py --db … --start
+… --end …` solves weekends and weekdays together as one CP-SAT model
+(`scheduler.optimization.month_model`), with no weekend-variant cap, and
+verifies each month through the scheduler's own checks. On the March
+10-nurse roster it proves the best month in seconds, better than the capped
+run's top option. It does not yet model the one-day spacing relaxation or
+relaxed rotation.
+
 Slots that no nurse can legally take (everyone is off, or the weekends rule
 them all out) are detected once per variant and skipped by every search, so
 one impossible day no longer stalls the passes around it.

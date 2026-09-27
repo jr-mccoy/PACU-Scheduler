@@ -710,6 +710,60 @@ fixed. Both March rosters fill every slot, so their results were not
 affected. A brute-force test over every combination of week patterns
 covers it.
 
+### The whole month as one CP-SAT model
+
+Listing weekend variants at all is what forces a cap. The alternative is
+one model of the whole month: for each weekend and nurse, whether they work
+it as FSF or SFS, and for each weekday slot and nurse, whether they take it
+(about 600 yes/no choices for March), with every rule written as a
+constraint. CP-SAT then searches every weekend arrangement implicitly and
+proves the best month. It is in `scheduler/optimization/month_model.py`
+(`solve_month`), with `scripts/solve_month.py` for a database.
+
+It minimizes, in order: rotation repeats, unfilled slots, the rotation
+score, the weekend spacing penalty (reproduced exactly), main + backup
+spread, the larger of the two, the long-term fairness penalty, total
+spread, Tuesday exceptions, and same-weekday repeats. `top_n` asks for
+further months with different weekends. Parallel search runs in CP-SAT's
+deterministic mode, so a run gives the same months every time.
+
+Because the rules now exist twice, as the scheduler's checks and as
+constraints, the model is verified against the checks:
+- **Weekends.** The set of weekend arrangements the model allows is exactly
+  the set weekend generation produces, on 12 scenarios: history, pinned
+  cells, late-shift nurses, five weekends where nurses work two (so
+  alternation and the 28-day gap interact), both post-weekend settings,
+  spacing of 3 and 4 days, a window starting on a cut weekend, and
+  recorded weekends after the window (6 to 1,680 arrangements each).
+- **Weekdays.** With a variant's weekends fixed, the model's weekday
+  measures equal the exact weekday solve's on every sampled variant where
+  that solve proved optimality (over 100 variants).
+- **Replay.** `replay` places every solution through the scheduler's own
+  checks (each weekend pair must be one the generator allows at that point,
+  each weekday shift must pass the gap-filling rules) and recomputes every
+  measure; they must equal the model's.
+
+On March:
+
+| Roster | Best month | Top 5 | The run's pipeline |
+|---|---|---|---|
+| 10 nurses (Susan PRN) | spacing 35, balance 2, fairness 1, total spread 1, 1 same-weekday pair | about 1 min, all proven | 20 min, and missed it (fairness 10) |
+| 8 nurses | spacing 28, balance 3, fairness 16, total spread 3 | about 4 min, all proven | 6.5 min, same measures |
+
+Both match what the full-variant check proved best. On the 10-nurse
+roster the model also has fewer same-weekday repeats (1 pair against 6),
+since it optimizes variety over the whole month.
+
+One side finding: on one small variant the exact weekday solve could not
+prove its second key (the larger spread) within its 20 s limit, and so
+never minimized the later keys; the month model solved the same weekdays
+at once. The March runs proved every variant optimal, so this is rare.
+
+Not modelled yet: the one-day spacing relaxation, allowing rotation
+repeats (the fallback when strict alternation has no solution), and a PRN
+nurse pinned into a weekend. `month_model.unsupported` says so, and
+`solve_month` returns nothing.
+
 ## Excluded on purpose
 
 These would save time by pruning, so they are left out:

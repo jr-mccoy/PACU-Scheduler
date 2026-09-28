@@ -806,6 +806,20 @@ found does the pipeline run. Measured on the March 10-nurse roster, one
 month took 2–12 s, a 7-weekend horizon 16–18 s per month and a 9-weekend
 one (over two months) 18–19 s, so the limit is a safety net.
 
+Larger rosters, up to the 12–15 nurses the unit ever staffs: the March
+roster plus invented nurses, all five months proven each time.
+
+| Roster | Horizon | Five months | Per month |
+|---|---|---|---|
+| 12 nurses (11 scheduled), extras always available | March | 74 s | 11–17 s |
+| 15 nurses (14 scheduled), extras always available | March | 47 s | 8–12 s |
+| 15 nurses, extras with the real nurses' amount of time off | March | 43 s | 7–10 s |
+| 15 nurses, extras with time off | March–April (8 weeks) | 121 s | 23–25 s |
+
+More nurses make the month easier to prove, not harder. The slowest month
+measured anywhere is about 45 s (the tight 8-nurse roster), so the limit
+stays at 300 s.
+
 ## Excluded on purpose
 
 These would save time by pruning, so they are left out:

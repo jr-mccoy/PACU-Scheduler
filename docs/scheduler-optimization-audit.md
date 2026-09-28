@@ -763,9 +763,8 @@ at once. The March runs proved every variant optimal, so this is rare.
 GUI, the CLI and `generate_schedule()` share, solves with the month model
 (`SchedulerConfig.engine = "month"`, the `scheduling_engine` setting) and
 falls back to the weekend-variant pipeline when the model cannot be used:
-OR-Tools missing, a PRN nurse pinned into a weekend, no month within the
-time limit without a proof that none exists, a model failure, or a month
-that fails `replay`. Profiling runs use the pipeline, which is what they
+OR-Tools missing, no month within the time limit without a proof that none
+exists, a model failure, or a month that fails `replay`. Profiling runs use the pipeline, which is what they
 measure. The months are ranked with the pipeline's ranking, so options,
 scores and weights read the same either way.
 
@@ -790,7 +789,22 @@ The tie-breakers (Tuesday exceptions, same-weekday repeats) each get at most
 90 s while every other key took under 3 s. A month is marked optimal when
 every other key is proven.
 
-Still not modelled: a PRN nurse pinned into a weekend (the pipeline runs).
+**A PRN nurse pinned into a weekend.** Weekend generation keeps such a pin
+(the pinned nurse is added to the valid pairs) and the PRN nurse counts
+toward nothing else. The model does the same: that pattern's slot is taken,
+the partner comes from the regular nurses (no late/late pair when the PRN
+nurse is late-shift), and the PRN nurse's pinned weekends enter the weekend
+spacing penalty as fixed Fridays, as `_weekend_gap_penalty` counts them.
+The scheduler keeps no rotation pattern for PRN nurses, so such a weekend
+is never a repeat. Tests check that the weekend arrangements equal the
+generator's, including a late-shift PRN nurse, and that months replay with
+the same measures.
+
+**Time limit.** Each month has `month_time_limit_s` (300 s). A month found
+but not fully proven by then is still offered; only when no month at all is
+found does the pipeline run. Measured on the March 10-nurse roster, one
+month took 2–12 s, a 7-weekend horizon 16–18 s per month and a 9-weekend
+one (over two months) 18–19 s, so the limit is a safety net.
 
 ## Excluded on purpose
 

@@ -111,17 +111,27 @@ def _model_arrangements(scheduler, limit=2000):
         if solver.Solve(built.m) not in (built.cp.OPTIMAL, built.cp.FEASIBLE):
             break
         arrangement = tuple(
-            (
-                f,
-                next(n for n in built.nurses if solver.BooleanValue(built.fsf[f, n])),
-                next(n for n in built.nurses if solver.BooleanValue(built.sfs[f, n])),
-            )
+            (f, *(_holder(built, solver, f, pattern) for pattern in (mm.FSF, mm.SFS)))
             for f in built.fridays
         )
         found.add(arrangement)
-        chosen = [built.fsf[f, a] + built.sfs[f, b] for f, a, b in arrangement]
-        built.m.Add(sum(chosen) <= 2 * len(arrangement) - 1)
+        chosen = [
+            table[f, n]
+            for f, a, b in arrangement
+            for table, n in ((built.fsf, a), (built.sfs, b))
+            if (f, n) in table
+        ]
+        built.m.Add(sum(chosen) <= len(chosen) - 1)
     return found
+
+
+def _holder(built, solver, friday, pattern):
+    """Who works *pattern* on *friday* in the solver's solution (a pinned PRN too)."""
+    outsider = built.external.get((friday, pattern))
+    if outsider is not None:
+        return outsider
+    table = built.fsf if pattern == mm.FSF else built.sfs
+    return next(n for n in built.nurses if solver.BooleanValue(table[friday, n]))
 
 
 def _generated_arrangements(scheduler):
@@ -217,16 +227,47 @@ def test_longer_spacing_the_exact_solve_cannot_split_by_week(tmp_path):
     assert replayed == solution.values
 
 
-def test_a_prn_nurse_pinned_into_a_weekend_is_refused(tmp_path):
-    roster = (*((n, False, False) for n in "ABCDEF"), ("P", True, False))
+# ── a PRN nurse pinned into a weekend ──────────────────────────────────────
+def _prn_pinned(tmp_path, *, late=False, history=()):
+    """P (PRN) is pinned as the first weekend's FSF nurse; A–F are regular."""
+    roster = (*ROSTER6, ("P", True, late))
+    if late:
+        roster = (("A", False, True), *ROSTER6[1:], ("P", True, True))
     db = seed_db(
         tmp_path,
         roster=roster,
+        weekends=list(history),
+        time_off=_only(["ABCP", "DEF"], "ABCDEF"),
         pre_scheduled=[("2026-11-06", "P", None), ("2026-11-07", None, "P")],
     )
-    scheduler = build_scheduler(db, "2026-11-02", "2026-11-15")
-    assert "P" in mm.unsupported(scheduler)
-    assert mm.solve_month_status(scheduler)[0] == "unsupported"
+    return build_scheduler(db, "2026-11-02", "2026-11-15")
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["plain", "late-shift", "repeats-its-pattern"],
+)
+def test_a_pinned_prn_weekend_matches_the_generator(tmp_path, case):
+    kwargs = {
+        "plain": {},
+        "late-shift": {"late": True},
+        "repeats-its-pattern": {"history": [("2026-10-02", "P", "D")]},  # P last worked FSF
+    }[case]
+    scheduler = _prn_pinned(tmp_path, **kwargs)
+    assert mm.unsupported(scheduler) is None
+
+    model = _model_arrangements(scheduler)
+    _variants, generated = _generated_arrangements(_prn_pinned(tmp_path, **kwargs))
+    assert generated and model == generated
+    assert all(arrangement[0][1] == "P" for arrangement in model)
+
+    (solution,) = mm.solve_month(scheduler)
+    _variant, replayed, counts = mm.replay(scheduler, solution)
+    assert replayed == solution.values
+    assert "P" not in counts  # a PRN counts toward nothing
+    # The scheduler keeps no rotation pattern for PRN nurses, so a pinned PRN
+    # weekend is never a repeat, whatever P worked before.
+    assert solution.values["rotation"] == 0
 
 
 # ── the one-day gap ────────────────────────────────────────────────────────

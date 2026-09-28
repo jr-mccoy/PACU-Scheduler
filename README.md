@@ -80,10 +80,12 @@ offered. As with the variant engine, strict FSF/SFS alternation is tried
 first; if no month satisfies it, the app asks before allowing repeats, and
 then only the nurses allowed to repeat do, as few times as possible.
 
-The variant engine below runs instead when the whole-month engine cannot:
-OR-Tools is missing, a PRN nurse is pinned into a weekend, the model finds
-no month within its time limit (`month_time_limit_s`, 300 s per month)
-without proving that none exists, or a month fails the checks. Choose it
+A PRN nurse pinned into a weekend keeps that slot, as weekend generation
+does, and the model picks the partner. The variant engine below runs
+instead when the whole-month engine cannot: OR-Tools is missing, the model
+finds no month within its time limit (`month_time_limit_s`, 300 s per
+month) without proving that none exists, or a month fails the checks. A
+month found but not fully proven by then is still used. Choose it
 outright under Settings → Scheduling engine (`scheduling_engine` in
 `settings.json`), or in the terminal UI's Settings menu.
 

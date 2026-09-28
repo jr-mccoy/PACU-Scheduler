@@ -122,11 +122,6 @@ def unsupported(scheduler) -> str | None:
         import ortools.sat.python.cp_model  # noqa: F401
     except ImportError:
         return "OR-Tools is not installed"
-    nurses = set(scheduler.nurses)
-    for roles in scheduler._get_pre_scheduled_weekend_assignments().values():
-        for nurse in (roles or {}).values():
-            if nurse and nurse not in nurses:
-                return f"{nurse} is pinned into a weekend but is not scheduled automatically"
     return None
 
 
@@ -234,6 +229,10 @@ class _Model:
         # ── weekends ──────────────────────────────────────────────────────
         self.fsf, self.sfs = {}, {}
         self.pinned_weekend = {}  # (friday, nurse) -> pattern forced by a pin
+        # A weekend pattern pinned to a nurse the month does not schedule (a
+        # PRN nurse): (friday, pattern) -> nurse. Weekend generation keeps
+        # such a pin as it is; the nurse counts toward nothing else.
+        self.external = {}
         for f in self.fridays:
             fixed = pre.get(f, {}) or {}
             forced = {}
@@ -259,8 +258,11 @@ class _Model:
                         self.pinned_weekend[f, n] = pattern
                     elif forced.get(pattern) is not None or not eligible:
                         model.Add(var == 0)
-            model.AddExactlyOne(self.fsf[f, n] for n in nurses)
-            model.AddExactlyOne(self.sfs[f, n] for n in nurses)
+            for pattern, table in ((FSF, self.fsf), (SFS, self.sfs)):
+                if forced.get(pattern) is not None and forced[pattern] not in nurses:
+                    self.external[f, pattern] = forced[pattern]  # every var is 0
+                else:
+                    model.AddExactlyOne(table[f, n] for n in nurses)
             for n in nurses:
                 model.Add(self.fsf[f, n] + self.sfs[f, n] <= 1)
             both_pinned = FSF in forced and SFS in forced
@@ -268,6 +270,13 @@ class _Model:
                 for a, b in itertools.permutations(late, 2):
                     if a in nurses and b in nurses:
                         model.Add(self.fsf[f, a] + self.sfs[f, b] <= 1)
+                # A late-shift PRN pinned into one pattern: no late partner.
+                for pattern, partner in ((FSF, self.sfs), (SFS, self.fsf)):
+                    outsider = self.external.get((f, pattern))
+                    if outsider and scheduler.nurse_manager.is_late_shift_nurse(outsider):
+                        for b in late:
+                            if b in nurses:
+                                model.Add(partner[f, b] == 0)
         self.work = {(f, n): self.fsf[f, n] + self.sfs[f, n] for f in self.fridays for n in nurses}
 
         # Weekend gap between the month's own weekends.
@@ -310,11 +319,13 @@ class _Model:
 
         if fixed_weekends:
             for f, (a, b) in fixed_weekends.items():
-                model.Add(self.fsf[f, a] == 1)
-                model.Add(self.sfs[f, b] == 1)
+                if (f, a) in self.fsf:
+                    model.Add(self.fsf[f, a] == 1)
+                if (f, b) in self.sfs:
+                    model.Add(self.sfs[f, b] == 1)
         for other in excluded:
-            chosen = [self.fsf[f, a] for f, (a, b) in other.items()]
-            chosen += [self.sfs[f, b] for f, (a, b) in other.items()]
+            chosen = [self.fsf[f, a] for f, (a, b) in other.items() if (f, a) in self.fsf]
+            chosen += [self.sfs[f, b] for f, (a, b) in other.items() if (f, b) in self.sfs]
             model.Add(sum(chosen) <= len(chosen) - 1)
 
         # ── weekdays ──────────────────────────────────────────────────────
@@ -594,6 +605,16 @@ class _Model:
             if self.violations
             else 0
         )
+        # Pinned outsiders' repeats are fixed: follow each one's own pattern.
+        outsider_last = dict(root.state.last_pattern)
+        for f in self.fridays:
+            for pattern in (FSF, SFS):
+                outsider = self.external.get((f, pattern))
+                if outsider is not None:
+                    if outsider_last.get(outsider) == pattern:
+                        rot += 1
+                        rot_viol += 1 + int(prior.get(outsider, 0))
+                    outsider_last[outsider] = pattern
 
         # Same-weekday repeats: sum over nurse and weekday of C(count, 2).
         repeats = []
@@ -678,6 +699,8 @@ class _Model:
                     out.append(g)
             return out
 
+        for (f, _pattern), outsider in self.external.items():
+            fixed_fridays.setdefault(outsider, set()).add(f)
         everyone = sorted(set(s.nurses) | set(self.nurses) | set(fixed_fridays))
         deficit = 0
         BIG = 10_000
@@ -827,9 +850,15 @@ class _Model:
         values = {k: int(round(solver.Value(e))) for k, e in exprs.items()}
         weekends = {}
         for f in self.fridays:
-            a = next(n for n in self.nurses if solver.BooleanValue(self.fsf[f, n]))
-            b = next(n for n in self.nurses if solver.BooleanValue(self.sfs[f, n]))
-            weekends[f] = (a, b)
+            pair = []
+            for pattern, table in ((FSF, self.fsf), (SFS, self.sfs)):
+                outsider = self.external.get((f, pattern))
+                pair.append(
+                    outsider
+                    if outsider is not None
+                    else next(n for n in self.nurses if solver.BooleanValue(table[f, n]))
+                )
+            weekends[f] = tuple(pair)
         weekdays = {(d, r): n for (d, r, n), v in self.x.items() if solver.BooleanValue(v)}
         return values, weekends, weekdays
 

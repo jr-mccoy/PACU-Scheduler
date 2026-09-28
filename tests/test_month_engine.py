@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import time
 
+import pandas as pd
 import pytest
 from scheduling_fixtures import build_scheduler, seed_db
 
@@ -81,15 +82,30 @@ def test_the_month_beats_or_equals_the_variant_pipeline(tmp_path):
 
 
 # ── falling back to the variant pipeline ───────────────────────────────────
-def test_unsupported_rules_fall_back_to_variants(tmp_path):
-    roster = (*ROSTER6, ("P", True, False))
-    db = seed_db(tmp_path, roster=roster, time_off=SPLIT, pre_scheduled=[("2026-11-06", "P", None)])
-    scheduler = build_scheduler(db, "2026-11-02", "2026-11-15")
+def test_unsupported_rules_fall_back_to_variants(tmp_path, monkeypatch):
+    monkeypatch.setattr(month_model, "unsupported", lambda scheduler: "OR-Tools is not installed")
     stages = []
-    run = scheduler.run_generation(on_stage=stages.append, on_progress=lambda d, t: None)
+    run = _small(tmp_path).run_generation(on_stage=stages.append, on_progress=lambda d, t: None)
 
-    assert run.engine == "variants"
+    assert run.engine == "variants" and run.candidates
     assert "Solving the whole month…" not in stages
+
+
+def test_a_prn_pinned_into_a_weekend_stays_on_the_month_engine(tmp_path):
+    roster = (*ROSTER6, ("P", True, False))
+    off = SPLIT + [("P", d) for d in WEEKEND_2]
+    db = seed_db(
+        tmp_path,
+        roster=roster,
+        time_off=off,
+        pre_scheduled=[("2026-11-06", "P", None), ("2026-11-07", None, "P")],
+    )
+    run = build_scheduler(db, "2026-11-02", "2026-11-15", month_options=2).run_generation(
+        on_progress=lambda d, t: None
+    )
+    assert run.status == "ok" and run.engine == "month"
+    for *_rest, schedule in run.candidates:
+        assert schedule.at[pd.Timestamp("2026-11-06"), "main"] == "P"
 
 
 @pytest.mark.parametrize(

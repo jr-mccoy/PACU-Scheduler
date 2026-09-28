@@ -800,7 +800,9 @@ is never a repeat. Tests check that the weekend arrangements equal the
 generator's, including a late-shift PRN nurse, and that months replay with
 the same measures.
 
-**Time limit.** Each month has `month_time_limit_s` (300 s). A month found
+**Time limit.** Each month has `month_time_limit_s` (300 s, the setting
+Settings → Time limit per option, `month_time_limit_minutes`, 1–120 minutes,
+in both dialogs and the terminal UI). A month found
 but not fully proven by then is still offered; only when no month at all is
 found does the pipeline run. Measured on the March 10-nurse roster, one
 month took 2–12 s, a 7-weekend horizon 16–18 s per month and a 9-weekend

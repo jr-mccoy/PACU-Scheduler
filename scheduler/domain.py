@@ -164,7 +164,7 @@ class SchedulerConfig:
         max_week_permutations: int | None = 200,
         engine: str = "month",
         month_options: int = 5,
-        month_time_limit_s: float = 300.0,
+        month_time_limit_s: float = 300.0,  # the month_time_limit_minutes setting
         **extra,
     ):
 

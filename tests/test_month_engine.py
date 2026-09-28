@@ -242,3 +242,19 @@ def test_the_gui_worker_offers_months(qapp, tmp_path, monkeypatch):
     assert options and all(stats["solver"] == "month" for _i, stats, _c, _s in options)
     scores = [stats["weighted_score"] for _, stats, _, _ in options]
     assert scores == sorted(scores)
+
+
+def test_the_engine_gives_each_month_the_configured_time(tmp_path, monkeypatch):
+    seen = []
+    real = month_model.solve_month_status
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["time_limit_s"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(month_model, "solve_month_status", spy)
+    settings = dict(SharedSettings.DEFAULTS, month_time_limit_minutes=7)
+    config = build_scheduler_config_from_settings(settings)
+    scheduler = _small(tmp_path, month_time_limit_s=config.month_time_limit_s)
+    scheduler.run_generation(on_progress=lambda d, t: None)
+    assert seen == [420]

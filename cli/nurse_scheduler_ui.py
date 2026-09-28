@@ -1069,11 +1069,12 @@ class NurseSchedulerUI:
         """Menu for settings saved to the settings file the GUI shares."""
         menu_options = {
             "1": ("Scheduling Engine", self._handle_set_scheduling_engine),
-            "2": ("Weekend Variants to Evaluate", self._handle_set_max_weekend_variants),
-            "3": ("Return to Main Menu", None),
+            "2": ("Time Limit per Option (whole month)", self._handle_set_month_time_limit),
+            "3": ("Weekend Variants to Evaluate", self._handle_set_max_weekend_variants),
+            "4": ("Return to Main Menu", None),
         }
 
-        self._run_menu_loop("Settings", menu_options, exit_option="3")
+        self._run_menu_loop("Settings", menu_options, exit_option="4")
 
     def _run_menu_loop(self, title: str, options: dict, exit_option: str, exit_message: str = None):
         """Generic menu loop handler."""
@@ -1127,6 +1128,34 @@ class NurseSchedulerUI:
             "save settings",
             lambda: self.settings.update({"scheduling_engine": value}),
             f"Scheduling engine set to {names[value]}; saved for future sessions.",
+        )
+        CLIHelper.pause()
+
+    def _handle_set_month_time_limit(self) -> None:
+        """Change the whole-month engine's time limit per option, and save it."""
+        lo, hi = 1, 120
+        current = self.settings.get("month_time_limit_minutes")
+        print(f"Time limit per option: {current} minute(s)\n")
+        print(
+            "How long the whole-month engine may spend on each option it offers.\n"
+            "A month found but not proven best by then is still offered; only if\n"
+            "none is found does it use weekend variants. Measured months take\n"
+            "seconds to under a minute for 8-15 nurses.\n"
+        )
+        raw = input(f"New limit in minutes ({lo}-{hi}, blank to keep): ").strip()
+        if not raw:
+            print("Unchanged.")
+            CLIHelper.pause()
+            return
+        if not raw.isdigit() or not lo <= int(raw) <= hi:
+            print(f"Invalid input. Please enter a whole number from {lo} to {hi}.")
+            CLIHelper.pause()
+            return
+        value = int(raw)
+        self._safe_execute(
+            "save settings",
+            lambda: self.settings.update({"month_time_limit_minutes": value}),
+            f"Time limit set to {value} minute(s) per option; saved for future sessions.",
         )
         CLIHelper.pause()
 

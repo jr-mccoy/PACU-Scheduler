@@ -46,6 +46,7 @@ class AppSettings:
         # Beam cap on weekend variant branching (0 = unlimited)
         "max_weekend_variants": DEFAULT_MAX_WEEKEND_VARIANTS,
         "scheduling_engine": "month",
+        "month_time_limit_minutes": 5,
         # Canonical scorer weights
         "scoring_weights": {
             "rot_viol": 0.15,

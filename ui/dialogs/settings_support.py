@@ -39,6 +39,7 @@ WIDGET_FOR_KEY = {
     "history_duration_months": "hist_duration",
     "max_weekend_variants": "variant_cap",
     "scheduling_engine": "engine_combo",
+    "month_time_limit_minutes": "month_limit",
     "measure_phase_times": "measure_chk",
     "analyse_initial_weekday_gaps": "analyse_chk",
     "gap_report_file": "gap_file",
@@ -126,6 +127,12 @@ TOOLTIPS = {
         "Higher explores more candidate schedules; run time grows roughly\n"
         "in proportion. Unlimited can take hours on long horizons.\n"
         "Used by the weekend-variant engine only."
+    ),
+    "month_time_limit_minutes": (
+        "How long the whole-month engine may spend on each of the options it\n"
+        "offers. A month found but not proven best by then is still offered;\n"
+        "only if none is found does it use weekend variants. Measured months\n"
+        "take seconds to under a minute for 8–15 nurses."
     ),
     "scheduling_engine": (
         "Whole month: solves weekends and weekdays together and proves the best\n"
@@ -279,3 +286,14 @@ def engine_combo(parent=None) -> QComboBox:
     for label, value in ENGINES:
         combo.addItem(label, value)
     return combo
+
+
+MONTH_LIMIT_RANGE = (1, 120)  # minutes per option
+
+
+def month_limit_spin(parent=None) -> QSpinBox:
+    """The whole-month engine's time limit per option, in minutes."""
+    spin = QSpinBox(parent)
+    spin.setRange(*MONTH_LIMIT_RANGE)
+    spin.setSuffix(" min")
+    return spin

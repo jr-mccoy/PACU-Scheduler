@@ -57,8 +57,40 @@ repository.
 
 ## How it works
 
-Generation runs in two stages, because weekends are the scarce resource and
-constrain everything else:
+**The default engine solves the whole month at once.** Weekends and
+weekdays are one OR-Tools CP-SAT model
+(`scheduler/optimization/month_model.py`): for each weekend and nurse,
+whether they work it as FSF or SFS, and for each weekday slot and nurse,
+whether they take it, with every scheduling rule written as a constraint.
+The solver searches every weekend arrangement without listing them, so no
+variant cap applies, and proves the best month. It minimizes, in order:
+
+1. rotation repeats (none unless repeats are allowed, below);
+2. unfilled slots, then uses of the one-day gap (when it is on);
+3. who absorbs any repeats, then the weekend spacing penalty;
+4. the Main plus Backup spread, then the larger of the two;
+5. long-term fairness, then the total-shift spread;
+6. Tuesday exceptions, then same-weekday repeats (tie-breakers, each given
+   at most 10 seconds to prove).
+
+It then finds further months with different weekends, five in all
+(`SchedulerConfig.month_options`), and ranks them as described below.
+Every month is placed through the scheduler's own checks before it is
+offered. As with the variant engine, strict FSF/SFS alternation is tried
+first; if no month satisfies it, the app asks before allowing repeats, and
+then only the nurses allowed to repeat do, as few times as possible.
+
+A PRN nurse pinned into a weekend keeps that slot, as weekend generation
+does, and the model picks the partner. The variant engine below runs
+instead when the whole-month engine cannot: OR-Tools is missing, the model
+finds no month within its time limit (Settings → Time limit per option,
+5 minutes by default) without proving that none exists, or a month fails
+the checks. A month found but not fully proven by then is still used. Choose it
+outright under Settings → Scheduling engine (`scheduling_engine` in
+`settings.json`), or in the terminal UI's Settings menu.
+
+**The weekend-variant engine** runs in two stages, because weekends are the
+scarce resource and constrain everything else:
 
 1. **Weekend generation.** The scheduler enumerates valid `FSF`/`SFS` pairs for
    each weekend in the horizon, branching on every complete pair. Because the
@@ -66,17 +98,35 @@ constrain everything else:
    pruned after each weekend to `max_weekend_variants` (default 1,000), keeping
    the variants with the fewest rotation repeats, the most even weekend spread,
    and the largest minimum weekend gap.
-2. **Weekday completion and rebalancing.** Each surviving weekend variant is
-   filled in across weekdays, then run through an iterative window-refill
-   rebalance pass that evens out Main/Backup counts without violating the hard
-   constraints.
+2. **Weekday completion.** Each surviving weekend variant's Monday–Thursday
+   shifts are filled optimally. Once the weekends are fixed, each week's
+   legal fills do not depend on the other weeks, so the scheduler lists every
+   legal fill of each week with its own rule checks. OR-Tools CP-SAT then
+   picks one fill per week that minimizes, in order:
+   - unfilled slots;
+   - the Main plus Backup spread, then the larger of the two;
+   - the total-shift spread;
+   - uses of the gap-fill exception (a Tuesday right before the nurse's
+     weekend);
+   - recent-history overuse.
 
-Surviving variants are then ranked:
+   Many fills of a week share the same per-nurse counts and so score the
+   same. Among those, a second CP-SAT solve spreads each nurse's shifts over
+   different weekdays: it minimizes the pairs of shifts one nurse works on
+   the same weekday. None of the keys above changes.
+
+   Where that cannot promise an exact answer, the earlier local search runs
+   instead: greedy fill, gap fill, then rebalance and refill passes.
+
+Candidates, months or surviving variants, are then ranked:
 
 1. fewest weekend-pattern repeats;
 2. then fewest unfilled slots;
 3. then a weighted score over weekend spacing, balance, long-term fairness,
-   and who absorbs any repeats.
+   and who absorbs any repeats;
+4. exact ties in that score go to the smaller total-shift spread, then to
+   fewer same-weekday repeats (each candidate's stats report
+   `total_spread` and `weekday_repeats`).
 
 The weights (Settings → Ranking weights) only order candidates that tie on
 the first two. The top candidates are surfaced in a review dialog. The GUI,
@@ -202,10 +252,43 @@ budgets are tunable rather than fixed:
   (8! = 40,320 orderings). Below the cap every ordering is tried; above it,
   the given order plus seeded random shuffles, so every slot gets to go
   first.
+- `WorkerTuningConfig.weekday_solver` — `"exact"` (the default) fills the
+  weekdays with the CP-SAT solve described under **How it works**; `"search"`
+  uses the local search. The exact solve falls back to the search by itself
+  when OR-Tools is missing, when `min_days_between_assignments` is 4 or more
+  (spacing then reaches across weekends), or when a week has more than
+  `exact_max_fills_per_week` legal fills. `exact_objective` (`"balanced"` or
+  `"backup_first"`), `exact_gap_rule_exceptions` (`"for_balance"` or
+  `"when_needed"`) and `exact_time_limit_ms` tune it. Each candidate's stats
+  report `solver` and `solver_optimal`.
 - `WorkerTuningConfig` — pass counts, node budgets, and time limits for the
-  gap-fill, rebalance, and refill passes. Hand it to `NurseScheduler` as
+  gap-fill, rebalance, and refill passes of the local search. The per-attempt
+  limits are generous, so `window_refill_total_time_ms` and
+  `full_period_total_time_ms` (120 s each; None means unbounded) cap each
+  whole refill pass. Hand it to `NurseScheduler` as
   `worker_tuning=`; it travels with each work item, so it reaches worker
   processes on every start method. `scripts/demo.py` uses a tightened profile.
+
+Variants of one run share most of their weeks, so each worker process keeps
+the weekday fills of recent week situations and lists each only once.
+
+**Checking the cap.** `scripts/check_all_variants.py --db … --start …
+--end …` runs a normal generation, then checks every weekend variant
+without the cap against its top options
+(`scheduler.optimization.exhaustive.check_all_weekend_variants`). Bounds
+rule out most variants whatever the ranking weights, and only the ones that
+could still rank in the top are evaluated. It reports any discarded variant
+that would have. On the March 8-nurse roster (2,352 variants) it took 2
+minutes where evaluating them all took 22, and confirmed the run's top
+five. On the 10-nurse roster (63,744 variants, about 22 hours to evaluate)
+it took 14 minutes and found five better schedules the cap had discarded.
+
+**Solving the whole month at once.** `scripts/solve_month.py --db … --start
+… --end …` solves weekends and weekdays together as one CP-SAT model
+(`scheduler.optimization.month_model`), with no weekend-variant cap, and
+verifies each month through the scheduler's own checks. On the March
+10-nurse roster it proves the best month in seconds, better than the capped
+run's top option. It is the app's default engine (see **How it works**).
 
 Slots that no nurse can legally take (everyone is off, or the weekends rule
 them all out) are detected once per variant and skipped by every search, so
@@ -233,6 +316,21 @@ the default budgets and the demo's tightened profile take the same time: the
 budgets do not bind, and run time is set by the per-cell work described
 under **Known limitations**. Re-measure on your own hardware before changing
 the defaults.
+
+Step 1 of the [optimization audit](docs/scheduler-optimization-audit.md)
+then cut the per-cell work in the rebalance pass without changing a single
+schedule. On the same container, with four variants evaluating at once,
+demo-roster variants went from 24–29 s to 10–13 s, and blocked-Wednesday
+variants from 15–28 s to 6–12 s, with byte-identical results. Step 2
+replaced the fixed "both spreads at most 1" stopping point with proven lower
+bounds (`WorkerTuningConfig.window_refill_target_spread` and
+`full_period_target_spread` default to `None`), so the search keeps going
+while a fairer schedule may still exist. On the demo roster that takes a
+few seconds more on some variants, and on every variant sampled it finds a
+schedule where each nurse works the same total number of shifts. Step 3
+moved the search's cell reads and writes from the DataFrame to plain Python
+lists, again with byte-identical results: demo-roster variants now take
+1–3 s, and the whole evaluation is 7–10× faster than after step 2.
 
 ### Parallelism
 
@@ -324,17 +422,22 @@ for operator control.
 
 ## Known limitations
 
-- **Evaluation is slow.** A single weekend variant takes on the order of tens
-  of seconds, and a realistic horizon produces hundreds of variants. The cost
-  is concentrated in per-cell pandas lookups (`DataFrame.at`) inside the
-  eligibility and spacing checks, which run millions of times per variant.
-  Making the hot path operate on plain dicts or arrays instead is the obvious
-  next optimization.
-- **The shipped `WorkerTuningConfig` budgets are far larger than they look** —
-  the per-attempt time limits are 800 seconds each, multiplied by hundreds of
-  passes. They effectively never bind, so run time is governed by how quickly
-  the search happens to converge. Use `scripts/benchmark.py` to find budgets
-  that bind without costing result quality on your hardware.
+- **Run time.** On a 4-core container the whole-month engine offered five
+  proven months for the March 10-nurse roster in 49 s and for the 8-nurse
+  roster in 128 s. The weekend-variant engine, when it runs, takes seconds
+  per variant, and a realistic horizon produces hundreds: 21 and 8 minutes
+  for the same rosters. `docs/scheduler-optimization-audit.md` measures
+  where the time goes.
+- **Assignment debug logging used to be on by default in the GUI.** It is
+  off now, but saving settings writes every value to
+  `~/.nurse_scheduler/settings.json`, so a settings file saved earlier still
+  has it on. Uncheck it in Settings: it writes a record for many eligibility
+  checks and slows every run.
+- **The local search's per-attempt budgets are far larger than they look**
+  (800 seconds each). The exact weekday solve does not use them, and the
+  refill passes stop at their total budgets, but a variant that falls back
+  to the search can still take minutes. Use `scripts/benchmark.py` to find
+  budgets that bind without costing result quality on your hardware.
 - **Weekend generation grows combinatorially.** Rosters much beyond ten nurses
   or horizons beyond about six weeks push variant counts up sharply.
 
@@ -350,6 +453,9 @@ for operator control.
   conventions adopted, which settings were connected, and what was deferred.
 - [`docs/scheduler-audit.md`](docs/scheduler-audit.md) — logic errors and
   oversights found in the scheduling engine, and the phased plan to fix them.
+- [`docs/scheduler-optimization-audit.md`](docs/scheduler-optimization-audit.md)
+  — where evaluation spends its time, and how to make it faster and find
+  better schedules without pruning the search.
 
 ## License
 

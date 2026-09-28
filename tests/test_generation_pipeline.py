@@ -23,7 +23,12 @@ from scheduler import (
     build_scheduler_from_settings,
 )
 
-SETTINGS = dict(SharedSettings.DEFAULTS, weekend_gap_days=14, max_weekend_variants=6)
+SETTINGS = dict(
+    SharedSettings.DEFAULTS,
+    weekend_gap_days=14,
+    max_weekend_variants=6,
+    scheduling_engine="variants",  # these tests cover the variant pipeline
+)
 START, END = "2026-11-02", "2026-11-15"
 
 

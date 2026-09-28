@@ -111,6 +111,13 @@ def compare_quality(
 # fewest weekend-pattern repeats, then fewest unfilled slots.
 RANK_FIRST: tuple[str, ...] = ("rotation_rep", "gaps")
 
+# Among candidates with the same weighted score, these decide, in this order,
+# before candidate order: the smaller spread of per-nurse totals, then the
+# fewest pairs of shifts one nurse works on the same Mon–Thu weekday. They
+# only reorder exact ties, which the weighted score often leaves when every
+# top candidate reaches the best balance.
+TIE_BREAKERS: tuple[str, ...] = ("total_spread", "weekday_repeats")
+
 # The smallest difference across candidates that earns a weighted metric its
 # full weight. Plain min-max normalization gave a one-point difference the
 # same weight as a twenty-point one, so a trivial edge in one metric could
@@ -122,6 +129,25 @@ METRIC_SCALES: dict[str, float] = {
     "balance": 4.0,  # main + backup spread, in shifts
     "long_term": 4.0,  # shifts above the recent-history minimum
 }
+
+
+def weekday_repeats(schedule_df: pd.DataFrame) -> int:
+    """Pairs of shifts one nurse works on the same Mon–Thu weekday.
+
+    Counts Main and Backup together over the weekday (non-weekend) rows:
+    four Mondays for one nurse are six pairs, one Monday each for four
+    nurses none.
+    """
+    rows = schedule_df[schedule_df.index.weekday < 4]
+    if "is_weekend" in rows.columns:
+        rows = rows[~rows["is_weekend"].astype(bool)]
+    counts: dict[tuple, int] = {}
+    for day, main, backup in zip(rows.index, rows["main"], rows["backup"], strict=True):
+        for nurse in (main, backup):
+            if isinstance(nurse, str) and nurse:
+                key = (nurse, day.weekday())
+                counts[key] = counts.get(key, 0) + 1
+    return sum(c * (c - 1) // 2 for c in counts.values())
 
 
 def weighted_scores_from_rows(
@@ -154,8 +180,9 @@ def rank_rows(rows: Iterable[dict], *, weights: dict[str, float]) -> pd.DataFram
 
     Candidates are ordered by :data:`RANK_FIRST` (fewest pattern repeats,
     then fewest unfilled slots), then by ``weighted_score`` over the
-    remaining metrics using :data:`METRIC_SCALES`, then by ``idx`` so the
-    order is deterministic. Weights for the rank-first metrics are ignored:
+    remaining metrics using :data:`METRIC_SCALES`, then by the
+    :data:`TIE_BREAKERS` present in the rows, then by ``idx`` so the order
+    is deterministic. Weights for the rank-first metrics are ignored:
     they can never change the order.
     """
     rows = list(rows)
@@ -168,6 +195,7 @@ def rank_rows(rows: Iterable[dict], *, weights: dict[str, float]) -> pd.DataFram
         key=lambda i: (
             *(raw.at[i, key] for key in RANK_FIRST if key in raw.columns),
             scored.at[i, "weighted_score"],
+            *(raw.at[i, key] for key in TIE_BREAKERS if key in raw.columns),
             i,
         ),
     )

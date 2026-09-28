@@ -56,8 +56,11 @@ def test_ending_a_run_without_applying_keeps_manual_overrides(app_window, outcom
 
 
 # ── the generation worker ─────────────────────────────────────────────────
-def _run_worker(tmp_path, monkeypatch, end="2026-11-15"):
-    """Run ScheduleProgressWorker synchronously; return (errors, finished)."""
+def _run_worker(tmp_path, monkeypatch, end="2026-11-15", engine="variants"):
+    """Run ScheduleProgressWorker synchronously; return (errors, finished).
+
+    The variant pipeline by default: most of these tests patch its parts.
+    """
     from scheduling_fixtures import seed_db
 
     from scheduler import SharedSettings
@@ -66,7 +69,12 @@ def _run_worker(tmp_path, monkeypatch, end="2026-11-15"):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("NSCHED_FORCE_THREAD_POOL", "1")  # keep patches in-process
     seed_db(tmp_path, filename=DB_NAME)
-    settings = dict(SharedSettings.DEFAULTS, weekend_gap_days=14, max_weekend_variants=4)
+    settings = dict(
+        SharedSettings.DEFAULTS,
+        weekend_gap_days=14,
+        max_weekend_variants=4,
+        scheduling_engine=engine,
+    )
 
     worker = ScheduleProgressWorker("2026-11-02", end, settings=settings)
     errors, finished = [], []

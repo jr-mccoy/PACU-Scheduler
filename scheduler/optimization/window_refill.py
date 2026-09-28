@@ -61,7 +61,7 @@ class WindowRefillOptimizer:
                 )
             return False
 
-        unassigned = [(d, r) for (d, r) in vars_list if ctx.is_empty(ctx.state.schedule.at[d, r])]
+        unassigned = [(d, r) for (d, r) in vars_list if ctx.is_slot_empty(d, r)]
         if debug_mode:
             ctx.debug_print(
                 f"[ScheduleVariant] [MRV] enter depth={depth} remaining={len(unassigned)} gap={gap_mode}"
@@ -111,7 +111,7 @@ class WindowRefillOptimizer:
             for _, _, (dayv, rolev) in domains[1:]:
                 if (
                     abs((dayv - day0).days) <= fc_radius
-                    and ctx.is_empty(ctx.state.schedule.at[dayv, rolev])
+                    and ctx.is_slot_empty(dayv, rolev)
                     and not domain_fn(dayv, rolev)
                 ):
                     failed = True
@@ -137,16 +137,24 @@ class WindowRefillOptimizer:
         max_passes: int = 6000,
         time_limit_ms: int = 800000,
         node_limit: int = 8000000,
-        target_spread=(1, 1),
+        target_spread=None,
         tracker=None,
+        total_time_ms: int | None = None,
     ) -> bool:
+        """Refill sliding windows of weeks while that improves the spreads.
+
+        With ``target_spread`` None the passes stop early only once every
+        spread reaches its proven lower bound
+        (``ctx.spreads_at_lower_bound()``); a ``(backup, main)`` tuple stops
+        them as soon as both spreads are at most those values instead.
+
+        ``total_time_ms``, when given, bounds all the passes together as well
+        as each window search; a window cut off by it gets its shifts back.
+        """
         ctx = self.context
 
         def good_enough() -> bool:
-            if target_spread is None:
-                return False
-            spread_b, spread_m, _ = ctx.spread_components()
-            return spread_b <= target_spread[0] and spread_m <= target_spread[1]
+            return spreads_reached(ctx, target_spread)
 
         created_tracker = tracker is None
         if created_tracker:
@@ -163,9 +171,15 @@ class WindowRefillOptimizer:
 
         improved = False
         target_hit = good_enough()
+        pass_deadline = (
+            None if total_time_ms is None else time.perf_counter() + total_time_ms / 1000.0
+        )
+
+        def out_of_time() -> bool:
+            return pass_deadline is not None and time.perf_counter() >= pass_deadline
 
         for pass_idx in range(1, max_passes + 1):
-            if target_hit:
+            if target_hit or out_of_time():
                 break
 
             if created_tracker:
@@ -183,6 +197,8 @@ class WindowRefillOptimizer:
             for days in windows:
                 if not days:
                     continue
+                if out_of_time():
+                    break
                 base_tuple = ctx.spread_components()
                 sub = ctx.state.schedule.loc[days, ["main", "backup"]]
                 mapper = getattr(sub, "map", None)
@@ -194,6 +210,8 @@ class WindowRefillOptimizer:
                 vars_list = ctx.build_window_varlist(days)
 
                 deadline = time.perf_counter() + (time_limit_ms / 1000.0)
+                if pass_deadline is not None:
+                    deadline = min(deadline, pass_deadline)
                 node_budget = [node_limit]
                 found = self.backtrack_window(vars_list, deadline, node_budget)
                 if not found:
@@ -210,11 +228,7 @@ class WindowRefillOptimizer:
 
                 if (ctx.lexi_better(new_tuple, base_tuple)) and (new_gaps <= base_gaps):
                     schedule_changed = True
-                    if (
-                        target_spread is not None
-                        and new_tuple[0] <= target_spread[0]
-                        and new_tuple[1] <= target_spread[1]
-                    ):
+                    if good_enough():
                         target_hit_this_pass = True
                         break
                 else:
@@ -240,10 +254,21 @@ class WindowRefillOptimizer:
         max_orders: int = 10000,
         per_attempt_time_ms: int = 45000,
         per_attempt_nodes: int = 350000,
-        target_spread=(1, 1),
+        target_spread=None,
         required_spread: bool = True,
         tracker=None,
+        total_time_ms: int | None = None,
     ) -> bool:
+        """Clear every weekday and refill in several variable orders.
+
+        ``total_time_ms``, when given, bounds the whole pass as well as each
+        attempt; the orders it leaves untried are skipped.
+
+        ``target_spread`` works as in :meth:`iterative_window_refill_rebalance`:
+        None means stop at the proven lower bounds. The first refill that
+        reaches the target is kept; failing that, the lexicographically best
+        refill is kept only when ``required_spread`` is false.
+        """
         ctx = self.context
         created_tracker = tracker is None
         if created_tracker:
@@ -254,8 +279,7 @@ class WindowRefillOptimizer:
             if initial_quality is None:
                 initial_quality = tracker.initialize()
 
-        spread_b, spread_m, _ = ctx.spread_components()
-        if spread_b <= target_spread[0] and spread_m <= target_spread[1]:
+        if spreads_reached(ctx, target_spread):
             return self._finalize_tracker(tracker, initial_quality, True, "FullRefill")
 
         days = ctx.get_all_weekdays()
@@ -279,8 +303,15 @@ class WindowRefillOptimizer:
         best_tuple = base_tuple
         success_rows = None
 
+        pass_deadline = (
+            None if total_time_ms is None else time.perf_counter() + total_time_ms / 1000.0
+        )
         for order in orders:
             deadline = time.perf_counter() + (per_attempt_time_ms / 1000.0)
+            if pass_deadline is not None:
+                if time.perf_counter() >= pass_deadline:
+                    break
+                deadline = min(deadline, pass_deadline)
             node_budget = [per_attempt_nodes]
             ctx.clear_window_assignments(days)
 
@@ -294,11 +325,7 @@ class WindowRefillOptimizer:
             new_mask = mapper2(ctx.is_empty) if callable(mapper2) else sub2.applymap(ctx.is_empty)
             new_gaps = int(new_mask.to_numpy().sum())
 
-            if (
-                new_tuple[0] <= target_spread[0]
-                and new_tuple[1] <= target_spread[1]
-                and new_gaps <= base_gaps
-            ):
+            if new_gaps <= base_gaps and spreads_reached(ctx, target_spread):
                 success_rows = ctx.state.schedule.loc[days, ["main", "backup"]].copy()
                 improved = True
                 break
@@ -322,3 +349,15 @@ class WindowRefillOptimizer:
             improved = True
 
         return self._finalize_tracker(tracker, initial_quality, improved, "FullRefill")
+
+
+def spreads_reached(ctx, target_spread) -> bool:
+    """Whether the spreads meet ``target_spread``.
+
+    None means every spread is at its proven lower bound; a ``(backup,
+    main)`` tuple means both spreads are at most those values.
+    """
+    if target_spread is None:
+        return ctx.spreads_at_lower_bound()
+    spread_b, spread_m, _ = ctx.spread_components()
+    return spread_b <= target_spread[0] and spread_m <= target_spread[1]

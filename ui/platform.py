@@ -94,8 +94,8 @@ def apply_backend_debug_preferences(settings: Any) -> None:
     try:
         debug_mode = _normalize_debug_mode(_get_setting(settings, "debug_variant_logging", "off"))
         assignment_enabled = _normalize_bool(
-            _get_setting(settings, "assignment_debug_enabled", True),
-            default=True,
+            _get_setting(settings, "assignment_debug_enabled", False),
+            default=False,
         )
     except Exception as exc:  # pragma: no cover - defensive guard for GUI use
         logger.warning("Could not read debug settings: %s", exc)

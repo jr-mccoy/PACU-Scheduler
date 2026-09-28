@@ -107,6 +107,7 @@ class VariantSearchContext(Protocol):
         diagnostics: dict[str, list[str]] | None = ...,
         *,
         relaxed_spacing: bool = ...,
+        log: bool = ...,
     ) -> list[str]: ...
 
     # ----- Mutation primitives -----
@@ -123,6 +124,10 @@ class VariantSearchContext(Protocol):
 
     # ----- Spread / quality metrics -----
     def spread_components(self) -> tuple[int, int, int]: ...
+
+    def spreads_at_lower_bound(self) -> bool: ...
+
+    def is_slot_empty(self, date: Any, role: str) -> bool: ...
 
     def lexi_better(
         self,

@@ -1,0 +1,493 @@
+"""The exact weekday solve (docs/scheduler-optimization-audit.md, finding 12).
+
+It lists every legal fill of each week with the scheduler's own rules, lets
+CP-SAT choose one fill per week, and re-checks what it places. These tests
+compare it with brute force over every legal schedule of small instances,
+check that it only ever places legal nurses, and check that it steps aside
+for the search when it cannot promise an exact answer.
+"""
+
+from __future__ import annotations
+
+import builtins
+import dataclasses
+import itertools
+
+import pandas as pd
+import pytest
+from scheduling_fixtures import REGULAR, build_scheduler, seed_db, weekday_only_variant
+
+import scheduler.optimization.exact_weekdays as exact
+from scheduler import WorkerTuningConfig
+from scheduler.domain import ScheduleQuality
+from scheduler.evaluation.worker import _evaluate_variant_core
+from scheduler.optimization.exact_weekdays import solve_weekdays_exactly, unavailable_reason
+from scheduler.scoring import weekday_repeats
+
+NURSES = ["N1", "N2", "N3", "N4", "N5", "N6"]
+MONDAY = pd.Timestamp("2026-01-05")
+
+
+def _day(offset: int) -> pd.Timestamp:
+    return MONDAY + pd.Timedelta(days=offset)
+
+
+def _spreads(variant) -> tuple[int, int, int, int]:
+    """(unfilled weekday slots, backup, main, total spread)."""
+    backup, main, total = variant.spread_components()
+    return variant._count_fillable_weekday_gaps(), backup, main, total
+
+
+def balanced(key):
+    gaps, backup, main, total = key
+    return (gaps, backup + main, max(backup, main), total)
+
+
+def backup_first(key):
+    return key
+
+
+def _best_by_brute_force(variant, order) -> tuple:
+    """The best key over every legal fill of all weekday slots.
+
+    Fills with no empty slot first, then with at most one, and so on: fewer
+    gaps always rank first, so the first round with any fill has the best.
+    """
+    slots = [
+        (day, role)
+        for day in variant.get_weekdays()
+        for role in ("main", "backup")
+        if not variant.is_pre_scheduled(day, role) and not variant.is_unfillable(day, role)
+    ]
+    for max_empty in range(len(slots) + 1):
+        best = None
+
+        def fill(k, empties, max_empty=max_empty):
+            nonlocal best
+            if k == len(slots):
+                key = order(_spreads(variant))
+                best = key if best is None or key < best else best
+                return
+            day, role = slots[k]
+            for nurse in variant.get_eligible_nurses_for_day(day, role):
+                variant.place_assignment(day, role, nurse)
+                fill(k + 1, empties, max_empty)
+                variant.dec_assign(day, role, nurse)
+            if empties < max_empty:
+                fill(k + 1, empties + 1, max_empty)  # or leave the slot empty
+
+        fill(0, 0)
+        if best is not None:
+            return best
+    return None
+
+
+def _small_two_week_variant(*, short_week: bool = False):
+    """Week 1 is open; week 2 is fully pinned, with uneven counts.
+
+    Week 2 only fixes each nurse's starting counts (it is too far from week
+    1 to affect its rules), so brute force covers week 1's 720 fills. On
+    this instance the two objectives have different optima. With
+    ``short_week`` one nurse is off all of week 1, which leaves too few
+    nurses to fill it under the spacing rule.
+    """
+    pinned = {
+        _day(7): {"main": "N6", "backup": "N4"},
+        _day(8): {"main": "N6", "backup": "N4"},
+        _day(9): {"main": "N4", "backup": "N5"},
+        _day(10): {"main": "N4", "backup": "N2"},
+    }
+    variant = weekday_only_variant(NURSES, weeks=2, pre_scheduled=pinned)
+    if short_week:
+        for offset in range(4):
+            variant.availability.loc[_day(offset), "N6"] = False
+    variant.compute_unfillable_slots()
+    return variant
+
+
+# ── optimality ─────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("short_week", [False, True], ids=["fillable", "gaps"])
+@pytest.mark.parametrize(
+    ("objective", "order"),
+    [("balanced", balanced), ("backup_first", backup_first)],
+)
+def test_the_exact_solve_matches_brute_force(objective, order, short_week):
+    variant = _small_two_week_variant(short_week=short_week)
+    expected = _best_by_brute_force(variant.clone(), order)
+
+    outcome = solve_weekdays_exactly(variant, objective=objective)
+
+    assert outcome is not None and outcome.optimal
+    assert order(_spreads(variant)) == expected
+    assert outcome.gaps == expected[0]
+    assert (expected[0] > 0) is short_week
+
+
+def _six_nurse_variants(tmp_path):
+    """Two weekends, each open to three of six nurses, and a few days off.
+
+    Several weeks cannot be filled completely, and their fills differ in
+    whether they leave a Main or a Backup slot empty.
+    """
+    roster = tuple((name, False, False) for name in "ABCDEF")
+    weekend_1, weekend_2 = ("2026-11-06", "2026-11-07", "2026-11-08"), ("2026-11-13", "2026-11-14")
+    off = [(n, d) for n in "DEF" for d in weekend_1] + [(n, d) for n in "ABC" for d in weekend_2]
+    off += [("A", "2026-11-03"), ("E", "2026-11-10"), ("B", "2026-11-12")]
+    db = seed_db(tmp_path, roster=roster, time_off=off)
+    return build_scheduler(db, "2026-11-02", "2026-11-15").generate_all_weekend_variants()
+
+
+def test_weeks_with_empty_slots_are_still_solved_optimally(tmp_path):
+    """Brute force over every combination of the weeks' count patterns.
+
+    The proven spread bounds once assumed each role's total was fixed, which
+    fails when a week's fills leave different roles empty, and forced worse
+    spreads there.
+    """
+    checked_uneven = 0
+    for variant in _six_nurse_variants(tmp_path)[:16]:
+        variant = variant.clone()
+        variant.compute_unfillable_slots()
+        probe = variant.clone()
+        options = [
+            exact._week_options(probe, week, 200_000, "for_balance") for week in variant.get_weeks()
+        ]
+        nurses = list(probe.state.main_assignment_counts.index)
+        n = len(nurses)
+        base_main = [int(probe.state.main_assignment_counts[x]) for x in nurses]
+        base_backup = [int(probe.state.backup_assignment_counts[x]) for x in nurses]
+        checked_uneven += any(len({sum(p[:n]) for p in week.fills}) > 1 for week in options)
+        best = None
+        for combo in itertools.product(*(list(week.fills) for week in options)):
+            main = [base_main[i] + sum(p[i] for p in combo) for i in range(n)]
+            backup = [base_backup[i] + sum(p[n + i] for p in combo) for i in range(n)]
+            total = [a + b for a, b in zip(main, backup, strict=True)]
+            b, m, t = max(backup) - min(backup), max(main) - min(main), max(total) - min(total)
+            key = (b + m, max(b, m), t, sum(p[-1] for p in combo))
+            best = key if best is None or key < best else best
+
+        outcome = solve_weekdays_exactly(variant)
+        b, m, t = variant.spread_components()
+        exceptions = sum(
+            variant.is_gap_rule_exception(nurse, day, role)
+            for day, role, nurse in _placed_nurses(variant)
+        )
+        assert outcome.optimal
+        assert (b + m, max(b, m), t, exceptions) == best
+    assert checked_uneven > 0, (
+        "the scenario should have weeks whose fills leave different roles empty"
+    )
+
+
+def test_the_two_objectives_really_differ_here():
+    variant = _small_two_week_variant()
+    assert _best_by_brute_force(variant.clone(), balanced) == (0, 3, 2, 3)
+    assert _best_by_brute_force(variant.clone(), backup_first) == (0, 1, 3, 3)
+
+
+def _placed_nurses(variant):
+    grid = variant.state.grid()
+    for day in variant.get_weekdays():
+        for role in ("main", "backup"):
+            nurse = grid.get(day, role)
+            if not variant.is_pre_scheduled(day, role) and nurse is not None:
+                yield day, role, nurse
+
+
+def _fixture_variant(tmp_path):
+    db = seed_db(tmp_path, time_off=[("A", "2026-11-03"), ("B", "2026-11-11")])
+    variant = build_scheduler(db, "2026-11-02", "2026-11-29").generate_all_weekend_variants()[0]
+    variant = variant.clone()
+    variant.compute_unfillable_slots()
+    return variant
+
+
+def test_every_nurse_it_places_is_legal(tmp_path):
+    variant = _fixture_variant(tmp_path)
+    assert solve_weekdays_exactly(variant) is not None
+
+    for day, role, nurse in _placed_nurses(variant):
+        variant.dec_assign(day, role, nurse)
+        legal = nurse in variant.get_eligible_nurses_for_day_gap(day, role)
+        ordinary = nurse in variant.get_eligible_nurses_for_day(day, role)
+        variant.place_assignment(day, role, nurse)
+        assert legal, (day, role, nurse)
+        # Anything the ordinary rules refuse is the gap-rule exception.
+        assert ordinary or variant.is_gap_rule_exception(nurse, day, role)
+
+
+def test_when_needed_keeps_the_ordinary_rules_in_fillable_weeks(tmp_path):
+    variant = _fixture_variant(tmp_path)
+    outcome = solve_weekdays_exactly(variant, gap_rule_exceptions="when_needed")
+
+    assert outcome is not None and outcome.relaxed_weeks == []
+    assert not any(
+        variant.is_gap_rule_exception(nurse, day, role)
+        for day, role, nurse in _placed_nurses(variant)
+    )
+
+
+def test_allowing_the_exception_for_balance_is_never_worse(tmp_path):
+    strict, loose = _fixture_variant(tmp_path), _fixture_variant(tmp_path)
+    solve_weekdays_exactly(strict, gap_rule_exceptions="when_needed")
+    solve_weekdays_exactly(loose, gap_rule_exceptions="for_balance")
+    assert balanced(_spreads(loose)) <= balanced(_spreads(strict))
+
+
+def test_it_is_deterministic():
+    first, second = _small_two_week_variant(), _small_two_week_variant()
+    solve_weekdays_exactly(first)
+    solve_weekdays_exactly(second)
+    pd.testing.assert_frame_equal(first.state.schedule, second.state.schedule)
+
+
+def test_unfillable_slots_stay_empty_and_everything_else_is_filled(tmp_path):
+    wednesday = pd.Timestamp("2026-11-04")
+    db = seed_db(tmp_path, time_off=[(n, wednesday) for n in REGULAR])
+    variant = build_scheduler(db, "2026-11-02", "2026-11-15").generate_all_weekend_variants()[0]
+    variant = variant.clone()
+    variant.compute_unfillable_slots()
+
+    outcome = solve_weekdays_exactly(variant)
+
+    assert outcome is not None and outcome.gaps == 0
+    assert variant.state.schedule.loc[wednesday, ["main", "backup"]].isna().all()
+    assert variant._count_fillable_weekday_gaps() == 0
+
+
+# ── weekday variety among equal fills ──────────────────────────────────────
+def _weekday_repeats(variant) -> int:
+    """Pairs of shifts one nurse works on the same Mon–Thu weekday."""
+    counts: dict[tuple, int] = {}
+    grid = variant.state.grid()
+    for day in variant.get_weekdays():
+        for role in ("main", "backup"):
+            nurse = grid.get(day, role)
+            if nurse is not None and day.weekday() < 4:
+                counts[(nurse, day.weekday())] = counts.get((nurse, day.weekday()), 0) + 1
+    return sum(c * (c - 1) // 2 for c in counts.values())
+
+
+def _signature(variant, days):
+    """Per-nurse Main and Backup counts and gap-rule exceptions over *days*."""
+    grid = variant.state.grid()
+    counts: dict[tuple, int] = {}
+    exceptions = 0
+    for day in days:
+        for role in ("main", "backup"):
+            nurse = grid.get(day, role)
+            if nurse is not None:
+                counts[(nurse, role)] = counts.get((nurse, role), 0) + 1
+                exceptions += variant.is_gap_rule_exception(nurse, day, role)
+    return counts, exceptions
+
+
+def test_it_picks_the_most_varied_fill_with_the_chosen_counts():
+    variant = _small_two_week_variant()
+    probe = variant.clone()
+    outcome = solve_weekdays_exactly(variant)
+    week = [_day(offset) for offset in range(4)]
+    chosen = _signature(variant, week)
+
+    # Brute force over every legal fill of week 1 with the same counts.
+    slots = [(day, role) for day in week for role in ("main", "backup")]
+    fewest = None
+
+    def fill(k):
+        nonlocal fewest
+        if k == len(slots):
+            if _signature(probe, week) == chosen:
+                repeats = _weekday_repeats(probe)
+                fewest = repeats if fewest is None else min(fewest, repeats)
+            return
+        day, role = slots[k]
+        for nurse in probe.get_eligible_nurses_for_day_gap(day, role, log=False):
+            probe.place_assignment(day, role, nurse)
+            fill(k + 1)
+            probe.dec_assign(day, role, nurse)
+
+    fill(0)
+    assert outcome.weekday_repeats_optimal
+    assert outcome.weekday_repeats == _weekday_repeats(variant) == fewest
+    assert weekday_repeats(variant.state.schedule) == fewest  # the ranking's count
+
+
+def test_variety_never_changes_the_counts(monkeypatch):
+    import scheduler.optimization.exact_weekdays as exact
+
+    varied, first = _small_two_week_variant(), _small_two_week_variant()
+    solve_weekdays_exactly(varied)
+    original = exact._vary_weekdays
+    monkeypatch.setattr(
+        exact,
+        "_vary_weekdays",
+        lambda probe, options, solution, _s: original(probe, options, solution, -1),
+    )
+    unvaried = solve_weekdays_exactly(first)
+
+    assert not unvaried.weekday_repeats_optimal
+    days = varied.get_weekdays()
+    assert _signature(varied, days) == _signature(first, days)
+    assert _weekday_repeats(varied) < _weekday_repeats(first)  # 1 against 2 here
+
+
+# ── week fills shared between variants ─────────────────────────────────────
+def _options_tuple(options):
+    return (options.slots, options.gap_mode, options.relaxed, options.empties, options.fills)
+
+
+@pytest.mark.parametrize(
+    "db_kwargs",
+    [
+        {},
+        {"time_off": [("A", "2026-11-03"), ("B", "2026-11-10"), ("C", "2026-11-19")]},
+        {"pre_scheduled": [("2026-11-11", "D", None), ("2026-11-13", "E", "F")]},
+        {"weekends": [("2026-10-30", "A", "B")]},
+    ],
+    ids=["plain", "time-off", "pinned", "history"],
+)
+def test_shared_week_fills_match_a_fresh_listing(tmp_path, db_kwargs):
+    """Every week of every variant: what the cache hands out is what listing gives."""
+    db = seed_db(tmp_path, **db_kwargs)
+    variants = build_scheduler(db, "2026-11-02", "2026-11-29").generate_all_weekend_variants()
+    assert len(variants) > 5
+    exact.clear_week_cache()
+    hits = 0
+    for variant in variants:
+        variant = variant.clone()
+        variant.compute_unfillable_slots()
+        for week in variant.get_weeks():
+            size = len(exact._week_cache)
+            shared = exact.week_options(variant.clone(), week, 200_000, "for_balance")
+            hits += len(exact._week_cache) == size
+            fresh = exact._week_options(variant.clone(), week, 200_000, "for_balance")
+            assert _options_tuple(shared) == _options_tuple(fresh), week[0]
+    assert hits > 0, "variants should share some weeks"
+
+
+def test_shared_week_fills_never_cross_runs(tmp_path):
+    """Same weekends, different time off: a different run, so no sharing."""
+    variant = build_scheduler(seed_db(tmp_path), "2026-11-02", "2026-11-15")
+    variant = variant.generate_all_weekend_variants()[0].clone()
+    variant.compute_unfillable_slots()
+    week = variant.get_weeks()[1]
+    exact.clear_week_cache()
+    first = exact.week_options(variant.clone(), week, 200_000, "for_balance")
+
+    # Take away a Tuesday from a nurse who works it in some fill.
+    tuesday = week[1]
+    column = first.slots.index((tuesday, "main"))
+    nurse = next(fill[column] for fills in first.fills.values() for fill in fills)
+    other = variant.clone()
+    other.__dict__.pop("_exact_run_fingerprint", None)
+    other.availability = other.availability.copy()
+    other.availability.loc[tuesday, nurse] = False
+    other.__dict__.pop("_availability_cache", None)
+    second = exact.week_options(other.clone(), week, 200_000, "for_balance")
+
+    assert len(exact._week_cache) == 2
+    assert second.fills != first.fills
+    assert _options_tuple(second) == _options_tuple(
+        exact._week_options(other.clone(), week, 200_000, "for_balance")
+    )
+
+
+# ── stepping aside for the search ──────────────────────────────────────────
+def test_spacing_that_reaches_across_weekends_uses_the_search(tmp_path):
+    db = seed_db(tmp_path)
+    scheduler = build_scheduler(db, "2026-11-02", "2026-11-15", min_days_between_assignments=4)
+    variant = scheduler.generate_all_weekend_variants()[0].clone()
+    variant.compute_unfillable_slots()
+    before = variant.state.schedule.copy()
+
+    assert "not independent" in unavailable_reason(variant)
+    assert solve_weekdays_exactly(variant) is None
+    pd.testing.assert_frame_equal(variant.state.schedule, before)
+
+
+def test_without_or_tools_it_uses_the_search(monkeypatch):
+    real_import = builtins.__import__
+
+    def no_ortools(name, *args, **kwargs):
+        if name.startswith("ortools"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_ortools)
+    variant = _small_two_week_variant()
+    assert unavailable_reason(variant) == "OR-Tools is not installed"
+    assert solve_weekdays_exactly(variant) is None
+
+
+def test_too_many_fills_in_a_week_uses_the_search():
+    variant = _small_two_week_variant()
+    before = variant.state.schedule.copy()
+    assert solve_weekdays_exactly(variant, max_fills_per_week=5) is None
+    pd.testing.assert_frame_equal(variant.state.schedule, before)
+
+
+# ── in the worker ──────────────────────────────────────────────────────────
+def test_the_worker_uses_the_exact_solve_and_says_so(tmp_path):
+    db = seed_db(tmp_path)
+    variant = build_scheduler(db, "2026-11-02", "2026-11-15").generate_all_weekend_variants()[0]
+
+    _idx, stats, _counts, _schedule = _evaluate_variant_core(
+        (0, variant, WorkerTuningConfig()), with_profiling=False
+    )
+
+    assert stats["solver"] == "exact"
+    assert stats["solver_optimal"] is True
+    assert stats["gaps"] == 0
+
+
+def test_the_exact_solve_is_never_worse_than_the_search(tmp_path):
+    db = seed_db(tmp_path, time_off=[("C", "2026-11-04"), ("D", "2026-11-10")])
+    variant = build_scheduler(db, "2026-11-02", "2026-11-15").generate_all_weekend_variants()[0]
+    quick = WorkerTuningConfig(
+        gap_fill_iterations=3,
+        rebalance_iterations=3,
+        window_refill_max_passes=2,
+        window_refill_time_limit_ms=500,
+        full_period_max_orders=2,
+        full_period_per_attempt_time_ms=500,
+    )
+
+    def key(tuning):
+        _i, _stats, _counts, schedule = _evaluate_variant_core(
+            (0, variant, tuning), with_profiling=False
+        )
+        result = variant.clone()
+        result.state.schedule.loc[schedule.index, ["main", "backup"]] = schedule[["main", "backup"]]
+        result.recalculate_assignment_counts()
+        quality = ScheduleQuality.from_variant(result)
+        return balanced(
+            (quality.total_gaps, quality.backup_spread, quality.main_spread, quality.total_spread)
+        )
+
+    assert key(quick) <= key(dataclasses.replace(quick, weekday_solver="search"))
+
+
+def test_enumeration_stays_out_of_the_assignment_debug_log(monkeypatch):
+    """The GUI turns the assignment debug logger on by default.
+
+    Logging every enumeration probe made the solve run out of time there.
+    """
+    import scheduler.debug as debug
+
+    class _CountingLogger:
+        enabled = True
+
+        def __init__(self):
+            self.contexts = []
+
+        def log(self, payload):
+            self.contexts.append(payload.get("context"))
+
+    variant = _small_two_week_variant()
+    logger = _CountingLogger()
+    monkeypatch.setattr(debug, "ASSIGNMENT_DEBUG_LOGGER", logger)
+
+    outcome = solve_weekdays_exactly(variant)
+
+    assert outcome is not None and outcome.optimal
+    assert "gap_candidates" not in logger.contexts

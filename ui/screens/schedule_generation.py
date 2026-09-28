@@ -370,7 +370,8 @@ class ScheduleGenerationScreen(QWidget):
         elapsed = f"{secs // 60}:{secs % 60:02d}"
         lines = [self._stage_text]
         if self._total:
-            lines.append(f"{self._done} of {self._total} evaluated  ·  elapsed {elapsed}")
+            what = "months found" if self._stage_text.startswith("Solving") else "evaluated"
+            lines.append(f"{self._done} of {self._total} {what}  ·  elapsed {elapsed}")
         else:
             lines.append(f"Elapsed {elapsed}")
         self._progress.setLabelText("\n".join(lines))
@@ -419,6 +420,17 @@ class ScheduleGenerationScreen(QWidget):
         # Guard: no feasible candidates
         if not variants:
             self._finish_run()
+            if self.worker is not None and self.worker.engine == "month":
+                show_info(
+                    self,
+                    "No feasible schedules",
+                    "Every weekend arrangement was checked: no schedule satisfies every "
+                    "rule for this date range. Things to try:\n\n"
+                    "• Allow rotation violations for some nurses when you generate.\n"
+                    "• Enable a post-weekend or one-day-gap relaxation in Settings.\n"
+                    "• Check for conflicting pre-scheduled assignments or time off.",
+                )
+                return
             capped = (
                 "The weekend search was capped this run, so raising “Weekend variants to "
                 "evaluate” is the first thing to try.\n\n"

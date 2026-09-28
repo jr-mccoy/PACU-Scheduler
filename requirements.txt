@@ -1,4 +1,5 @@
 numpy>=2.0,<3
+ortools>=9.10,<10
 pandas>=2.0,<3
 psutil>=5.9,<8
 PySide6>=6.6,<7

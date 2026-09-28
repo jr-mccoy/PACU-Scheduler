@@ -29,7 +29,9 @@ from .settings_support import (
     WEIGHTS_HELP,
     add_restore_defaults,
     apply_tooltips,
+    engine_combo,
     load_values,
+    month_limit_spin,
     validate_and_accept,
     weight_values,
 )
@@ -159,6 +161,12 @@ class CompactSettingsDialog(ToolDialog):
         sched_form.addRow("Days off between shifts:", self.min_between)
         sched_form.addRow("Fairness window (days):", self.hist_window)
         sched_form.addRow("History to load (months):", self.hist_duration)
+        self.engine_combo = engine_combo()
+        self.engine_combo.setMinimumHeight(40)
+        sched_form.addRow("Scheduling engine:", self.engine_combo)
+        self.month_limit = month_limit_spin()
+        self.month_limit.setMinimumHeight(40)
+        sched_form.addRow("Time limit per option:", self.month_limit)
         sched_form.addRow("Weekend variants:", self.variant_cap)
 
         self.tabs.addTab(sched_tab, "Schedule")
@@ -315,6 +323,8 @@ class CompactSettingsDialog(ToolDialog):
             "history_window_days": self.hist_window.value(),
             "history_duration_months": self.hist_duration.value(),
             "max_weekend_variants": self.variant_cap.value(),
+            "scheduling_engine": self.engine_combo.currentData() or "month",
+            "month_time_limit_minutes": self.month_limit.value(),
             "measure_phase_times": self.measure_chk.isChecked(),
             "analyse_initial_weekday_gaps": self.analyse_chk.isChecked(),
             "gap_report_file": self.gap_file.text(),

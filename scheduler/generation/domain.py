@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
     from .context import VariantSearchContext
 
@@ -107,12 +109,14 @@ class CandidateDomainBuilder:
                 )
             return candidates
 
-        role_counts = (
+        # Plain dicts for the sort: a Series lookup per candidate costs more
+        # than building these once.
+        role_counts = _lookup(
             ctx.state.main_assignment_counts
             if role == "main"
             else ctx.state.backup_assignment_counts
         )
-        total_counts = ctx.get_total_counts()
+        total_counts = _lookup(ctx.get_total_counts())
         order_index = ctx.order_index
 
         wday = int(date.weekday())
@@ -152,3 +156,10 @@ class CandidateDomainBuilder:
         if created_local_diag:
             diag_map = None
         return candidates
+
+
+def _lookup(counts):
+    """``counts`` as a dict when it is a Series, with the same values."""
+    if isinstance(counts, pd.Series):
+        return dict(zip(counts.index, counts.to_numpy(), strict=True))
+    return counts

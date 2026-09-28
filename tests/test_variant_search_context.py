@@ -131,6 +131,7 @@ def _make_fake_context():
     fake.is_empty = lambda v: v is None or v == ""
     fake.is_pre_scheduled = lambda d, r: False
     fake.is_unfillable = lambda d, r: False
+    fake.is_slot_empty = lambda d, r: fake.is_empty(fake.state.schedule.at[d, r])
 
     def eligible_domain(d, r, diagnostics=None, *, force_relaxed=False):
         return ["Alice", "Bob"]
@@ -155,6 +156,7 @@ def _make_fake_context():
     fake.inc_assign = inc_assign
     fake.dec_assign = dec_assign
     fake.spread_components = lambda: (0, 0, 0)
+    fake.spreads_at_lower_bound = lambda: True
     fake.lexi_better = lambda new, base: False
     fake.collect_weekday_windows = lambda window_weeks=2: []
     fake.backup_week_assignments = lambda days: None

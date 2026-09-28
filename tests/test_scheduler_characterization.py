@@ -386,7 +386,7 @@ def scheduler_for_modes():
         nurse_manager=DummyNurseManager(),
         weekend_history=wh,
         pre_scheduler=DummyPreScheduler(),
-        config=SchedulerConfig(),
+        config=SchedulerConfig(engine="variants"),  # the variant pipeline's modes
     )
 
 

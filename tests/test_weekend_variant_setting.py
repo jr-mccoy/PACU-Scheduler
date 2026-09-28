@@ -136,3 +136,80 @@ def test_gui_dialogs_preserve_unlimited(home, qapp, dialog_name):
 
     assert dialog.variant_cap.text() == "Unlimited"
     assert dialog.values()["max_weekend_variants"] == 0
+
+
+# --- the scheduling engine ---------------------------------------------------
+
+
+def test_the_engine_setting_persists_and_reaches_the_scheduler(home):
+    assert SharedSettings().get("scheduling_engine") == "month"
+    SharedSettings().update({"scheduling_engine": "variants"})
+    assert build_scheduler_config_from_settings(SharedSettings()).engine == "variants"
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"), [("2", "variants"), ("1", "month"), ("", "month"), ("x", "month")]
+)
+def test_cli_chooses_the_engine(cli, monkeypatch, reply, expected):
+    _answer(monkeypatch, reply)
+    cli._handle_set_scheduling_engine()
+    assert SharedSettings().get("scheduling_engine") == expected
+
+
+@pytest.mark.parametrize("dialog_name", ["SettingsDialog", "CompactSettingsDialog"])
+def test_both_dialogs_show_and_save_the_engine(qapp, home, dialog_name):
+    import ui.dialogs as dialogs
+    from ui.settings import AppSettings
+
+    settings = AppSettings()
+    settings.set("scheduling_engine", "variants")
+    dialog = getattr(dialogs, dialog_name)(settings)
+    assert dialog.engine_combo.currentData() == "variants"
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("month"))
+    settings.bulk_set(dialog.values())
+    assert SharedSettings().get("scheduling_engine") == "month"
+
+
+# --- the whole-month engine's time limit --------------------------------------
+
+
+def test_the_time_limit_defaults_to_five_minutes_per_option(home):
+    assert SharedSettings().get("month_time_limit_minutes") == 5
+    assert build_scheduler_config_from_settings(SharedSettings()).month_time_limit_s == 300
+
+
+def test_a_saved_time_limit_reaches_the_scheduler(home):
+    SharedSettings().update({"month_time_limit_minutes": 12})
+    assert build_scheduler_config_from_settings(SharedSettings()).month_time_limit_s == 720
+
+
+@pytest.mark.parametrize("bad", [0, -3, "soon", None])
+def test_a_bad_time_limit_keeps_the_default(bad):
+    settings = dict(SharedSettings.DEFAULTS, month_time_limit_minutes=bad)
+    assert build_scheduler_config_from_settings(settings).month_time_limit_s == 300
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"), [("15", 15), ("", 5), ("0", 5), ("121", 5), ("x", 5)]
+)
+def test_cli_sets_the_time_limit(cli, monkeypatch, reply, expected):
+    _answer(monkeypatch, reply)
+    cli._handle_set_month_time_limit()
+    assert SharedSettings().get("month_time_limit_minutes") == expected
+
+
+@pytest.mark.parametrize("dialog_name", ["SettingsDialog", "CompactSettingsDialog"])
+def test_both_dialogs_show_and_save_the_time_limit(qapp, home, dialog_name):
+    import ui.dialogs as dialogs
+    from ui.settings import AppSettings
+
+    settings = AppSettings()
+    settings.set("month_time_limit_minutes", 20)
+    dialog = getattr(dialogs, dialog_name)(settings)
+    assert dialog.month_limit.value() == 20
+
+    dialog.month_limit.setValue(45)
+    settings.bulk_set(dialog.values())
+    assert SharedSettings().get("month_time_limit_minutes") == 45
+    assert build_scheduler_config_from_settings(SharedSettings()).month_time_limit_s == 2700

@@ -29,8 +29,7 @@ class OrderGenerator:
             order = ("main", "backup") if role_order == "MB" else ("backup", "main")
             for role in order:
                 if not ctx.is_pre_scheduled(day, role) and not ctx.is_unfillable(day, role):
-                    val = ctx.state.schedule.at[day, role]
-                    if ctx.is_empty(val):
+                    if ctx.is_slot_empty(day, role):
                         vars_list.append((day, role))
         return vars_list
 
@@ -107,7 +106,7 @@ class OrderGenerator:
                 if (
                     not ctx.is_pre_scheduled(day, role)
                     and not ctx.is_unfillable(day, role)
-                    and ctx.is_empty(ctx.state.schedule.at[day, role])
+                    and ctx.is_slot_empty(day, role)
                 ):
                     mrvl.append((day, role))
         mrvl.sort(key=lambda item: domain_size(item[0], item[1]))
@@ -121,10 +120,10 @@ class OrderGenerator:
             if (
                 not ctx.is_pre_scheduled(day, "main")
                 and not ctx.is_unfillable(day, "main")
-                and ctx.is_empty(ctx.state.schedule.at[day, "main"])
+                and ctx.is_slot_empty(day, "main")
                 and not ctx.is_pre_scheduled(day, "backup")
                 and not ctx.is_unfillable(day, "backup")
-                and ctx.is_empty(ctx.state.schedule.at[day, "backup"])
+                and ctx.is_slot_empty(day, "backup")
             ):
                 if idx % 2 == 0:
                     mixed_vars.extend([(day, "backup"), (day, "main")])

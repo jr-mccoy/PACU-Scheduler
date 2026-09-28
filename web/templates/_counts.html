@@ -1,0 +1,9 @@
+{# Per-nurse Main/Backup counts. Expects `counts`. #}
+<table class="counts">
+  <thead><tr><th>Nurse</th><th>Main</th><th>Backup</th><th>Total</th></tr></thead>
+  <tbody>
+    {% for nurse, main, backup, total in counts %}
+      <tr><td>{{ nurse }}</td><td>{{ main }}</td><td>{{ backup }}</td><td>{{ total }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

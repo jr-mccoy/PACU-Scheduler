@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Pre-scheduled days</h1>
+<p class="muted">Days pinned in advance. Generated schedules always keep these nurses, and PRN nurses are only scheduled here.</p>
+{% if rows %}
+<ul class="cards">
+  {% for d, main, backup, note in rows %}
+    <li class="card">
+      <strong>{{ d | day }}{% if d.year != today.year %}, {{ d.year }}{% endif %}</strong>
+      <span><small class="muted">Main</small> {{ main or '—' }} · <small class="muted">Backup</small> {{ backup or '—' }}</span>
+      {% if note %}<span class="muted">{{ note }}</span>{% endif %}
+      <form method="post" action="{{ url_for('remove_pinned', day=d.isoformat()) }}" data-confirm="Remove the pin on {{ d | day }}?">
+        <button class="danger">Remove</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty-note">Nothing pinned{% if not show_past %} from today on{% endif %}.</p>
+{% endif %}
+<p>{% if show_past %}<a href="{{ url_for('pinned') }}">Hide past days</a>{% else %}<a href="{{ url_for('pinned', past=1) }}">Show past days too</a>{% endif %}</p>
+
+<h2>Pin a day</h2>
+<form method="post" action="{{ url_for('add_pinned') }}" class="stack">
+  <label>Date <input type="date" name="date" required></label>
+  <label>Main
+    <select name="main"><option value="">—</option>{% for n in roster %}<option>{{ n.name }}</option>{% endfor %}</select>
+  </label>
+  <label>Backup
+    <select name="backup"><option value="">—</option>{% for n in roster %}<option>{{ n.name }}</option>{% endfor %}</select>
+  </label>
+  <label>Note <input name="note" autocomplete="off"></label>
+  <button class="primary">Pin</button>
+  <p class="muted">Pinning a date that is already pinned replaces it.</p>
+</form>
+{% endblock %}

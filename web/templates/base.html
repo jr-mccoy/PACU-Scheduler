@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ title }} · PACU Scheduler</title>
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="{{ url_for('schedule') }}">PACU Scheduler</a>
+    <nav>
+      {% set here = request.endpoint %}
+      <a href="{{ url_for('schedule') }}" {% if here == 'schedule' %}aria-current="page"{% endif %}>Schedule</a>
+      <a href="{{ url_for('generate') }}" {% if here in ('generate', 'start_generation', 'job') %}aria-current="page"{% endif %}>Generate</a>
+      <a href="{{ url_for('nurses') }}" {% if here == 'nurses' %}aria-current="page"{% endif %}>Nurses</a>
+      <a href="{{ url_for('time_off') }}" {% if here == 'time_off' %}aria-current="page"{% endif %}>Time off</a>
+      <a href="{{ url_for('pinned') }}" {% if here == 'pinned' %}aria-current="page"{% endif %}>Pinned</a>
+      <a href="{{ url_for('weekends') }}" {% if here == 'weekends' %}aria-current="page"{% endif %}>Weekends</a>
+    </nav>
+  </header>
+  <main>
+    {% if running_job and request.endpoint != 'job' %}
+      <a class="banner" href="{{ url_for('job', job_id=running_job.id) }}">Generating a schedule… {{ running_job.stage }} <span>View</span></a>
+    {% endif %}
+    {% for kind, message in get_flashed_messages(with_categories=true) %}
+      <p class="flash {{ kind }}" role="status">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

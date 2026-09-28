@@ -21,12 +21,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.6,<1"]
+web = ["flask>=3,<4", "waitress>=3,<4"]
 
 [project.scripts]
 pacu-scheduler = "cli.__main__:run"
+pacu-scheduler-web = "web.__main__:run"
 
 [tool.setuptools]
-packages = ["cli", "scheduler", "ui"]
+packages = ["cli", "scheduler", "ui", "web"]
+
+[tool.setuptools.package-data]
+web = ["templates/*.html", "static/*"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

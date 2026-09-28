@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block head %}
+  {% if job.running %}<noscript><meta http-equiv="refresh" content="5"></noscript>{% endif %}
+{% endblock %}
+{% block content %}
+{% if job.running %}
+  <h1>Generating</h1>
+  <p class="muted">{{ requested }}</p>
+  <div class="progress" data-job-status="{{ url_for('job_status', job_id=job.id) }}">
+    <p class="stage" data-field="stage">{{ job.stage }}</p>
+    <progress {% if job.total %}max="{{ job.total }}" value="{{ job.done }}"{% endif %}></progress>
+    <p class="muted"><span data-field="count">{% if job.total %}{{ job.done }} of {{ job.total }}{% endif %}</span> · elapsed <span data-field="elapsed">{{ elapsed(job.elapsed) }}</span></p>
+  </div>
+  <p class="muted">You can leave this page; generation keeps running on the server.</p>
+  {% if not job.cancel_requested %}
+  <form method="post" action="{{ url_for('cancel_job', job_id=job.id) }}" data-confirm="Stop generating? Nothing has been saved.">
+    <button class="danger">Cancel</button>
+  </form>
+  {% endif %}
+
+{% elif job.status == 'done' %}
+  <h1>Schedule options</h1>
+  <p class="muted">{{ requested }} · found in {{ elapsed(job.elapsed) }}. Ranked best first: fewest rotation repeats, then fewest unfilled slots, then fairness.</p>
+  {% if job.notice %}<p class="flash">{{ job.notice }}</p>{% endif %}
+  {% if job.applied %}<p class="flash ok">Option {{ job.applied }} was approved.</p>{% endif %}
+  <nav class="tabs">
+    {% for o in options %}
+      <a href="{{ url_for('job', job_id=job.id, option=o.rank) }}" {% if o.rank == chosen %}aria-current="page"{% endif %}>Option {{ o.rank }}{% if o.rank == job.applied %} ✓{% endif %}</a>
+    {% endfor %}
+  </nav>
+  {% set o = options[chosen - 1] %}
+  <dl class="metrics">
+    {% for key, label, help in METRICS %}
+      <div title="{{ help }}"><dt>{{ label }}</dt><dd>{{ metric(key, o.stats.get(key)) }}</dd></div>
+    {% endfor %}
+  </dl>
+  <div class="row actions">
+    <a class="button" href="{{ url_for('option_pdf', job_id=job.id, rank=o.rank) }}">PDF</a>
+    {% if not job.applied %}
+    <form method="post" action="{{ url_for('approve_option', job_id=job.id, rank=o.rank) }}"
+          data-confirm="Approve option {{ o.rank }} for {{ o.span }}? It becomes the schedule and is recorded in assignment and weekend history, replacing anything already recorded for these days.">
+      <button class="primary">Approve option {{ o.rank }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% with weeks=o.weeks %}{% include "_days.html" %}{% endwith %}
+  <h2>Shifts per nurse</h2>
+  {% with counts=o.counts %}{% include "_counts.html" %}{% endwith %}
+
+{% elif job.status == 'infeasible' %}
+  <h1>No workable schedule</h1>
+  <p class="muted">{{ requested }}</p>
+  {% if job.notice %}<p class="flash">{{ job.notice }}</p>{% endif %}
+  <p>{% if job.engine == 'month' %}Every weekend arrangement was checked: no{% else %}No{% endif %} schedule satisfies every rule for this date range. Things to try:</p>
+  <ul>
+    <li>Allow rotation repeats for some nurses (on the Generate page, under “Rotation repeats”).</li>
+    <li>Check for conflicting <a href="{{ url_for('pinned') }}">pinned days</a> or <a href="{{ url_for('time_off') }}">time off</a>.</li>
+    <li>Relax a scheduling rule in the desktop app's Settings; this page uses the same settings.</li>
+  </ul>
+  <p><a class="button" href="{{ url_for('generate') }}">Back to Generate</a></p>
+
+{% elif job.status == 'cancelled' %}
+  <h1>Generation cancelled</h1>
+  <p>No schedule was generated. Nothing was changed.</p>
+  <p><a class="button" href="{{ url_for('generate') }}">Back to Generate</a></p>
+
+{% else %}
+  <h1>Generation failed</h1>
+  <p>Something went wrong while generating, so nothing was changed.</p>
+  {% if job.error %}<details><summary>Technical details</summary><pre>{{ job.error }}</pre></details>{% endif %}
+  <p><a class="button" href="{{ url_for('generate') }}">Back to Generate</a></p>
+{% endif %}
+{% endblock %}

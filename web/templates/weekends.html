@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Weekend history</h1>
+<p class="muted">Friday's Main works FSF (Friday and Sunday); Friday's Backup works SFS (Saturday). Each nurse is expected to alternate.</p>
+{% if nurses %}
+<table class="counts">
+  <thead><tr><th>Nurse</th><th>Last</th><th>Next</th><th>Repeats</th></tr></thead>
+  <tbody>
+    {% for n in nurses %}
+      <tr>
+        <td>{{ n.name }}</td>
+        <td>{{ n.last or '—' }}</td>
+        <td>{% if n.last == 'FSF' %}SFS{% elif n.last == 'SFS' %}FSF{% else %}either{% endif %}</td>
+        <td>{{ n.violations }}{% if n.streak %} <small class="muted">(streak {{ n.streak }})</small>{% endif %}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<h2>Recorded weekends</h2>
+{% if rows %}
+<ol class="days">
+  {% for friday, fsf, sfs in rows %}
+    <li class="weekend{% if friday > today %} ahead{% endif %}">
+      <span class="date">{{ friday | day }}{% if friday.year != today.year %}, {{ friday.year }}{% endif %}</span>
+      <span class="who"><small>FSF</small> {{ fsf or '—' }}</span>
+      <span class="who"><small>SFS</small> {{ sfs or '—' }}</span>
+    </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="empty-note">No weekends recorded yet. They are recorded when a schedule is approved.</p>
+{% endif %}
+{% endblock %}

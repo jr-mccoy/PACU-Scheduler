@@ -1,0 +1,15 @@
+{# A schedule as weeks of days. Expects `weeks`. #}
+{% for week in weeks %}
+  <section class="week">
+    <h3>Week of {{ week.monday | day }}</h3>
+    <ol class="days">
+      {% for d in week.days %}
+        <li class="{% if d.weekend %}weekend{% endif %}{% if d.day == today %} today{% endif %}{% if not d.filled %} empty{% endif %}">
+          <span class="date">{{ d.day.strftime('%a') }} <b>{{ d.day.day }}</b></span>
+          <span class="who"><small>Main</small> {{ d.main or '—' }}</span>
+          <span class="who"><small>Backup</small> {{ d.backup or '—' }}</span>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+{% endfor %}

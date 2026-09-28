@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Time off</h1>
+<form method="get" action="{{ url_for('time_off') }}" class="row auto-submit">
+  <label>Nurse
+    <select name="nurse">
+      <option value="">Everyone (upcoming)</option>
+      {% for n in roster %}
+        <option value="{{ n.id }}" {% if nurse and n.id == nurse.id %}selected{% endif %}>{{ n.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="js-hide">Show</button>
+</form>
+
+{% if nurse %}
+  <div class="pager">
+    <a class="button" href="{{ url_for('time_off', nurse=nurse.id, month=prev_month) }}" aria-label="Previous month">‹</a>
+    <h2>{{ month_title }}</h2>
+    <a class="button" href="{{ url_for('time_off', nurse=nurse.id, month=next_month) }}" aria-label="Next month">›</a>
+  </div>
+  <p class="muted">Tap the days {{ nurse.name }} can't work, then save.</p>
+  <form method="post" action="{{ url_for('save_time_off', nurse_id=nurse.id) }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <table class="picker">
+      <thead><tr>{% for d in ['S','M','T','W','T','F','S'] %}<th>{{ d }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for week in grid %}
+          <tr>
+            {% for d in week %}
+              <td>
+                {% if d %}
+                  <label class="{% if d == today %}today{% endif %}">
+                    <input type="checkbox" name="off" value="{{ d.isoformat() }}" {% if d in off %}checked{% endif %}>
+                    <span>{{ d.day }}</span>
+                  </label>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button class="primary">Save {{ month_title }}</button>
+  </form>
+  {% if upcoming %}
+    <h2>Upcoming</h2>
+    <p>{% for d in upcoming %}<span class="chip">{{ d | day }}</span>{% endfor %}</p>
+  {% endif %}
+{% else %}
+  {% if upcoming %}
+    <ul class="cards">
+      {% for n, days in upcoming %}
+        <li class="card">
+          <a href="{{ url_for('time_off', nurse=n.id) }}"><strong>{{ n.name }}</strong></a>
+          <p>{% for d in days %}<span class="chip">{{ d | day }}</span>{% endfor %}</p>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty-note">No upcoming time off. Pick a nurse to add some.</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

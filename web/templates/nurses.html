@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Nurses</h1>
+<p class="muted">PRN nurses are scheduled only on days they are pinned to. Late-shift nurses follow the late-shift pairing rules.</p>
+{% if nurses %}
+<ul class="cards">
+  {% for n in nurses %}
+    <li class="card">
+      <strong>{{ n.name }}</strong>
+      <form method="post" action="{{ url_for('nurse_flags', nurse_id=n.id) }}" class="flags auto-submit">
+        <label><input type="checkbox" name="prn" value="1" {% if n.prn %}checked{% endif %}> PRN</label>
+        <label><input type="checkbox" name="late" value="1" {% if n.late %}checked{% endif %}> Late shift</label>
+        <button class="js-hide">Save</button>
+      </form>
+      <div class="row">
+        <a class="button" href="{{ url_for('time_off', nurse=n.id) }}">Time off</a>
+        <form method="post" action="{{ url_for('remove_nurse', nurse_id=n.id) }}"
+              data-confirm="Remove {{ n.name }} from the roster? They will no longer be scheduled. Past assignments and weekend history are kept.">
+          <button class="danger">Remove</button>
+        </form>
+      </div>
+    </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty-note">No nurses yet. Add the team below.</p>
+{% endif %}
+<h2>Add a nurse</h2>
+<form method="post" action="{{ url_for('add_nurse') }}" class="stack">
+  <label>Name <input name="name" required autocomplete="off"></label>
+  <div class="row">
+    <label><input type="checkbox" name="prn" value="1"> PRN</label>
+    <label><input type="checkbox" name="late" value="1"> Late shift</label>
+  </div>
+  <button class="primary">Add nurse</button>
+</form>
+{% endblock %}

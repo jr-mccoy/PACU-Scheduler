@@ -1,0 +1,3 @@
+-r requirements.txt
+flask>=3,<4
+waitress>=3,<4

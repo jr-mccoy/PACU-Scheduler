@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Generate a schedule</h1>
+{% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
+{% if not has_nurses %}
+  <p class="empty-note">Add the team under <a href="{{ url_for('nurses') }}">Nurses</a> first.</p>
+{% elif running_job %}
+  <p>A schedule is already being generated. <a href="{{ url_for('job', job_id=running_job.id) }}">See its progress</a>.</p>
+{% else %}
+<form method="post" action="{{ url_for('start_generation') }}" class="stack">
+  <div class="row">
+    <label>Start <input type="date" name="start" value="{{ start.isoformat() }}" required></label>
+    <label>End <input type="date" name="end" value="{{ end.isoformat() }}" required></label>
+  </div>
+
+  {% if review %}
+    <div class="review" role="alert">
+      <h2>Before generating</h2>
+      <ul>
+        {% if review.span %}<li>Scheduling {{ review.span }} so no weekend is split.</li>{% endif %}
+        {% if review.replaces %}
+          <li>{{ review.replaces }} weekend{{ 's are' if review.replaces != 1 else ' is' }} already recorded in this range. The new schedule is built without {{ 'them' if review.replaces != 1 else 'it' }} and replaces {{ 'them' if review.replaces != 1 else 'it' }} when approved.</li>
+        {% endif %}
+        {% if review.issues %}
+          <li>Some pinned days in this range look wrong. Generation keeps pinned days as they are, so these shape every option:
+            <ul>{% for issue in review.issues %}<li>{{ issue }}</li>{% endfor %}</ul>
+            <a href="{{ url_for('pinned') }}">Fix them</a>, or generate anyway.
+          </li>
+        {% endif %}
+      </ul>
+      <input type="hidden" name="confirmed" value="1">
+    </div>
+  {% endif %}
+
+  <details {% if allowed %}open{% endif %}>
+    <summary>Rotation repeats (only if needed)</summary>
+    <p class="muted">Each nurse normally alternates between FSF and SFS weekends. If that leaves no workable schedule, tick nurses who may repeat their last pattern in this run. Fewest past repeats are listed first.</p>
+    {% for c in choices %}
+      <label class="check"><input type="checkbox" name="allow" value="{{ c.name }}" {% if c.name in allowed %}checked{% endif %}> {{ c.name }} <small class="muted">{{ c.detail }}</small></label>
+    {% endfor %}
+  </details>
+
+  <button class="primary">{{ 'Generate anyway' if review and review.issues else 'Generate' }}</button>
+  <p class="muted">This can take a few minutes. You can leave the page and come back; nothing is saved until you approve an option.</p>
+</form>
+{% endif %}
+{% endblock %}

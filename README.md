@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A desktop and terminal application that builds on-call schedules for a
+A desktop, web and terminal application that builds on-call schedules for a
 post-anesthesia care unit (PACU) nursing team.
 
 ![The scheduler's main menu](docs/images/main-menu.png)
@@ -136,14 +136,15 @@ the terminal UI and `generate_schedule()` all run the same pipeline,
 ## Architecture
 
 The application was originally a pair of single-file monoliths and has since
-been decomposed into three packages with a one-way dependency flow
-(`cli`/`ui` → `scheduler`):
+been decomposed into packages with a one-way dependency flow
+(`cli`/`ui`/`web` → `scheduler`):
 
 | Package | Responsibility |
 | --- | --- |
 | `scheduler/` | Scheduling state, persistence, constraints, evaluation, optimization, ranking, diagnostics, and PDF export. No UI imports. |
 | `ui/` | Qt application shell, themes, settings, widgets, dialogs, screens, presenters, and export services. |
 | `cli/` | Terminal input and menu workflows. |
+| `web/` | Phone-friendly web interface (Flask), with generation running as a background job. |
 
 `scheduler/legacy_core.py` and `ui/legacy.py` remain as import-compatibility
 facades; neither contains application logic, and a test enforces that.
@@ -183,6 +184,18 @@ Or the terminal UI:
 ```bash
 python -m cli
 ```
+
+Or the web interface, for phones and other computers:
+
+```bash
+python -m pip install -r requirements-web.txt
+python -m web            # then open http://127.0.0.1:8080
+```
+
+It covers the schedule, roster, time off, pinned days, weekend history, and
+generating and approving schedules. It has no login, so it listens on this
+machine only. [`docs/web-server.md`](docs/web-server.md) sets it up as an
+always-on service reached privately over Tailscale, with nightly backups.
 
 On first run the application creates `nurse_schedule.db` in the working
 directory from `scheduler/schema.sql`. The database starts empty — add your
@@ -442,6 +455,9 @@ for operator control.
   or horizons beyond about six weeks push variant counts up sharply.
 
 ## Documentation
+
+- [`docs/web-server.md`](docs/web-server.md) — running the web interface on
+  an always-on Linux machine, reached from phones over Tailscale.
 
 - [`docs/weekend-candidate-generation.md`](docs/weekend-candidate-generation.md)
   — design spec for exhaustive weekend candidate generation and the manual

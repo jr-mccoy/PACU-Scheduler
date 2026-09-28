@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="pager">
+  <a class="button" href="{{ url_for('schedule', month=prev_month) }}" aria-label="Previous month">‹</a>
+  <h1>{{ title }}</h1>
+  <a class="button" href="{{ url_for('schedule', month=next_month) }}" aria-label="Next month">›</a>
+</div>
+{% if any_filled %}
+  <p class="actions"><a class="button" href="{{ url_for('schedule_pdf', month=month) }}">Printable PDF</a></p>
+  {% include "_days.html" %}
+  <details>
+    <summary>Shifts per nurse this month</summary>
+    {% include "_counts.html" %}
+  </details>
+{% else %}
+  <p class="empty-note">No approved schedule for this month yet.
+    <a href="{{ url_for('generate') }}">Generate one</a>.</p>
+{% endif %}
+{% endblock %}

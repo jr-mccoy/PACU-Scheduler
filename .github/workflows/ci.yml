@@ -27,6 +27,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.txt
+            requirements-web.txt
             requirements-dev.txt
 
       - name: Install Qt runtime libraries
